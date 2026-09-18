@@ -1,0 +1,68 @@
+# 라벨 정의 — 이 파일이 원본이다.
+# main 에 push 되면 workflows/sync-labels.yml 이 GitHub 라벨을 여기 맞춘다.
+# 웹 UI 에서 라벨을 만들지 말고 이 파일에 추가할 것.
+#
+# 접두어를 붙인 이유
+# -----------------
+# 라벨이 스무 개쯤 되면 목록에서 찾기가 어려워진다.
+# "type:" 을 치면 종류만, "area:" 를 치면 모듈만 걸러진다.
+# GitHub Projects 칸반에서도 접두어로 필터를 만들 수 있다.
+#
+# 이슈는 type 하나 + area 하나를 다는 것이 기본이다.
+#   type 은 이슈 템플릿이 자동으로 붙인다.
+#   area 는 이슈를 열 때 오른쪽 사이드바에서 직접 고른다.
+
+# ── type: 무엇에 관한 이슈인가 (템플릿이 자동으로 붙임) ────────────────
+- name: "type: bug"
+  color: "d73a4a"
+  description: "동작하지 않는 것"
+
+- name: "type: feature"
+  color: "0e8a16"
+  description: "새로 만드는 기능"
+
+- name: "type: refactor"
+  color: "1d76db"
+  description: "동작은 그대로, 코드 구조 개선"
+
+- name: "type: docs"
+  color: "0075ca"
+  description: "문서 — README, 회의록, 발표자료"
+
+- name: "type: experiment"
+  color: "fbca04"
+  description: "모델 학습 · baseline 측정 · ablation"
+
+- name: "type: chore"
+  color: "cfd3d7"
+  description: "설정, 빌드, 촬영·라벨링 등 그 외 작업"
+
+# ── area: 어느 모듈인가 (직접 고름) ───────────────────────────────────
+- name: "area: pointing"
+  color: "c2e0c6"
+  description: "지시 대상 특정 · LangGraph — A"
+
+- name: "area: nutrition"
+  color: "f9d0c4"
+  description: "성분표 검출 · OCR · 알레르기 — B"
+
+- name: "area: voice"
+  color: "d4c5f9"
+  description: "웨이크워드 · STT · TTS · RAG · 대시보드 — C"
+
+- name: "area: data"
+  color: "fef2c0"
+  description: "촬영 · 라벨링 · 동의어 사전"
+
+- name: "area: infra"
+  color: "e6e6e6"
+  description: "개발환경 · CI · 배포 · 공통 설정"
+
+# ── 상태 ──────────────────────────────────────────────────────────────
+- name: "breaking"
+  color: "b60205"
+  description: "types.py / graph/state.py 변경 — 세 사람 코드가 전부 영향받음"
+
+- name: "blocked"
+  color: "000000"
+  description: "다른 작업이나 외부 요인(카메라 배송 등) 때문에 진행 불가"
