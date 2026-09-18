@@ -1,0 +1,26 @@
+# 코드 소유자 — PR 에 리뷰어를 자동으로 지정한다.
+#
+# 파일 경로가 아래 규칙에 걸리면 해당 사람이 리뷰어로 자동 요청된다.
+# 누가 리뷰해야 하는지 매번 물어볼 필요가 없어진다.
+#
+# ⚠️ 팀원 GitHub 계정을 확인해서 아래 주석을 풀 것.
+#    없는 계정을 적으면 GitHub 이 경고를 띄우고 자동 지정이 동작하지 않는다.
+
+# 기본 — 아래 규칙에 안 걸리는 모든 파일
+*                               @LeoChoi224
+
+# 계약 파일 — 세 사람이 전부 의존하므로 팀장이 반드시 본다
+/src/jarviseo/types.py          @LeoChoi224
+/src/jarviseo/graph/            @LeoChoi224
+
+# A · 팀장 — 지시 대상 특정
+/src/jarviseo/pointing/         @LeoChoi224
+/src/jarviseo/capture/          @LeoChoi224
+
+# B — 성분표 인식
+# /src/jarviseo/nutrition/      @팀원B_깃허브계정
+
+# C — 음성 · 검색 · 대시보드
+# /src/jarviseo/voice/          @팀원C_깃허브계정
+# /src/jarviseo/memory/         @팀원C_깃허브계정
+# /src/jarviseo/api/            @팀원C_깃허브계정
