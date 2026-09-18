@@ -1,0 +1,21 @@
+# 줄바꿈 문자를 LF 로 통일한다.
+#
+# 이게 없으면 윈도우(CRLF)와 맥(LF)이 줄바꿈을 다르게 저장해서,
+# 아무것도 안 고친 파일이 전부 수정된 것처럼 뜬다.
+# 그러면 git diff 를 읽을 수 없게 되고 충돌도 계속 난다.
+# 맥 1대 + 윈도우 2대 구성에서는 반드시 있어야 한다.
+* text=auto eol=lf
+
+# 아래는 바이너리이므로 손대지 않는다.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.mp4 binary
+*.mov binary
+*.wav binary
+*.mp3 binary
+*.pt binary
+*.onnx binary
+*.db binary
+*.ipynb binary

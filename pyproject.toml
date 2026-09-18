@@ -1,0 +1,25 @@
+[project]
+name = "jarviseo"
+version = "0.1.0"
+description = "자비서 (JARVISEO) — 안경형 AI 개인 비서"
+# 미결: 인수인계서는 3.11 로 합의했으나 팀장 로컬 conda 환경(KDT-py)은 3.12.5 다.
+# 킥오프에서 하나로 정하고 이 줄을 좁힐 것.
+requires-python = ">=3.11"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

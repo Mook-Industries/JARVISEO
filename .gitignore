@@ -1,0 +1,54 @@
+# --- 비밀 정보 ---------------------------------------------------------
+# API 키가 커밋되면 히스토리에 영구히 남는다.
+# 사고가 나면 파일을 지우는 게 아니라 키를 폐기하고 재발급해야 한다.
+.env
+.env.local
+*.key
+
+# --- 학습 데이터 · 가중치 ----------------------------------------------
+# 공용 Google Drive 에서 받는다. Git 에 올리지 않는다.
+data/datasets/*
+data/models/*
+data/videos/*
+data/chroma/
+*.db
+*.sqlite3
+!data/datasets/.gitkeep
+!data/models/.gitkeep
+!data/videos/.gitkeep
+# 단, 동의어 사전은 코드만큼 중요하므로 예외로 커밋한다.
+!data/datasets/allergen_synonyms.json
+
+# --- 실험 산출물 --------------------------------------------------------
+runs/
+wandb/
+outputs/
+*.pt
+*.onnx
+
+# --- 파이썬 ------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# --- 에디터 · OS -------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+
+# --- AI Tool -------------------------------------------------------
+.claude/
+.agents/
+CLAUDE.local.md
+CLAUDE.md
+MEMORY.md
+ai/eval/*
