@@ -4,7 +4,7 @@
 types.py 가 '모듈 사이의 계약'이라면, 이 파일은 '노드 사이의 계약'이다.
 
 필드를 추가할 때는 types.py 와 같은 규칙을 따른다.
-커밋 메시지 제목에 [contract] 를 붙이고 팀에 공지한다.
+커밋 타입 뒤에 ! 를 붙이고(feat(state)!: ...) 팀에 공지한다.
 """
 
 from __future__ import annotations

@@ -143,8 +143,10 @@ JARVISEO_FRAME_PATH=data/datasets/sample
 ### 계약 파일을 바꿀 때
 
 `types.py` 와 `graph/state.py` 는 남의 코드가 의존하는 파일이다.
-필드를 추가·삭제·개명할 때는 팀 채널에 공지하고, 커밋 메시지 제목에
-`[contract]` 를 붙인다.
+필드를 추가·삭제·개명할 때는 팀 채널에 공지하고, 커밋 타입 뒤에 `!` 를
+붙인다 (`feat(types)!: Frame 에 sharpness 필드 추가`).
+
+전체 규칙은 [작업 컨벤션](.github/CONTRIBUTING.md)을 본다.
 
 ### 평가
 
