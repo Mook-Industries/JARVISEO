@@ -1,0 +1,54 @@
+name: 📋 Task
+description: 해야 할 일 — 기능 개발, 모델 학습, 촬영·라벨링, 문서
+title: "[Task] "
+
+# 이 템플릿은 여러 종류의 작업을 받는다.
+# 가장 흔한 기능 개발을 기본값으로 깔아두고, 다른 종류면 사이드바에서 바꾼다.
+labels: ["type: feature"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ⚠️ 이 이슈에는 **`type: feature`** 라벨이 기본으로 붙습니다.
+        기능 개발이 아니면 오른쪽 사이드바에서 바꿔주세요.
+
+        | 바꿀 라벨 | 이런 작업 |
+        |---|---|
+        | `type: experiment` | 모델 학습 · baseline 측정 · ablation |
+        | `type: docs` | 문서 · 발표자료 · 회의록 |
+        | `type: chore` | 촬영 · 라벨링 · 환경 설정 · 그 외 |
+
+        그리고 **`area:` 라벨도 하나 골라주세요.**
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 무엇을
+      placeholder: 성분표 영역을 검출하는 YOLO 모델을 학습합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: 왜
+      placeholder: 봉지 전체를 OCR에 넣으면 제품명·광고 문구가 섞여 나옵니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 완료 조건
+      value: |
+        - [ ] 
+        - [ ] 
+    validations:
+      required: true
+
+  - type: input
+    id: due
+    attributes:
+      label: 마감
+      placeholder: 10/4

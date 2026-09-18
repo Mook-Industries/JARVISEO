@@ -1,0 +1,43 @@
+name: 🐛 Bug Report
+description: 동작하지 않는 것
+title: "[Bug] "
+labels: ["type: bug"]
+
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: 증상
+      placeholder: 윈도우에서 한글 파일명 이미지를 읽으면 image가 None으로 돌아옵니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 재현 방법
+      value: |
+        1. 
+        2. 
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 환경
+      description: 다른 OS에서도 재현되면 여러 개 고르세요.
+      multiple: true
+      options:
+        - macOS
+        - Windows
+        - Colab
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 로그
+      description: 트레이스백은 마지막 줄만 말고 전문을 붙여주세요.
+      render: shell

@@ -1,0 +1,10 @@
+# 빈 이슈를 막고 템플릿만 쓰게 한다.
+blank_issues_enabled: false
+
+contact_links:
+  - name: 📖 작업 컨벤션
+    url: https://github.com/Mook-Industries/JARVISEO/blob/main/.github/CONTRIBUTING.md
+    about: 브랜치·커밋·PR 규칙을 먼저 확인하세요.
+  - name: 💬 팀 Notion
+    url: https://www.notion.so/
+    about: 회의록·개발일지·DB 설계는 Notion 에 있습니다. (URL 을 팀 워크스페이스 주소로 바꿀 것)
