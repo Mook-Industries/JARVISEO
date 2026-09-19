@@ -44,6 +44,11 @@ def _get_float(key: str, default: float) -> float:
     return float(raw) if raw else default
 
 
+def _get_bool(key: str, default: bool) -> bool:
+    raw = _get(key).lower()
+    return raw in ("1", "true", "yes", "on") if raw else default
+
+
 # --- 프레임 입력 ----------------------------------------------------------
 # "usbcam" | "webcam" | "video" | "folder"
 FRAME_SOURCE = _get("JARVISEO_FRAME_SOURCE", "webcam")
@@ -62,6 +67,20 @@ SHARPNESS_THRESHOLD = _get_float("JARVISEO_SHARPNESS_THRESHOLD", 100.0)
 # 값을 올리면 되묻는 횟수가 늘고, 내리면 틀린 단정이 늘어난다.
 # ablation 실험으로 정할 값이므로 지금은 출발점이다.
 CLARIFY_MARGIN_THRESHOLD = _get_float("JARVISEO_CLARIFY_MARGIN", 0.15)
+
+# --- 기능 플래그 ----------------------------------------------------------
+# 아직 안 끝난 기능은 브랜치에 들고 있지 말고, **꺼둔 채로 main 에 머지한다.**
+# 브랜치가 오래 살수록 충돌 비용이 커지기 때문이다.
+#
+#     if config.ENABLE_GAZE_CUE:
+#         scores += score_gaze(...)
+#
+# 규칙: 기능이 완성되면 플래그와 if 분기를 **같이 지운다.**
+# 다 만든 기능의 플래그를 남겨두면 경우의 수만 늘어나고 아무도 안 지운다.
+ENABLE_GAZE_CUE = _get_bool("JARVISEO_ENABLE_GAZE_CUE", False)
+ENABLE_LANGUAGE_CUE = _get_bool("JARVISEO_ENABLE_LANGUAGE_CUE", False)
+ENABLE_BELONGING = _get_bool("JARVISEO_ENABLE_BELONGING", False)
+ENABLE_RECALL = _get_bool("JARVISEO_ENABLE_RECALL", False)
 
 # --- 외부 API -------------------------------------------------------------
 # 팀 공용 키 1개를 팀장이 관리한다. 월 사용 한도 설정 필수.

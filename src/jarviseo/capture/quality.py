@@ -104,9 +104,7 @@ class FrameBuffer:
         return max(candidates, key=lambda f: f.sharpness or 0.0)
 
     @staticmethod
-    def is_too_blurry(
-        frame: Frame, threshold: float = DEFAULT_SHARPNESS_THRESHOLD
-    ) -> bool:
+    def is_too_blurry(frame: Frame, threshold: float = DEFAULT_SHARPNESS_THRESHOLD) -> bool:
         """이 프레임이 쓰기에 너무 흐린지 판단한다.
 
         True 가 나오면 LangGraph 에서 recapture 분기로 되돌아간다.

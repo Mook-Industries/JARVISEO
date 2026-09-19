@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from jarviseo.types import BBox, IngredientPanel, OCRLine
+from jarviseo.types import BBox, OCRLine
 
 __all__ = ["crop_and_upscale", "read_panel", "parse_ingredients"]
 

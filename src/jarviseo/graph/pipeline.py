@@ -47,10 +47,10 @@ def _node_resolve(state: JarviseoState) -> JarviseoState:
 
 
 def _route_after_capture(state: JarviseoState) -> str:
-    """"recapture" 또는 "continue" 를 반환한다."""
+    """ "recapture" 또는 "continue" 를 반환한다."""
     raise NotImplementedError
 
 
 def _route_after_resolve(state: JarviseoState) -> str:
-    """"clarify" 또는 "generate" 를 반환한다."""
+    """ "clarify" 또는 "generate" 를 반환한다."""
     raise NotImplementedError

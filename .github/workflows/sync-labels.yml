@@ -1,0 +1,30 @@
+name: Sync Labels
+
+# .github/labels.yml 이 바뀌면 GitHub 라벨을 거기에 맞춰 동기화한다.
+# 라벨을 웹 UI 에서 직접 만들면 다음 동기화 때 지워지므로,
+# 반드시 labels.yml 을 고쳐서 PR 로 올릴 것.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/labels.yml'
+  workflow_dispatch:
+
+jobs:
+  label-sync:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Label Sync
+        uses: EndBug/label-sync@v2
+        with:
+          config-file: .github/labels.yml
+          # labels.yml 에 없는 라벨은 삭제한다.
+          # GitHub 기본 라벨(bug, enhancement 등)도 같이 사라진다.
+          delete-other-labels: false

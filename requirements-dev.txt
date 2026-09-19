@@ -1,0 +1,17 @@
+# CI · 로컬 테스트용 최소 의존성
+#
+# 무거운 ML 패키지(torch, whisper, easyocr, ultralytics)는 일부러 뺐다.
+# CI 에서 그걸 다 설치하면 OS 3종에 10분씩 걸리는데, 린트와 계약 테스트에는
+# 하나도 필요 없다. 모델을 실제로 돌리는 작업은 로컬과 Colab 에서 한다.
+#
+# 설치:  python -m pip install -r requirements-dev.txt
+
+numpy>=1.26
+opencv-python-headless>=4.9   # CI 에는 화면이 없으므로 headless 판
+python-dotenv>=1.0
+
+pytest>=8.0
+
+# 포매터는 버전을 정확히 박는다.
+# 버전이 올라가면 포맷 결과가 달라져서, 코드를 안 고쳤는데도 CI 가 빨간불이 된다.
+ruff==0.16.8

@@ -1,0 +1,30 @@
+name: ♻️ Refactor
+description: 동작은 그대로, 코드만 개선
+title: "[Refactor] "
+labels: ["type: refactor"]
+
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: 무엇을
+      placeholder: resolve_target() 안의 단서 점수 계산을 cues.py로 분리
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: 왜
+      placeholder: 단서를 하나씩 껐다 켜는 ablation을 하려면 계산이 따로 떨어져 있어야 합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: verify
+    attributes:
+      label: 동작이 같은지 확인하는 방법
+      description: 기능이 바뀌면 리팩터가 아니라 Feature 이슈입니다.
+      placeholder: 같은 이미지 폴더로 돌렸을 때 대상 선택 결과가 리팩터 전과 동일
+    validations:
+      required: true
