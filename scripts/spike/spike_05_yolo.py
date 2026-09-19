@@ -1,4 +1,4 @@
-"""스파이크 5 — 사전학습 YOLO 검출 = **baseline 측정**.  담당: A, B
+"""스파이크 5 — 사전학습 YOLO 검출 = **baseline 측정**.  담당: 최홍묵, 권용현
 
 이건 단순 확인이 아니다. 여기서 나온 숫자가 baseline 이 된다.
 학습을 시작하면 사전학습 상태의 성능은 되돌려 잴 수 없다.
@@ -11,7 +11,7 @@
 
 2번에서 "못 잡는다"를 스크린샷으로 남겨두면 발표 자료의 before 가 된다.
 
-TODO(A, B): 30줄 내외로 구현
+TODO(최홍묵, 권용현): 30줄 내외로 구현
 """
 
-raise NotImplementedError("W1 에 A, B 가 작성")
+raise NotImplementedError("W1 에 최홍묵, 권용현 가 작성")

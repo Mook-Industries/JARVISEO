@@ -1,9 +1,9 @@
-# 팀 개발 환경
+# 팀 개발 환경.  담당: 문태현 (배포)
 #
-# DB 만 띄우기 (팀장 A — 카메라를 써야 해서 파이썬은 네이티브로 돌림)
+# DB 만 띄우기 (파이썬을 네이티브로 돌리는 경우. 카메라·마이크를 쓰려면 이쪽)
 #     docker compose up -d db
 #
-# 전부 컨테이너로 (팀원 B·C)
+# 파이썬까지 전부 컨테이너로 (설치가 막힐 때)
 #     docker compose build            # 처음 한 번, 5~10분
 #     docker compose run --rm dev     # 컨테이너 셸. db 도 같이 올라온다
 #
@@ -31,7 +31,7 @@ services:
       POSTGRES_PASSWORD: jarviseo
       POSTGRES_DB: jarviseo
     ports:
-      # 호스트에도 열어준다. 네이티브로 파이썬을 돌리는 팀장이 붙어야 하고,
+      # 호스트에도 열어준다. 네이티브로 파이썬을 돌릴 때 붙어야 하고,
       # DBeaver 같은 GUI 로 테이블을 들여다볼 때도 필요하다.
       - "5432:5432"
     volumes:

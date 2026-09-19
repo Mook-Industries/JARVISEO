@@ -1,5 +1,7 @@
 name: CI
 
+# 담당: 문태현 (배포)
+#
 # PR 을 올리면 자동으로 돌고, 빨간불이면 머지 버튼이 잠긴다.
 # (잠기게 하려면 GitHub 설정에서 이 체크를 필수로 등록해야 한다.
 #  Settings → Branches → main → Require status checks to pass)

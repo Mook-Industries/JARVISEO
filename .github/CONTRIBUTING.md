@@ -103,7 +103,8 @@ Task 는 여러 종류를 받으므로, 가장 흔한 `type: feature` 를 기본
 
 그리고 **모든 이슈에 `area:` 라벨을 하나 단다.** 누가 볼 이슈인지가 여기서 정해진다.
 
-`area: pointing` (A) · `area: nutrition` (B) · `area: voice` (C) · `area: data` · `area: infra`
+`area: pointing` (최홍묵) · `area: nutrition` · `area: api` (권용현) ·
+`area: voice` · `area: infra` (문태현) · `area: data` (공용)
 
 ---
 
