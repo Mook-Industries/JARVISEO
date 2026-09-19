@@ -25,7 +25,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -141,7 +141,7 @@ class Utterance:
     confidence: float | None = None
 
 
-class Intent(str, Enum):
+class Intent(StrEnum):
     """라우터가 판단한 질문의 종류.
 
     GENERAL 은 폴백이다. 특화 모듈이 해당 없다고 판단하면 여기로 떨어지고,
@@ -160,7 +160,7 @@ class Intent(str, Enum):
 # --------------------------------------------------------------------------
 
 
-class CueKind(str, Enum):
+class CueKind(StrEnum):
     """'저거'가 무엇인지 판단할 때 쓰는 단서의 종류.
 
     ablation(단서를 하나씩 껐다 켜며 기여도를 재는 실험)의 축이 이것이다.
@@ -237,7 +237,7 @@ class IngredientPanel:
     ingredients: list[str] = field(default_factory=list)  # 파싱한 성분명 목록
 
 
-class AllergenVerdict(str, Enum):
+class AllergenVerdict(StrEnum):
     """알레르기 판정 결과.
 
     UNCERTAIN 이 핵심이다. 확정된 설계 결정에 따라 정밀도보다 재현율을

@@ -13,7 +13,7 @@ ablation(단서를 하나씩 껐다 켜며 기여도를 재는 실험)의 축이
 
 from __future__ import annotations
 
-from jarviseo.types import BBox, CueKind, CueScore, Detection
+from jarviseo.types import CueScore, Detection
 
 __all__ = [
     "score_hand",

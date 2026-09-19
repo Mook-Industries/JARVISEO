@@ -74,8 +74,12 @@ class FrameSource(ABC):
                 return
             yield frame
 
-    def release(self) -> None:
-        """열어둔 자원을 정리한다. 하위 클래스에서 필요하면 재정의."""
+    def release(self) -> None:  # noqa: B027  (일부러 비워둔 선택적 훅)
+        """열어둔 자원을 정리한다. 하위 클래스에서 필요하면 재정의.
+
+        추상 메서드로 만들지 않은 것은, 정리할 자원이 없는 입력원도 있기
+        때문이다. 그런 경우까지 빈 메서드를 쓰게 만들 이유가 없다.
+        """
 
     def __enter__(self) -> FrameSource:
         return self
@@ -186,9 +190,7 @@ class ImageFolderSource(FrameSource):
         self.folder = Path(folder)
         if not self.folder.is_dir():
             raise NotADirectoryError(f"폴더가 없습니다: {self.folder}")
-        self.paths = sorted(
-            p for p in self.folder.iterdir() if p.suffix.lower() in _IMAGE_SUFFIXES
-        )
+        self.paths = sorted(p for p in self.folder.iterdir() if p.suffix.lower() in _IMAGE_SUFFIXES)
         if not self.paths:
             raise FileNotFoundError(f"이미지가 한 장도 없습니다: {self.folder}")
         self.source_id = f"folder:{self.folder.name}"

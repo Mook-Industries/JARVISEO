@@ -13,8 +13,6 @@ Utterance.started_at 을 대충 채우면 이 함정이 그대로 살아난다.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 
 from jarviseo.types import Utterance

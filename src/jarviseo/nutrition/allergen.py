@@ -19,16 +19,32 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from jarviseo.types import AllergenJudgement, AllergenVerdict, IngredientPanel
+from jarviseo.types import AllergenJudgement, IngredientPanel
 
 __all__ = ["load_synonyms", "judge_allergens"]
 
 # 식약처 표시 대상 알레르기 유발물질을 출발점으로 삼는다.
 # 실제 사전은 JSON 파일로 관리하고, 이 목록은 키 이름의 기준일 뿐이다.
 KNOWN_ALLERGENS = [
-    "우유", "알류", "메밀", "땅콩", "대두", "밀", "고등어", "게", "새우",
-    "돼지고기", "복숭아", "토마토", "아황산류", "호두", "닭고기", "쇠고기",
-    "오징어", "조개류", "잣",
+    "우유",
+    "알류",
+    "메밀",
+    "땅콩",
+    "대두",
+    "밀",
+    "고등어",
+    "게",
+    "새우",
+    "돼지고기",
+    "복숭아",
+    "토마토",
+    "아황산류",
+    "호두",
+    "닭고기",
+    "쇠고기",
+    "오징어",
+    "조개류",
+    "잣",
 ]
 
 
