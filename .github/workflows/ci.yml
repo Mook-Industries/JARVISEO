@@ -37,7 +37,8 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          # 킥오프에서 파이썬 버전을 정하면 pyproject.toml 과 함께 고칠 것
+          # 3.12 로 확정 (강의에서 쓴 버전). pyproject.toml, Dockerfile 과 같이 맞춰둔 값이라
+          # 바꿀 때는 세 곳을 함께 고칠 것.
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements-dev.txt

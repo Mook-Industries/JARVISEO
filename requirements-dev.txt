@@ -10,6 +10,11 @@ numpy>=1.26
 opencv-python-headless>=4.9   # CI 에는 화면이 없으므로 headless 판
 python-dotenv>=1.0
 
+# 모델 정의를 테스트하려면 필요하다.
+# psycopg(Postgres 드라이버)는 뺐다. CI 에서는 Postgres 를 띄우지 않고
+# SQLite 인메모리로 스키마만 검사한다. 테이블·관계가 맞는지 보는 데는 그걸로 충분하다.
+sqlalchemy>=2.0
+
 pytest>=8.0
 
 # 포매터는 버전을 정확히 박는다.

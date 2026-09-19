@@ -65,21 +65,54 @@ tests/
 
 ## 시작하기
 
+파이썬은 **3.12** 로 통일한다. 강의에서 쓴 버전(3.12.5)이라 수업 코드가
+그대로 돌아간다. 3.13 은 쓰지 않는다 — ultralytics·easyocr 가 새 파이썬을
+늦게 따라와서 설치가 막히는 일이 있다.
+
 ```bash
 git clone <레포 주소>
-cd jarviseo
+cd JARVISEO
 ```
 
-가상환경을 만들고 의존성을 설치한다.
+세 단계다. 파이썬은 각자 깔고, **도커는 데이터베이스 하나만 띄운다.**
+
+### 1. 파이썬 환경 (각자 편한 방식으로)
+
+conda 든 venv 든 상관없다. 3.12 이기만 하면 된다.
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate        # 윈도우: .venv\Scripts\activate
-python -m pip install -r requirements.txt
-python -m pip install -e .
+conda create -n JARVISEO python=3.12 -y && conda activate JARVISEO
 ```
 
-환경변수 파일을 만든다.
+```bash
+python -m venv .venv && source .venv/bin/activate    # 윈도우: .venv\Scripts\activate
+```
+
+둘 중 하나를 고른 뒤 의존성을 설치한다.
+
+```bash
+pip install -r requirements.txt
+pip install -e .
+```
+
+### 2. 데이터베이스 (도커)
+
+Postgres 만 컨테이너로 띄운다. 셋이 각자 설치하고 버전 맞추는 것보다 싸다.
+
+```bash
+docker compose up -d db
+```
+
+테이블은 처음 한 번 만든다.
+
+```bash
+python -c "from jarviseo.memory import MemoryStore; MemoryStore().init_schema()"
+```
+
+> **도커가 하는 일은 이게 전부다.** 파이썬은 위에서 만든 환경에서 그대로 돈다.
+> 카메라·마이크도 네이티브로 도니까 아무 제약이 없다.
+
+### 3. 환경변수
 
 ```bash
 cp .env.example .env
@@ -88,12 +121,86 @@ cp .env.example .env
 `.env` 를 열어 `JARVISEO_LLM_API_KEY` 를 채운다. 키는 팀장에게 받는다.
 **`.env` 는 절대 커밋하지 않는다.**
 
-카메라 없이 개발하려면 `.env` 에서 입력원을 바꾼다.
+카메라 없이 개발하려면 입력원을 바꾼다.
 
 ```
 JARVISEO_FRAME_SOURCE=folder
 JARVISEO_FRAME_PATH=data/datasets/sample
 ```
+
+---
+
+### (비상구) 설치가 도저히 안 될 때
+
+윈도우에서 easyocr·opencv 설치가 며칠째 막히는 팀원이 있으면, 파이썬 환경까지
+통째로 컨테이너로 옮길 수 있다. **위 1번 대신** 쓰는 방법이고,
+잘 깔린 사람은 볼 필요 없다.
+
+```bash
+docker compose build          # 처음 한 번, 5~10분
+docker compose run --rm dev   # 컨테이너 셸
+```
+
+```bash
+docker compose run --rm dev pytest
+docker compose up api          # 대시보드 → http://localhost:8000
+```
+
+**이 컨테이너 안에서는 카메라·마이크가 안 된다.** 맥과 윈도우의 Docker 는
+리눅스 VM 안에서 돌아서 USB 장치를 넘길 수 없다. 설정 문제가 아니라 구조라
+우회할 수 없다. 그래서 이걸 쓰는 사람은 파일 입력원(`folder` / `video`)으로만
+개발한다. 팀원 B·C 는 어차피 카메라가 없으므로 문제가 되지 않는다.
+
+---
+
+## 데이터베이스
+
+**Postgres 를 docker compose 로 띄운다.** 네이티브로 파이썬을 돌리더라도
+DB 만큼은 컨테이너를 쓴다. 셋이 각자 Postgres 를 설치하고 버전을 맞추는
+것보다 이쪽이 훨씬 싸다.
+
+```bash
+docker compose up -d db
+```
+
+처음 한 번은 테이블을 만들어야 한다.
+
+```bash
+python -c "from jarviseo.memory import MemoryStore; MemoryStore().init_schema()"
+```
+
+`docker compose down` 으로 내려도 데이터는 남는다. **통째로 비우려면
+`docker compose down -v`** — 스키마를 갈아엎었을 때 이걸 쓴다.
+
+### 두 저장소를 나눠 쓴다
+
+| | 무엇을 | 왜 |
+|---|---|---|
+| **Postgres** | 대화 로그, 단계별 지연, 판정 결과 | "몇 번째 턴의 무엇"이 분명한 정형 기록 |
+| **Chroma** | 소지품·관찰 기록 임베딩 | "아까 본 그거"처럼 이름을 모르는 질의용 |
+
+Chroma 는 서버로 안 띄운다. 한 프로세스만 읽고 쓰므로 파일 모드로 충분하다.
+임베딩은 Chroma 에만 두고 Postgres 에는 `chroma_id` 만 남긴다 —
+같은 벡터를 두 군데 두면 어긋났을 때 어느 쪽이 맞는지 알 수 없다.
+
+### 스키마
+
+`src/jarviseo/memory/models.py` 가 원본이다. Notion 의 DB 설계 문서와
+어긋나면 **Notion 을 고친다.** 코드가 실제로 도는 쪽이다.
+
+열을 추가·변경할 때 주의할 것이 있다. `init_schema()` 는 **없는 테이블만
+만들고 기존 테이블은 건드리지 않는다.** 개발 중에는 `docker compose down -v`
+로 지우고 다시 만드는 게 빠르다.
+
+### 컨테이너 없이 돌려야 할 때
+
+발표 데모에서 맥북 메모리가 빠듯하면 `.env` 에서 이 한 줄만 켜면 된다.
+
+```
+JARVISEO_DATABASE_URL=sqlite:///data/jarviseo.db
+```
+
+SQLAlchemy 를 끼고 쓰기 때문에 코드는 한 줄도 안 바꿔도 된다.
 
 ---
 

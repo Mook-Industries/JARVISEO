@@ -1,0 +1,87 @@
+# 팀 개발 환경
+#
+# DB 만 띄우기 (팀장 A — 카메라를 써야 해서 파이썬은 네이티브로 돌림)
+#     docker compose up -d db
+#
+# 전부 컨테이너로 (팀원 B·C)
+#     docker compose build            # 처음 한 번, 5~10분
+#     docker compose run --rm dev     # 컨테이너 셸. db 도 같이 올라온다
+#
+# 셸에 안 들어가고 명령만 돌리기
+#     docker compose run --rm dev pytest
+#     docker compose run --rm dev ruff check .
+#
+# 대시보드 (http://localhost:8000)
+#     docker compose up api
+#
+# 전부 내리기 (데이터는 남는다)
+#     docker compose down
+#
+# DB 를 통째로 비우기 — 스키마를 갈아엎었을 때
+#     docker compose down -v
+
+services:
+  # ── Postgres ──────────────────────────────────────────────────────────
+  # 팀원이 각자 설치할 필요가 없다는 것이 이 서비스의 요점이다.
+  # 셋이 완전히 같은 버전, 같은 설정으로 붙는다.
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: jarviseo
+      POSTGRES_PASSWORD: jarviseo
+      POSTGRES_DB: jarviseo
+    ports:
+      # 호스트에도 열어준다. 네이티브로 파이썬을 돌리는 팀장이 붙어야 하고,
+      # DBeaver 같은 GUI 로 테이블을 들여다볼 때도 필요하다.
+      - "5432:5432"
+    volumes:
+      # 이름 있는 볼륨에 데이터를 둔다. compose down 으로는 안 지워지고,
+      # down -v 를 해야 지워진다.
+      - jarviseo-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # dev/api 가 DB 준비를 기다리게 하려면 healthcheck 가 있어야 한다.
+      # 이게 없으면 Postgres 가 아직 안 떴는데 앱이 붙으려다 죽는다.
+      test: ["CMD-SHELL", "pg_isready -U jarviseo -d jarviseo"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  # ── 개발 셸 ───────────────────────────────────────────────────────────
+  dev:
+    build: .
+    image: jarviseo-dev
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # 컨테이너 안에서는 DB 호스트가 localhost 가 아니라 서비스 이름 db 다.
+      # 이 값이 .env 보다 우선한다 — load_dotenv 는 이미 설정된 환경변수를
+      # 덮어쓰지 않기 때문이다(override=False 가 기본값).
+      JARVISEO_DB_HOST: db
+    volumes:
+      # 소스를 통째로 연결한다. 호스트에서 고치면 바로 반영되고 다시 빌드할 필요가 없다.
+      # .env 도 같이 들어가므로 config.py 의 load_dotenv 가 그대로 동작한다.
+      - .:/app
+    stdin_open: true
+    tty: true
+
+  # ── FastAPI · 대시보드 ────────────────────────────────────────────────
+  api:
+    build: .
+    image: jarviseo-dev
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      JARVISEO_DB_HOST: db
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    # --host 0.0.0.0 이 꼭 필요하다.
+    # 기본값(127.0.0.1)으로 띄우면 컨테이너 안에서만 열려서
+    # 호스트 브라우저로는 접속이 안 된다.
+    command: uvicorn jarviseo.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  jarviseo-pgdata:

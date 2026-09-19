@@ -1,0 +1,32 @@
+# 이미지를 빌드할 때 Docker 로 보내지 않을 것들.
+#
+# 이게 없으면 data/ 안의 영상·가중치 수 GB 가 통째로 전송돼서
+# 빌드가 시작도 하기 전에 몇 분이 날아간다.
+# (실행할 때는 바인드 마운트로 들어가므로 파일은 그대로 쓸 수 있다.)
+
+.git
+.github
+
+# 학습 데이터 · 가중치 · 영상
+data/
+
+# 가상환경 — 호스트 것이 들어가면 컨테이너 것과 섞인다
+.venv
+venv
+env
+
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.ipynb_checkpoints
+
+# 비밀 정보. 실행 시에는 바인드 마운트로 들어가므로 이미지에 구울 필요가 없다.
+.env
+.env.local
+
+.vscode
+.idea
+.DS_Store
