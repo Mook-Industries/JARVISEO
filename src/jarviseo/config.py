@@ -87,8 +87,30 @@ ENABLE_RECALL = _get_bool("JARVISEO_ENABLE_RECALL", False)
 LLM_API_KEY = _get("JARVISEO_LLM_API_KEY")
 VLM_MODEL = _get("JARVISEO_VLM_MODEL", "claude-sonnet-5")
 
-# --- 저장소 ---------------------------------------------------------------
-SQLITE_PATH = Path(_get("JARVISEO_SQLITE_PATH") or (DATA_DIR / "jarviseo.db"))
+# --- 관계형 DB (Postgres) -------------------------------------------------
+# docker compose 로 띄운 Postgres 에 붙는다.
+#   네이티브 실행   → localhost:5432
+#   컨테이너 안     → db:5432  (compose 가 환경변수로 덮어쓴다)
+#
+# compose 의 environment 가 .env 보다 우선한다. load_dotenv 는 이미 설정된
+# 환경변수를 덮어쓰지 않기 때문이다(override=False 가 기본값).
+# 그래서 같은 .env 를 쓰면서도 컨테이너 안에서만 호스트명이 db 로 바뀐다.
+DB_HOST = _get("JARVISEO_DB_HOST", "localhost")
+DB_PORT = _get_int("JARVISEO_DB_PORT", 5432)
+DB_NAME = _get("JARVISEO_DB_NAME", "jarviseo")
+DB_USER = _get("JARVISEO_DB_USER", "jarviseo")
+DB_PASSWORD = _get("JARVISEO_DB_PASSWORD", "jarviseo")
+
+# 통째로 지정하고 싶으면 이 값을 쓴다. 위 항목들보다 우선한다.
+# SQLite 로 되돌리려면 여기에 이렇게 넣으면 된다:
+#   JARVISEO_DATABASE_URL=sqlite:///data/jarviseo.db
+# 발표 데모에서 맥북 메모리가 빠듯하면 이 방법으로 컨테이너 없이 돌릴 수 있다.
+DATABASE_URL = _get("JARVISEO_DATABASE_URL") or (
+    f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+)
+
+# --- 벡터 DB (Chroma) -----------------------------------------------------
+# 이쪽은 서버로 띄우지 않는다. 한 프로세스만 읽고 쓰므로 파일 모드로 충분하다.
 CHROMA_PATH = Path(_get("JARVISEO_CHROMA_PATH") or (DATA_DIR / "chroma"))
 
 # --- 음성 ----------------------------------------------------------------
