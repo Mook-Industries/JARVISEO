@@ -1,10 +1,10 @@
 """프레임 입력원 추상화.
 
-카메라가 1대뿐이다. 팀장이 그 카메라를 쓰는 동안 팀원 두 명은 개발을 못 하는
-상황을 막으려고, 프레임을 어디서 얻는지를 이 인터페이스 뒤로 숨긴다.
+카메라가 1대뿐이다. 그 한 대가 누구 손에 있든 나머지 사람의 개발이 멈추지
+않도록, 프레임을 어디서 얻는지를 이 인터페이스 뒤로 숨긴다.
 
-- 팀장은 USBCamSource 로 실물 카메라를 쓴다.
-- 팀원은 VideoFileSource / ImageFolderSource 로 공용 Drive 에서 받은
+- 실물 카메라가 있으면 USBCamSource 를 쓴다.
+- 없으면 VideoFileSource / ImageFolderSource 로 공용 Drive 에 올라온
   녹화 영상·이미지를 쓴다.
 - 코드는 어느 쪽이든 똑같이 동작한다.
 
@@ -113,7 +113,7 @@ class WebcamSource(FrameSource):
 
 
 class USBCamSource(FrameSource):
-    """안경에 붙인 UVC 규격 USB 카메라. 팀에 1대뿐이고 팀장이 전담한다.
+    """안경에 붙인 UVC 규격 USB 카메라. 팀에 1대뿐이라 돌아가며 쓴다.
 
     해상도 기본값이 1920x1080 인 이유가 있다. 640x480 모듈을 기각한 근거가
     "성분표 글자(약 2mm)가 30cm 거리에서 약 4픽셀로 잡혀 OCR 이 물리적으로

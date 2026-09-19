@@ -5,6 +5,10 @@
 일반 안경테에 초소형 USB 카메라를 붙인 착용형 AI 비서.
 "자비서, 저거 뭐야?" 하고 부르면, 카메라가 본 장면을 판단해 음성으로 답한다.
 
+> 🚀 **처음 참여하는 팀원은 [docs/START_HERE.md](docs/START_HERE.md) 부터 보세요.**
+> 설치 · 매일 쓰는 git 명령 · 내가 건드릴 폴더가 한 장에 정리돼 있습니다.
+> 이 README 의 나머지는 나중에 필요할 때 찾아보면 됩니다.
+
 ---
 
 ## 구조
@@ -46,13 +50,13 @@ src/jarviseo/
 ├── types.py          ★ 모듈 간 인터페이스 계약 — 가장 먼저 읽을 것
 ├── config.py           전역 설정 (.env 로드, 경로)
 ├── capture/            프레임 입력 추상화 + 선명도 판단
-├── pointing/         ① 지시 대상 특정        (담당 A · 팀장)
-├── nutrition/        ② 식품 성분 판정        (담당 B)
-├── memory/           ③④ 소지품 · 개인 기억   (담당 C)
-├── voice/              웨이크워드 · STT · TTS (담당 C)
+├── pointing/         ① 지시 대상 특정        (담당 최홍묵)
+├── nutrition/        ② 식품 성분 판정        (담당 권용현)
+├── memory/           ③④ 소지품 · 개인 기억   (담당 문태현)
+├── voice/              웨이크워드 · STT · TTS (담당 문태현)
 ├── vlm/                클라우드 VLM 호출
-├── graph/              LangGraph 오케스트레이션 (담당 A)
-└── api/                FastAPI · 대시보드      (담당 C)
+├── graph/              LangGraph 오케스트레이션 (담당 최홍묵)
+└── api/                FastAPI · 대시보드      (담당 권용현)
 
 data/        학습 데이터 · 가중치 · 영상 (공용 Drive 에서 받음, Git 제외)
 notebooks/   Colab 학습 노트북
@@ -76,23 +80,21 @@ cd JARVISEO
 
 세 단계다. 파이썬은 각자 깔고, **도커는 데이터베이스 하나만 띄운다.**
 
-### 1. 파이썬 환경 (각자 편한 방식으로)
+### 1. 파이썬 환경
 
-conda 든 venv 든 상관없다. 3.12 이기만 하면 된다.
+**팀 기본은 venv 다.** 파이썬에 기본으로 들어 있어서 따로 설치할 게 없다.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate        # 윈도우: .venv\Scripts\activate
+pip install -r requirements.txt
+pip install -e .
+```
+
+conda 를 쓰는 사람은 앞의 두 줄만 이걸로 바꾼다. 나머지는 같다.
 
 ```bash
 conda create -n JARVISEO python=3.12 -y && conda activate JARVISEO
-```
-
-```bash
-python -m venv .venv && source .venv/bin/activate    # 윈도우: .venv\Scripts\activate
-```
-
-둘 중 하나를 고른 뒤 의존성을 설치한다.
-
-```bash
-pip install -r requirements.txt
-pip install -e .
 ```
 
 ### 2. 데이터베이스 (도커)
@@ -118,7 +120,7 @@ python -c "from jarviseo.memory import MemoryStore; MemoryStore().init_schema()"
 cp .env.example .env
 ```
 
-`.env` 를 열어 `JARVISEO_LLM_API_KEY` 를 채운다. 키는 팀장에게 받는다.
+`.env` 를 열어 `JARVISEO_LLM_API_KEY` 를 채운다. 키는 팀 채널에서 공유받는다.
 **`.env` 는 절대 커밋하지 않는다.**
 
 카메라 없이 개발하려면 입력원을 바꾼다.
@@ -149,7 +151,7 @@ docker compose up api          # 대시보드 → http://localhost:8000
 **이 컨테이너 안에서는 카메라·마이크가 안 된다.** 맥과 윈도우의 Docker 는
 리눅스 VM 안에서 돌아서 USB 장치를 넘길 수 없다. 설정 문제가 아니라 구조라
 우회할 수 없다. 그래서 이걸 쓰는 사람은 파일 입력원(`folder` / `video`)으로만
-개발한다. 팀원 B·C 는 어차피 카메라가 없으므로 문제가 되지 않는다.
+개발한다. 어차피 카메라는 한 대뿐이라 대부분의 작업이 파일 입력으로 돌아간다.
 
 ---
 
@@ -210,9 +212,9 @@ SQLAlchemy 를 끼고 쓰기 때문에 코드는 한 줄도 안 바꿔도 된다
 
 | 구분 | 소유 범위 | 책임 지표 |
 |---|---|---|
-| **A · 팀장**<br>지시 대상 특정 | 데이터 설계·라벨 기준, YOLO 학습, 다중 단서 융합, ablation, LangGraph, 전체 통합, 지연 최적화 | 대상 선택 정확도, fingertip mAP@0.5, 응답 지연 p50/p95 |
-| **B**<br>성분표 인식 | 성분표 데이터 설계·라벨 기준, YOLO 학습, OCR 파이프라인, 인식률 개선 | 성분표 검출 mAP, OCR 인식률, 알레르기 판정 recall |
-| **C**<br>음성 · 검색 | 웨이크워드 커스텀 학습, STT·TTS, 벡터DB·RAG, FastAPI·대시보드 | 웨이크워드 FAR/FRR, RAG 응답 근거율 |
+| **최홍묵**<br>지시 대상 특정 | 데이터 설계·라벨 기준, YOLO 학습, 다중 단서 융합, ablation, LangGraph, 전체 통합, 지연 최적화 | 대상 선택 정확도, fingertip mAP@0.5, 응답 지연 p50/p95 |
+| **권용현**<br>성분표 인식 · 대시보드 | 성분표 데이터 설계·라벨 기준, YOLO 학습, OCR 파이프라인, 인식률 개선, FastAPI·대시보드 | 성분표 검출 mAP, OCR 인식률, 알레르기 판정 recall |
+| **문태현**<br>음성 · 검색 · 배포 | 웨이크워드 커스텀 학습, STT·TTS, 벡터DB·RAG, 도커·CI·배포 | 웨이크워드 FAR/FRR, RAG 응답 근거율 |
 
 ---
 

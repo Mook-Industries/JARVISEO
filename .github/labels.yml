@@ -40,15 +40,19 @@
 # ── area: 어느 모듈인가 (직접 고름) ───────────────────────────────────
 - name: "area: pointing"
   color: "c2e0c6"
-  description: "지시 대상 특정 · LangGraph — A"
+  description: "지시 대상 특정 · LangGraph — 최홍묵"
 
 - name: "area: nutrition"
   color: "f9d0c4"
-  description: "성분표 검출 · OCR · 알레르기 — B"
+  description: "성분표 검출 · OCR · 알레르기 — 권용현"
+
+- name: "area: api"
+  color: "bfdadc"
+  description: "FastAPI 서버 · 대시보드 — 권용현"
 
 - name: "area: voice"
   color: "d4c5f9"
-  description: "웨이크워드 · STT · TTS · RAG · 대시보드 — C"
+  description: "웨이크워드 · STT · TTS · DB · RAG — 문태현"
 
 - name: "area: data"
   color: "fef2c0"
@@ -56,7 +60,7 @@
 
 - name: "area: infra"
   color: "e6e6e6"
-  description: "개발환경 · CI · 배포 · 공통 설정"
+  description: "개발환경 · 도커 · CI · 배포 — 문태현"
 
 # ── 상태 ──────────────────────────────────────────────────────────────
 - name: "breaking"

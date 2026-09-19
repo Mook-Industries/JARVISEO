@@ -27,4 +27,4 @@ jobs:
           config-file: .github/labels.yml
           # labels.yml 에 없는 라벨은 삭제한다.
           # GitHub 기본 라벨(bug, enhancement 등)도 같이 사라진다.
-          delete-other-labels: false
+          delete-other-labels: true

@@ -2,8 +2,7 @@
 name = "jarviseo"
 version = "0.1.0"
 description = "자비서 (JARVISEO) — 안경형 AI 개인 비서"
-# 3.12 로 확정. 강의에서 쓴 버전(3.12.5)이라 수업 코드가 그대로 돌고,
-# 팀장 conda 환경(KDT-py)도 같다.
+# 3.12 로 확정. 강의에서 쓴 버전(3.12.5)이라 수업 코드가 그대로 돈다.
 # 3.13 은 막아둔다. ultralytics·easyocr 같은 ML 패키지가 새 파이썬을 늦게
 # 따라와서, wheel 이 없어 설치가 막히는 일이 생긴다.
 requires-python = ">=3.12,<3.13"

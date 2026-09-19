@@ -83,7 +83,7 @@ ENABLE_BELONGING = _get_bool("JARVISEO_ENABLE_BELONGING", False)
 ENABLE_RECALL = _get_bool("JARVISEO_ENABLE_RECALL", False)
 
 # --- 외부 API -------------------------------------------------------------
-# 팀 공용 키 1개를 팀장이 관리한다. 월 사용 한도 설정 필수.
+# 팀 공용 키 1개를 함께 쓴다. 월 사용 한도 설정 필수.
 LLM_API_KEY = _get("JARVISEO_LLM_API_KEY")
 VLM_MODEL = _get("JARVISEO_VLM_MODEL", "claude-sonnet-5")
 
