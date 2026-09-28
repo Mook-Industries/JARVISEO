@@ -52,3 +52,11 @@ CLAUDE.local.md
 CLAUDE.md
 MEMORY.md
 ai/eval/*
+
+# --- 하드웨어 점검 산출물 -------------------------------------------------------
+tools/device_check/_captures/
+yolov8n.pt
+
+# 예전에 실행 위치에 흩어진 것들 (지금은 _captures/ 로만 생김)
+*.wav
+shot_*.jpg
