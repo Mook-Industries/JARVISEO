@@ -1,4 +1,7 @@
+# -*- coding: utf-8 -*-
 # CI · 로컬 테스트용 최소 의존성
+#
+# 위 coding 선언을 지우지 말 것. 이유는 requirements.txt 참고.
 #
 # 무거운 ML 패키지(torch, whisper, easyocr, ultralytics)는 일부러 뺐다.
 # CI 에서 그걸 다 설치하면 OS 3종에 10분씩 걸리는데, 린트와 계약 테스트에는
