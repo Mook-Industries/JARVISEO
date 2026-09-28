@@ -21,14 +21,14 @@ from pathlib import Path
 import numpy as np
 import sounddevice as sd
 
-SAMPLE_RATE = 16000     # faster-whisper 표준
-CHANNELS    = 1         # 모노
-SECONDS     = 5         # 녹음 길이
+SAMPLE_RATE = 16000  # faster-whisper 표준
+CHANNELS = 1  # 모노
+SECONDS = 5  # 녹음 길이
 
 # 산출물 저장 위치.
 # Path(__file__) 은 '이 파일 자신의 경로'라서, 어느 폴더에서 실행하든
 # 항상 스크립트 옆 _captures/ 에 떨어진다.
-OUT_DIR  = Path(__file__).resolve().parent / "_captures"
+OUT_DIR = Path(__file__).resolve().parent / "_captures"
 OUT_PATH = str(OUT_DIR / "mic_test.wav")
 
 
@@ -39,8 +39,10 @@ def list_devices():
         if dev["max_input_channels"] > 0:
             mark = "  <- 입력 가능"
             print(f"[{i:2}] {dev['name']}{mark}")
-            print(f"     채널 {dev['max_input_channels']} / "
-                  f"기본 샘플레이트 {int(dev['default_samplerate'])}Hz")
+            print(
+                f"     채널 {dev['max_input_channels']} / "
+                f"기본 샘플레이트 {int(dev['default_samplerate'])}Hz"
+            )
     print("\n카메라 이름이 보이는 번호를 인자로 넣어 다시 실행하세요.")
     print("예:  python mic_test.py 2\n")
 
@@ -52,14 +54,15 @@ def level_meter(device, seconds=10):
     def callback(indata, frames, time_info, status):
         if status:
             print(f"\n[경고] {status}")
-        rms = float(np.sqrt(np.mean(indata ** 2)))
+        rms = float(np.sqrt(np.mean(indata**2)))
         level = min(int(rms * 400), 50)
         bar = "#" * level
         print(f"\r[{bar:<50}] rms {rms:.4f}", end="")
 
     try:
-        with sd.InputStream(device=device, channels=CHANNELS,
-                            samplerate=SAMPLE_RATE, callback=callback):
+        with sd.InputStream(
+            device=device, channels=CHANNELS, samplerate=SAMPLE_RATE, callback=callback
+        ):
             sd.sleep(seconds * 1000)
     except KeyboardInterrupt:
         pass
@@ -69,19 +72,21 @@ def level_meter(device, seconds=10):
 def record(device):
     """SECONDS 초 녹음해서 wav 로 저장하고, 품질 수치를 알려준다."""
     print(f"{SECONDS}초 녹음 시작 — 평소 말하는 크기로 또박또박 말해보세요.")
-    print("추천 문장: \"자비서, 저거 뭐야?\"")
+    print('추천 문장: "자비서, 저거 뭐야?"')
 
-    audio = sd.rec(int(SECONDS * SAMPLE_RATE),
-                   samplerate=SAMPLE_RATE,
-                   channels=CHANNELS,
-                   dtype="float32",
-                   device=device)
+    audio = sd.rec(
+        int(SECONDS * SAMPLE_RATE),
+        samplerate=SAMPLE_RATE,
+        channels=CHANNELS,
+        dtype="float32",
+        device=device,
+    )
     sd.wait()
     print("녹음 끝\n")
 
     mono = audio[:, 0]
     peak = float(np.max(np.abs(mono)))
-    rms  = float(np.sqrt(np.mean(mono ** 2)))
+    rms = float(np.sqrt(np.mean(mono**2)))
     clip = int(np.sum(np.abs(mono) >= 0.999))
 
     # wav 저장 (16bit PCM)

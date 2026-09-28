@@ -23,14 +23,14 @@ from ultralytics import YOLO
 # ─────────────────────────────────────────────
 # 설정 — 여기만 바꾸면 됩니다
 # ─────────────────────────────────────────────
-CAM_INDEX = 0          # 카메라 번호. find_camera.py 로 찾은 값
-CONF      = 0.5        # 이 확신도 미만은 화면에 안 그림 (0.0 ~ 1.0)
-WIDTH     = 1280       # 요청 해상도 (카메라가 지원 안 하면 알아서 바뀜)
-HEIGHT    = 720
-MODEL     = "yolov8n.pt"   # 첫 실행 때 자동으로 내려받습니다 (약 6MB)
-DEVICE    = None       # 애플 실리콘이면 "mps" 로 바꾸면 빨라집니다
+CAM_INDEX = 0  # 카메라 번호. find_camera.py 로 찾은 값
+CONF = 0.5  # 이 확신도 미만은 화면에 안 그림 (0.0 ~ 1.0)
+WIDTH = 1280  # 요청 해상도 (카메라가 지원 안 하면 알아서 바뀜)
+HEIGHT = 720
+MODEL = "yolov8n.pt"  # 첫 실행 때 자동으로 내려받습니다 (약 6MB)
+DEVICE = None  # 애플 실리콘이면 "mps" 로 바꾸면 빨라집니다
 
-BOX_COLOR  = (0, 220, 120)   # BGR — 초록
+BOX_COLOR = (0, 220, 120)  # BGR — 초록
 TEXT_COLOR = (0, 0, 0)
 
 # 산출물 저장 위치.
@@ -41,11 +41,11 @@ OUT_DIR = Path(__file__).resolve().parent / "_captures"
 
 def pick_backend():
     """OS에 맞는 카메라 백엔드를 고른다."""
-    if sys.platform == "darwin":      # macOS
+    if sys.platform == "darwin":  # macOS
         return cv2.CAP_AVFOUNDATION
-    if sys.platform == "win32":       # Windows
+    if sys.platform == "win32":  # Windows
         return cv2.CAP_DSHOW
-    return cv2.CAP_V4L2               # Linux
+    return cv2.CAP_V4L2  # Linux
 
 
 def draw_box(frame, x1, y1, x2, y2, label):
@@ -57,8 +57,7 @@ def draw_box(frame, x1, y1, x2, y2, label):
     # 박스가 화면 맨 위에 붙으면 라벨이 잘리므로 아래로 밀어준다
     ty = max(y1, th + 10)
     cv2.rectangle(frame, (x1, ty - th - 8), (x1 + tw + 6, ty), BOX_COLOR, -1)
-    cv2.putText(frame, label, (x1 + 3, ty - 5),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, TEXT_COLOR, 2)
+    cv2.putText(frame, label, (x1 + 3, ty - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, TEXT_COLOR, 2)
 
 
 def main():
@@ -92,15 +91,16 @@ def main():
             # ── 추론 ──────────────────────────────
             # ultralytics 의 반환 타입 힌트가 실제와 달라(Iterator[Results | Tensor])
             # 타입 검사기가 .boxes 를 못 찾는다. 실행에는 문제가 없으므로 Any 로 받는다.
-            results: Any = model.predict(frame, conf=CONF, verbose=False,
-                                         **({"device": DEVICE} if DEVICE else {}))
+            results: Any = model.predict(
+                frame, conf=CONF, verbose=False, **({"device": DEVICE} if DEVICE else {})
+            )
             boxes = results[0].boxes if len(results) else None
             found = len(boxes) if boxes is not None else 0
 
             # ── 오버레이 ──────────────────────────
             for box in boxes if boxes is not None else []:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
-                name  = model.names[int(box.cls[0])]
+                name = model.names[int(box.cls[0])]
                 score = float(box.conf[0])
                 draw_box(frame, x1, y1, x2, y2, f"{name} {score:.2f}")
 
@@ -108,9 +108,15 @@ def main():
             now = time.time()
             fps = 0.9 * fps + 0.1 * (1.0 / max(now - prev, 1e-6))
             prev = now
-            cv2.putText(frame,
-                        f"FPS {fps:4.1f}   objects {found}",
-                        (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, BOX_COLOR, 2)
+            cv2.putText(
+                frame,
+                f"FPS {fps:4.1f}   objects {found}",
+                (12, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                BOX_COLOR,
+                2,
+            )
 
             cv2.imshow("JARVISEO - vision monitor", frame)
 

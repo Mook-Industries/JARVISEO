@@ -12,16 +12,16 @@ import sys
 
 import cv2
 
-CAM = 0   # ← find_camera.py 로 찾은 번호로 바꾸세요
+CAM = 0  # ← find_camera.py 로 찾은 번호로 바꾸세요
 
 
 def pick_backend():
     """OS에 맞는 카메라 백엔드를 고른다."""
-    if sys.platform == "darwin":      # macOS
+    if sys.platform == "darwin":  # macOS
         return cv2.CAP_AVFOUNDATION
-    if sys.platform == "win32":       # Windows
+    if sys.platform == "win32":  # Windows
         return cv2.CAP_DSHOW
-    return cv2.CAP_V4L2               # Linux
+    return cv2.CAP_V4L2  # Linux
 
 
 cap = cv2.VideoCapture(CAM, pick_backend())
@@ -29,10 +29,12 @@ cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 cap.set(cv2.CAP_PROP_FPS, 30)
 
-print("실제 적용된 값:",
-      cap.get(cv2.CAP_PROP_FRAME_WIDTH),
-      cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
-      cap.get(cv2.CAP_PROP_FPS))
+print(
+    "실제 적용된 값:",
+    cap.get(cv2.CAP_PROP_FRAME_WIDTH),
+    cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
+    cap.get(cv2.CAP_PROP_FPS),
+)
 
 while True:
     ok, frame = cap.read()
@@ -40,7 +42,7 @@ while True:
         print("프레임 읽기 실패")
         break
     cv2.imshow("camera", frame)
-    if cv2.waitKey(1) & 0xFF == ord("q"):   # q 누르면 종료
+    if cv2.waitKey(1) & 0xFF == ord("q"):  # q 누르면 종료
         break
 
 cap.release()

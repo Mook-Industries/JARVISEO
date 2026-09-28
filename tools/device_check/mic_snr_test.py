@@ -20,9 +20,9 @@ import numpy as np
 import sounddevice as sd
 
 SAMPLE_RATE = 16000
-CHANNELS    = 1
-NOISE_SEC   = 2      # 무음 측정 시간
-SPEECH_SEC  = 5      # 발화 측정 시간
+CHANNELS = 1
+NOISE_SEC = 2  # 무음 측정 시간
+SPEECH_SEC = 5  # 발화 측정 시간
 # 게인 자동 계산의 목표 peak.
 # 1.0 으로 맞추면 조금만 크게 말해도 바로 클리핑되므로,
 # 0.3 만큼 여유(헤드룸)를 두고 0.7 로 잡았다.
@@ -31,21 +31,25 @@ TARGET_PEAK = 0.7
 # 산출물 저장 위치.
 # Path(__file__) 은 '이 파일 자신의 경로'라서, 어느 폴더에서 실행하든
 # 항상 스크립트 옆 _captures/ 에 떨어진다.
-OUT_DIR    = Path(__file__).resolve().parent / "_captures"
-OUT_RAW    = str(OUT_DIR / "mic_raw.wav")
+OUT_DIR = Path(__file__).resolve().parent / "_captures"
+OUT_RAW = str(OUT_DIR / "mic_raw.wav")
 OUT_GAINED = str(OUT_DIR / "mic_gained.wav")
 
 
 def capture(seconds, device):
-    audio = sd.rec(int(seconds * SAMPLE_RATE),
-                   samplerate=SAMPLE_RATE, channels=CHANNELS,
-                   dtype="float32", device=device)
+    audio = sd.rec(
+        int(seconds * SAMPLE_RATE),
+        samplerate=SAMPLE_RATE,
+        channels=CHANNELS,
+        dtype="float32",
+        device=device,
+    )
     sd.wait()
     return audio[:, 0]
 
 
 def rms(x):
-    return float(np.sqrt(np.mean(x ** 2))) if len(x) else 0.0
+    return float(np.sqrt(np.mean(x**2))) if len(x) else 0.0
 
 
 def save_wav(path, mono):
@@ -60,6 +64,7 @@ def save_wav(path, mono):
 
 def countdown(msg, seconds=3):
     import time
+
     for i in range(seconds, 0, -1):
         print(f"\r{msg} {i}...", end="", flush=True)
         time.sleep(1)
