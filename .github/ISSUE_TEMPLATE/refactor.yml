@@ -1,7 +1,7 @@
 name: ♻️ Refactor
 description: 동작은 그대로, 코드만 개선
 title: "[Refactor] "
-labels: ["type: refactor"]
+labels: ["refactor"]
 
 body:
   - type: textarea
