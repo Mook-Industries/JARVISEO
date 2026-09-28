@@ -86,25 +86,30 @@ PR 을 올리면 macOS · Windows · Ubuntu 세 군데서 린트와 테스트가
 
 템플릿 3종이 있다.
 
-| 템플릿 | `type:` 라벨 | 쓸 때 |
+| 템플릿 | 라벨 | 쓸 때 |
 |---|---|---|
-| 🐛 Bug Report | `type: bug` **자동** | 안 되는 것 |
-| ♻️ Refactor | `type: refactor` **자동** | 동작 그대로, 코드만 개선 |
-| 📋 Task | `type: feature` **기본값** | 그 외 전부 |
+| 🐛 Bug Report | `bug` **자동** | 안 되는 것 |
+| ♻️ Refactor | `refactor` **자동** | 동작 그대로, 코드만 개선 |
+| 📋 Task | `feature` **기본값** | 그 외 전부 |
 
-Task 는 여러 종류를 받으므로, 가장 흔한 `type: feature` 를 기본으로 깔아두고
+Task 는 여러 종류를 받으므로, 가장 흔한 `feature` 를 기본으로 깔아두고
 다른 종류면 사이드바에서 바꾼다.
 
 | 기능 개발이 아니면 이걸로 | 이런 작업 |
 |---|---|
-| `type: experiment` | 모델 학습 · baseline 측정 · ablation |
-| `type: docs` | 문서 · 발표자료 · 회의록 |
-| `type: chore` | 촬영 · 라벨링 · 환경 설정 · 그 외 |
+| `experiment` | 모델 학습 · baseline 측정 · ablation |
+| `docs` | 문서 · 발표자료 · 회의록 |
+| `chore` | 촬영 · 라벨링 · 환경 설정 · 그 외 |
 
-그리고 **모든 이슈에 `area:` 라벨을 하나 단다.** 누가 볼 이슈인지가 여기서 정해진다.
+**라벨은 종류 하나만 단다.** 누가 볼 이슈인지는 라벨이 아니라
+오른쪽 **Assignees** 로 정한다.
 
-`area: pointing` (최홍묵) · `area: nutrition` · `area: api` (권용현) ·
-`area: voice` · `area: infra` (문태현) · `area: data` (공용)
+| 영역 | 담당 |
+|---|---|
+| 지시 대상 특정 · LangGraph | 최홍묵 |
+| 성분표 검출 · OCR · 알레르기 · FastAPI · 대시보드 | 권용현 |
+| 웨이크워드 · STT · TTS · DB · RAG · 개발환경 · 배포 | 문태현 |
+| 촬영 · 라벨링 · 동의어 사전 | 공용 |
 
 ---
 
@@ -162,7 +167,7 @@ git rebase origin/main
 | `ci` | GitHub Actions |
 | `exp` | 모델 학습 · 측정 · ablation *(우리가 추가한 타입)* |
 
-> **라벨은 `type: bug` 인데 커밋은 왜 `fix` 인가?**
+> **라벨은 `bug` 인데 커밋은 왜 `fix` 인가?**
 > 이슈는 **상태**를 가리키고("이건 버그다"), 커밋은 **행위**를 가리킨다
 > ("이걸 고쳤다"). 둘이 다른 게 맞고, 실무에서도 이렇게 쓴다.
 
