@@ -1,4 +1,10 @@
+# -*- coding: utf-8 -*-
 # 자비서 (JARVISEO) 의존성
+#
+# 위 coding 선언을 지우지 말 것.
+# pip 은 이 파일에 BOM 도 coding 선언도 없으면 OS 로케일 인코딩으로 읽는다.
+# 한국어 윈도우에서는 그게 cp949 라서, UTF-8 로 적힌 아래 한글 주석에서
+# UnicodeDecodeError 가 나며 설치가 시작도 못 하고 죽는다.
 #
 # 버전 고정에 관하여
 # ------------------
@@ -27,7 +33,7 @@ easyocr>=1.7
 # --- 오케스트레이션 · LLM -----------------------------------------------
 langgraph>=0.2
 langchain-core>=0.3
-anthropic>=0.40
+openai>=1.66              # STT · VLM · TTS 전부 OpenAI. Responses API 가 필요해 1.66 이상
 
 # --- 관계형 DB ----------------------------------------------------------
 # Postgres 를 docker compose 로 띄운다. 팀원이 각자 설치할 필요가 없다.
