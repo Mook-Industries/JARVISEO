@@ -1,0 +1,176 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
+  <!--
+    비전 모니터 시연용 장면 (카메라 없이 보여주기 위한 자리표시 그림).
+    실제 카메라를 붙이면 이 그림 대신 /api/stream 같은 프레임 주소를 쓴다.
+    봉지·손끝 위치는 대시보드의 검출 박스 좌표(%)와 맞춰 그렸다.
+  -->
+  <defs>
+    <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b2529"/>
+      <stop offset="0.55" stop-color="#121a1d"/>
+      <stop offset="1" stop-color="#0c1113"/>
+    </linearGradient>
+    <linearGradient id="counter" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2d3336"/>
+      <stop offset="0.45" stop-color="#1c2124"/>
+      <stop offset="1" stop-color="#0f1214"/>
+    </linearGradient>
+    <linearGradient id="steel" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2a3134"/>
+      <stop offset="0.35" stop-color="#3a4245"/>
+      <stop offset="0.6" stop-color="#262d30"/>
+      <stop offset="1" stop-color="#1a1f22"/>
+    </linearGradient>
+    <linearGradient id="kraft" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5a4128"/>
+      <stop offset="0.3" stop-color="#b08b62"/>
+      <stop offset="0.55" stop-color="#9c774f"/>
+      <stop offset="1" stop-color="#4f3a25"/>
+    </linearGradient>
+    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#173634"/>
+      <stop offset="0.3" stop-color="#3f7f79"/>
+      <stop offset="0.6" stop-color="#2f6561"/>
+      <stop offset="1" stop-color="#132c2b"/>
+    </linearGradient>
+    <linearGradient id="plum" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#1c1320"/>
+      <stop offset="0.35" stop-color="#4a3351"/>
+      <stop offset="0.6" stop-color="#3a2842"/>
+      <stop offset="1" stop-color="#170f1b"/>
+    </linearGradient>
+    <linearGradient id="skin" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a47c66"/>
+      <stop offset="0.5" stop-color="#7d5a48"/>
+      <stop offset="1" stop-color="#4a3329"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#000" stop-opacity="0.35"/>
+      <stop offset="0.12" stop-color="#000" stop-opacity="0"/>
+      <stop offset="0.85" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0.4"/>
+    </linearGradient>
+    <radialGradient id="lamp" cx="0.5" cy="0.35" r="0.6">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.07"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="vignette" cx="0.5" cy="0.5" r="0.75">
+      <stop offset="0.55" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0.7"/>
+    </radialGradient>
+    <filter id="soft" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="5"/>
+    </filter>
+    <filter id="blur-lg" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+  </defs>
+
+  <!-- 벽과 뒤쪽 가구 (피사계 심도 느낌으로 흐리게) -->
+  <rect width="1600" height="900" fill="url(#wall)"/>
+  <g filter="url(#soft)">
+    <rect x="0" y="0" width="1600" height="110" fill="#10171a"/>
+    <rect x="80" y="0" width="300" height="104" fill="#141c1f"/>
+    <rect x="400" y="0" width="330" height="104" fill="#131b1e"/>
+    <rect x="560" y="120" width="480" height="240" fill="#18221f" opacity="0.6"/>
+    <rect x="1170" y="30" width="430" height="520" fill="url(#steel)"/>
+    <rect x="1168" y="250" width="434" height="4" fill="#0e1214"/>
+    <rect x="1292" y="80" width="6" height="150" rx="3" fill="#59636a"/>
+    <rect x="1292" y="290" width="6" height="190" rx="3" fill="#59636a"/>
+    <rect x="1316" y="80" width="6" height="150" rx="3" fill="#4a5359"/>
+    <path d="M640 330 C640 230 700 210 740 230" stroke="#2b3336" stroke-width="10" fill="none"/>
+    <circle cx="800" cy="18" r="4" fill="#d9e4e6" opacity="0.8"/>
+  </g>
+  <rect width="1600" height="900" fill="url(#lamp)"/>
+
+  <!-- 왼쪽 화분 -->
+  <g filter="url(#soft)" opacity="0.9">
+    <ellipse cx="120" cy="230" rx="30" ry="80" fill="#1f3322" transform="rotate(-25 120 230)"/>
+    <ellipse cx="170" cy="210" rx="26" ry="90" fill="#26402a" transform="rotate(10 170 210)"/>
+    <ellipse cx="220" cy="250" rx="24" ry="70" fill="#1c2f1f" transform="rotate(35 220 250)"/>
+    <ellipse cx="80" cy="300" rx="22" ry="60" fill="#233a26" transform="rotate(-50 80 300)"/>
+    <ellipse cx="200" cy="320" rx="20" ry="55" fill="#2a4630" transform="rotate(60 200 320)"/>
+    <rect x="110" y="340" width="120" height="110" rx="10" fill="#1c2224"/>
+  </g>
+
+  <!-- 조리대 -->
+  <path d="M0 470 L1600 450 L1600 900 L0 900 Z" fill="url(#counter)"/>
+  <path d="M0 470 L1600 450" stroke="#48514f" stroke-width="2" opacity="0.5"/>
+  <g stroke="#ffffff" fill="none" opacity="0.05" stroke-width="2">
+    <path d="M40 620 C260 560 420 700 700 640 S1100 560 1400 640"/>
+    <path d="M120 820 C380 740 560 860 860 790 S1280 720 1600 780"/>
+    <path d="M500 520 C620 560 760 520 880 560"/>
+    <path d="M980 700 C1100 660 1240 720 1380 690"/>
+  </g>
+
+  <!-- 도마와 과일 그릇 -->
+  <path d="M-40 640 L170 590 L260 900 L-40 900 Z" fill="#3a2a1e" opacity="0.85"/>
+  <path d="M-40 640 L170 590" stroke="#5a4431" stroke-width="3"/>
+  <ellipse cx="80" cy="470" rx="150" ry="46" fill="#1a1f21"/>
+  <ellipse cx="60" cy="452" rx="44" ry="34" fill="#7b7a33"/>
+  <ellipse cx="130" cy="448" rx="40" ry="32" fill="#8d8a3c"/>
+  <ellipse cx="100" cy="430" rx="30" ry="26" fill="#6d6c2c"/>
+  <path d="M-70 470 Q80 560 230 470 Q220 530 80 540 Q-60 530 -70 470 Z" fill="#23292b"/>
+
+  <!-- 봉지 그림자 -->
+  <g filter="url(#blur-lg)" fill="#000" opacity="0.55">
+    <ellipse cx="440" cy="596" rx="150" ry="16"/>
+    <ellipse cx="770" cy="596" rx="150" ry="16"/>
+    <ellipse cx="1115" cy="598" rx="150" ry="16"/>
+  </g>
+
+  <!-- 왼쪽 봉지: 크라프트 -->
+  <g>
+    <path d="M314 250 Q430 236 552 252 L560 284 Q574 430 566 560 Q552 592 440 594 Q328 592 314 562 Q304 430 308 284 Z" fill="url(#kraft)"/>
+    <path d="M314 250 Q430 236 552 252 L560 284 Q574 430 566 560 Q552 592 440 594 Q328 592 314 562 Q304 430 308 284 Z" fill="url(#fold)"/>
+    <path d="M308 284 L560 284" stroke="#6b5136" stroke-width="3"/>
+    <path d="M309 300 L562 300" stroke="#c9a67c" stroke-width="1.5" opacity="0.5"/>
+    <path d="M380 320 Q390 440 372 560" stroke="#d1ad83" stroke-width="16" opacity="0.18" fill="none"/>
+    <path d="M500 330 Q512 440 492 570" stroke="#3c2b1a" stroke-width="12" opacity="0.25" fill="none"/>
+  </g>
+
+  <!-- 가운데 봉지: 청록 (가리킨 대상) -->
+  <g>
+    <path d="M644 246 Q768 232 888 248 L896 280 Q910 430 902 558 Q888 590 772 592 Q660 590 646 560 Q636 430 640 280 Z" fill="url(#teal)"/>
+    <path d="M644 246 Q768 232 888 248 L896 280 Q910 430 902 558 Q888 590 772 592 Q660 590 646 560 Q636 430 640 280 Z" fill="url(#fold)"/>
+    <path d="M640 280 L896 280" stroke="#1d403e" stroke-width="3"/>
+    <path d="M641 296 L898 296" stroke="#5aa39b" stroke-width="1.5" opacity="0.5"/>
+    <path d="M712 320 Q722 440 704 560" stroke="#7fc2ba" stroke-width="18" opacity="0.14" fill="none"/>
+    <path d="M840 330 Q852 440 830 568" stroke="#0c1f1e" stroke-width="12" opacity="0.3" fill="none"/>
+  </g>
+
+  <!-- 오른쪽 봉지: 자주 -->
+  <g transform="rotate(-3 1115 420)">
+    <path d="M988 262 Q1112 248 1236 264 L1244 296 Q1258 440 1250 562 Q1236 592 1118 594 Q1004 592 990 562 Q980 440 984 296 Z" fill="url(#plum)"/>
+    <path d="M988 262 Q1112 248 1236 264 L1244 296 Q1258 440 1250 562 Q1236 592 1118 594 Q1004 592 990 562 Q980 440 984 296 Z" fill="url(#fold)"/>
+    <path d="M984 296 L1244 296" stroke="#241828" stroke-width="3"/>
+    <path d="M1060 330 Q1072 450 1052 566" stroke="#8a6b92" stroke-width="16" opacity="0.14" fill="none"/>
+  </g>
+
+  <!-- 손 그림자 -->
+  <path d="M900 560 L1060 650 L1600 860 L1600 900 L1180 900 Z" fill="#000" opacity="0.35" filter="url(#blur-lg)"/>
+
+  <!-- 가리키는 손 -->
+  <g>
+    <!-- 팔과 손등 -->
+    <path d="M1022 575 Q1070 578 1100 596 L1220 652 Q1380 720 1600 790 L1600 900 L1360 900 Q1250 820 1150 764 Q1080 730 1040 706 Q1000 684 990 650 Q986 620 1000 601 Z" fill="url(#skin)"/>
+    <!-- 검지 -->
+    <path d="M1022 575 L873 457 Q862 450 852 459 Q845 470 851 483 L1000 601 Z" fill="url(#skin)"/>
+    <ellipse cx="866" cy="466" rx="10" ry="7" transform="rotate(38 866 466)" fill="#b38a73" opacity="0.7"/>
+    <!-- 접은 손가락 -->
+    <ellipse cx="1000" cy="636" rx="24" ry="18" transform="rotate(38 1000 636)" fill="#76543f"/>
+    <ellipse cx="1018" cy="668" rx="24" ry="17" transform="rotate(38 1018 668)" fill="#6c4c3a"/>
+    <ellipse cx="1046" cy="696" rx="22" ry="15" transform="rotate(38 1046 696)" fill="#624535"/>
+    <!-- 엄지 -->
+    <path d="M1096 612 Q1060 600 1022 612 Q1004 622 1014 634 Q1030 640 1064 636 Q1092 632 1100 624 Z" fill="#94705b"/>
+    <!-- 윗면 빛 -->
+    <path d="M873 457 L1022 575 Q1070 578 1100 596 L1220 652" stroke="#e5c3ad" stroke-width="2" opacity="0.18" fill="none"/>
+    <!-- 소매 -->
+    <path d="M1360 700 Q1480 730 1600 740 L1600 900 L1300 900 Q1320 800 1360 700 Z" fill="#14191c"/>
+    <path d="M1360 700 Q1330 800 1300 900" stroke="#232a2e" stroke-width="3" fill="none"/>
+  </g>
+
+  <!-- 화면 톤과 비네트 -->
+  <rect width="1600" height="900" fill="#0b2a2e" opacity="0.18"/>
+  <rect width="1600" height="900" fill="url(#vignette)"/>
+</svg>

@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>JARVISEO Command Deck</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+KR:wght@400;500;600;700&family=Rajdhani:wght@600;700&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="jarviseo.css">
+</head>
+<body>
+
+<!-- 아이콘 모음. 화면에서는 <use href="#i-..."> 로 불러 쓴다. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <radialGradient id="logo-core" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#d6e6ff"/>
+      <stop offset="0.45" stop-color="#6fa2ff"/>
+      <stop offset="1" stop-color="#2150c8"/>
+    </radialGradient>
+  </defs>
+  <symbol id="i-logo" viewBox="0 0 32 32">
+    <circle cx="16" cy="16" r="15" fill="#0b1f3f" stroke="#3a74f0" stroke-width="1.4"/>
+    <circle cx="16" cy="16" r="10.5" fill="none" stroke="#5b8ff5" stroke-width="0.9" stroke-dasharray="4.2 1.3"/>
+    <path d="M16 7.5 L23.4 20.3 H8.6 Z" fill="none" stroke="#9cc0ff" stroke-width="1"/>
+    <circle cx="16" cy="16" r="4.6" fill="url(#logo-core)"/>
+  </symbol>
+  <symbol id="i-panel" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/>
+    <path d="M9.5 4.5v15"/>
+  </symbol>
+  <symbol id="i-command" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/>
+  </symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+    <path d="M3.5 20.5h17"/>
+    <path d="M6 17.5v-5"/>
+    <path d="M9.5 17.5v-9"/>
+    <path d="M13 17.5v-12"/>
+    <path d="M16.5 17.5v-7"/>
+    <path d="M20 17.5v-4"/>
+  </symbol>
+  <symbol id="i-user" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+    <circle cx="12" cy="8" r="4"/>
+    <path d="M4.5 20.5c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/>
+  </symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+    <circle cx="12" cy="12" r="3.2"/>
+    <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>
+  </symbol>
+  <symbol id="i-wave" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 13l4-4 4 4 4-4 4 4"/>
+    <path d="M7 17l4-4 4 4"/>
+  </symbol>
+  <symbol id="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+    <path d="M7 4.5l12 7.5-12 7.5z"/>
+  </symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+    <rect x="6" y="6" width="12" height="12" rx="1.5"/>
+  </symbol>
+  <symbol id="i-target" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+    <circle cx="12" cy="12" r="6.5"/>
+    <path d="M12 2.5v6M12 15.5v6M2.5 12h6M15.5 12h6"/>
+  </symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+    <path d="M4 7h16M4 12h16M4 17h16"/>
+  </symbol>
+  <symbol id="i-out" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M7 17L17 7M9 7h8v8"/>
+  </symbol>
+</svg>
+
+<div class="app" id="app">
+
+  <!-- ====================== 사이드바 ====================== -->
+  <aside class="sidebar" id="sidebar" aria-label="주 메뉴">
+    <div class="sb-head">
+      <svg class="brand-mark"><use href="#i-logo"/></svg>
+      <span class="brand-word">JARVISEO</span>
+    </div>
+    <div class="sb-toggle-row">
+      <button class="icon-btn" id="sb-toggle" type="button" aria-label="사이드바 접기" aria-expanded="true">
+        <svg><use href="#i-panel"/></svg>
+      </button>
+    </div>
+    <div class="sb-rule"></div>
+
+    <nav class="sb-nav">
+      <a class="nav-item" href="#monitor" data-nav="monitor" title="모니터">
+        <svg><use href="#i-command"/></svg><span>모니터</span>
+      </a>
+      <a class="nav-item" href="#admin" data-nav="admin" title="관리자">
+        <svg><use href="#i-chart"/></svg><span>관리자</span>
+      </a>
+    </nav>
+
+    <p class="sb-section-label">대화 내역</p>
+    <div class="sb-history" id="sb-history"></div>
+
+    <div class="sb-foot">
+      <div class="profile-pop" id="profile-pop" hidden>
+        <div class="pop-user"><span class="avatar">J</span>로그인해 주세요</div>
+        <a class="pop-link" href="#settings"><svg><use href="#i-gear"/></svg>환경설정</a>
+        <div class="pop-auth">
+          <button type="button">로그인</button><i></i><button type="button">회원가입</button>
+        </div>
+      </div>
+      <button class="profile-card" id="profile-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="profile-pop">
+        <svg><use href="#i-user"/></svg>
+        <span class="pc-text"><strong>내 프로필</strong><span>로그인 필요</span></span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ====================== 본문 ====================== -->
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menu-btn" type="button" aria-label="메뉴 열기">
+        <svg><use href="#i-menu"/></svg>
+      </button>
+      <a class="brand" href="#monitor">
+        <svg class="brand-mark"><use href="#i-logo"/></svg>
+        <span class="brand-word">JARVISEO</span>
+        <span class="brand-sub">자비서</span>
+      </a>
+      <div class="top-right">
+        <span class="chip">DESIGN DEMO</span>
+        <span class="status"><i class="dot"></i>시스템 정상</span>
+        <time class="clock num" id="clock">--:--:--</time>
+      </div>
+    </header>
+
+    <main class="content">
+
+      <!-- ====================== 모니터 ====================== -->
+      <section class="view" id="view-monitor" data-view="monitor">
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Your world. Connected.</p>
+            <h1 class="page-title">당신의 시선, 자비서의 이해.</h1>
+            <p class="page-sub">보고 있는 순간을 함께 이해하는 AI 어시스턴트</p>
+          </div>
+          <div class="glasses">
+            <svg viewBox="0 0 56 22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+              <path d="M1.5 14V10H15"/>
+              <circle cx="23.5" cy="11" r="8"/>
+              <path d="M31.5 11h7"/>
+              <circle cx="46.5" cy="11" r="8"/>
+            </svg>
+            <div>
+              <strong>JARVISEO GLASSES</strong>
+              <span>시뮬레이션 모드 <svg width="11" height="11"><use href="#i-out"/></svg></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="monitor-grid" id="monitor-grid" data-state="idle">
+
+          <!-- 01 비전 모니터 -->
+          <article class="panel">
+            <header class="panel-head">
+              <span class="panel-no">01</span>
+              <h2 class="panel-title">비전 모니터</h2>
+              <span class="panel-en">VISION FEED</span>
+              <span class="chip">CAM 01</span>
+            </header>
+
+            <div class="feed">
+              <img class="feed-img" src="demo-feed.svg" alt="조리대 위 봉지 세 개 중 가운데 청록색 봉지를 손가락으로 가리키는 시연 장면">
+              <div class="feed-hud">
+                <div class="feed-top">
+                  <span class="feed-tag"><i class="dot"></i><span id="feed-tag">DEMO FEED</span></span>
+                  <span class="feed-spec num"><span>1920 × 1080</span><span>30 FPS</span></span>
+                </div>
+
+                <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+
+                <div class="det" style="left:18%;top:22.6%;width:17.8%;height:43.4%">
+                  <span class="det-label">OBJECT&nbsp;&nbsp;0.88</span>
+                </div>
+                <div class="det is-target" id="det-target" style="left:38.9%;top:22%;width:18.1%;height:44%">
+                  <span class="det-label" id="target-label">TARGET LOCKED<b>0.96</b></span>
+                  <i class="crosshair"></i>
+                  <span class="det-caption" id="target-caption">선택한 대상 · 스낵</span>
+                </div>
+                <div class="det" style="left:60%;top:25%;width:19%;height:41%">
+                  <span class="det-label">OBJECT&nbsp;&nbsp;0.84</span>
+                </div>
+
+                <svg class="pointer-line" viewBox="0 0 1600 900" preserveAspectRatio="none" aria-hidden="true">
+                  <line x1="1299" y1="816" x2="866" y2="468" stroke="#5fd9cb" stroke-opacity="0.55" stroke-width="1.6" stroke-dasharray="7 7" vector-effect="non-scaling-stroke"/>
+                  <circle cx="866" cy="468" r="9" fill="#5fd9cb" fill-opacity="0.75"/>
+                  <circle cx="1299" cy="816" r="17" fill="#3b9a93" fill-opacity="0.9"/>
+                </svg>
+
+                <i class="scanline" id="scanline"></i>
+
+                <div class="feed-bottom">
+                  <span>가리킴 추적<em>활성화</em></span>
+                  <span id="det-count">3 OBJECTS DETECTED</span>
+                </div>
+              </div>
+            </div>
+
+            <footer class="feed-foot">
+              <span class="msg" id="feed-msg">시선과 손끝을 따라 대상을 기다립니다.</span>
+              <span class="mono">FOV 92°</span>
+            </footer>
+          </article>
+
+          <!-- 02 AI 코어 -->
+          <article class="panel" id="core">
+            <header class="panel-head">
+              <span class="panel-no">02</span>
+              <h2 class="panel-title">AI 코어</h2>
+              <span class="chip is-accent" id="core-badge">STANDBY</span>
+            </header>
+
+            <div class="core-body">
+              <div class="core-hud" aria-hidden="true">
+                <svg viewBox="0 0 240 240">
+                  <defs>
+                    <radialGradient id="core-glow-g" cx="0.5" cy="0.5" r="0.5">
+                      <stop offset="0" stop-color="#5fd9cb" stop-opacity="0.32"/>
+                      <stop offset="1" stop-color="#5fd9cb" stop-opacity="0"/>
+                    </radialGradient>
+                    <pattern id="core-dots" width="4.6" height="4.6" patternUnits="userSpaceOnUse">
+                      <circle cx="2.3" cy="2.3" r="0.75" fill="#7ff0e2"/>
+                    </pattern>
+                    <radialGradient id="core-shade" cx="0.42" cy="0.38" r="0.62">
+                      <stop offset="0" stop-color="#fff"/>
+                      <stop offset="0.7" stop-color="#fff" stop-opacity="0.45"/>
+                      <stop offset="1" stop-color="#fff" stop-opacity="0.08"/>
+                    </radialGradient>
+                    <mask id="core-mask">
+                      <circle cx="120" cy="120" r="54" fill="url(#core-shade)"/>
+                    </mask>
+                  </defs>
+
+                  <circle class="core-glow" cx="120" cy="120" r="86" fill="url(#core-glow-g)"/>
+
+                  <g class="spin rev">
+                    <circle cx="120" cy="120" r="113" fill="none" stroke="#5fd9cb" stroke-opacity="0.45" stroke-width="7" stroke-dasharray="0.9 2.1"/>
+                  </g>
+                  <circle cx="120" cy="120" r="104" fill="none" stroke="#5fd9cb" stroke-opacity="0.22" stroke-width="0.7"/>
+                  <g class="spin">
+                    <circle cx="120" cy="120" r="97" fill="none" stroke="#5fd9cb" stroke-width="3" stroke-linecap="round" stroke-dasharray="168 74 128 239.5"/>
+                  </g>
+                  <circle cx="120" cy="120" r="90" fill="none" stroke="#5fd9cb" stroke-opacity="0.35" stroke-width="0.8" stroke-dasharray="1 6"/>
+                  <g class="spin fast">
+                    <circle cx="120" cy="120" r="83" fill="none" stroke="#86f3e5" stroke-opacity="0.7" stroke-width="1" stroke-dasharray="70 451.5"/>
+                  </g>
+                  <g stroke="#5fd9cb" stroke-opacity="0.6" stroke-width="1">
+                    <path d="M120 23v8M120 209v8M23 120h8M209 120h8"/>
+                  </g>
+
+                  <circle cx="120" cy="120" r="54" fill="url(#core-dots)" mask="url(#core-mask)"/>
+                  <g fill="none" stroke="#5fd9cb" stroke-width="0.7">
+                    <circle cx="120" cy="120" r="54" stroke-opacity="0.7"/>
+                    <ellipse cx="120" cy="120" rx="36" ry="54" stroke-opacity="0.35"/>
+                    <ellipse cx="120" cy="120" rx="16" ry="54" stroke-opacity="0.3"/>
+                    <ellipse cx="120" cy="120" rx="54" ry="18" stroke-opacity="0.3"/>
+                    <ellipse cx="120" cy="120" rx="54" ry="38" stroke-opacity="0.22"/>
+                  </g>
+
+                  <g class="spin">
+                    <ellipse cx="120" cy="120" rx="76" ry="24" fill="none" stroke="#5fd9cb" stroke-opacity="0.55" stroke-width="0.9" transform="rotate(-32 120 120)"/>
+                    <circle cx="184" cy="80" r="2.4" fill="#86f3e5"/>
+                  </g>
+                  <g class="spin rev">
+                    <ellipse cx="120" cy="120" rx="72" ry="20" fill="none" stroke="#5fd9cb" stroke-opacity="0.4" stroke-width="0.8" transform="rotate(38 120 120)"/>
+                    <circle cx="64" cy="76" r="2" fill="#86f3e5"/>
+                  </g>
+
+                  <g stroke="#86f3e5" stroke-opacity="0.75" stroke-width="0.8" fill="none">
+                    <path d="M96 98L126 88L148 110L140 140L112 150L94 128Z"/>
+                    <path d="M96 98L120 118L148 110M120 118L112 150M120 118L94 128M126 88L120 118L140 140"/>
+                  </g>
+                  <g fill="#bafaf2">
+                    <circle cx="96" cy="98" r="1.8"/>
+                    <circle cx="126" cy="88" r="1.8"/>
+                    <circle cx="148" cy="110" r="1.8"/>
+                    <circle cx="140" cy="140" r="1.8"/>
+                    <circle cx="112" cy="150" r="1.8"/>
+                    <circle cx="94" cy="128" r="1.8"/>
+                    <circle cx="120" cy="118" r="2.6"/>
+                  </g>
+                </svg>
+              </div>
+              <div class="core-state" id="core-state">READY</div>
+              <h3 class="core-title" id="core-title">부르시면, 함께 볼게요.</h3>
+              <p class="core-sub" id="core-sub">“자비서”라고 부르면 대화를 시작합니다.</p>
+              <div class="wave" id="wave" aria-hidden="true"></div>
+              <div class="core-meta">
+                <span id="mic-state">마이크 대기 중</span>
+                <span class="mono">VOICE INTERFACE</span>
+              </div>
+              <button class="call-btn" id="call-btn" type="button">
+                <svg><use href="#i-wave"/></svg>자비서 호출<kbd>SPACE</kbd>
+              </button>
+            </div>
+          </article>
+
+          <!-- 03 판단 근거 -->
+          <article class="panel">
+            <header class="panel-head">
+              <span class="panel-no">03</span>
+              <h2 class="panel-title">판단 근거</h2>
+              <span class="panel-en">REASONING</span>
+              <span class="chip" id="reason-badge" style="font-family:var(--font-sans);letter-spacing:0">대기 중</span>
+            </header>
+            <div class="reason-body">
+              <div class="reason-top">
+                <span class="reason-icon"><svg><use href="#i-target"/></svg></span>
+                <div>
+                  <p class="reason-q" id="reason-q">무엇이 궁금하신가요?</p>
+                  <p class="reason-a" id="reason-a">대상을 가리킨 뒤 자비서를 불러보세요.</p>
+                </div>
+                <div class="confidence">확신도<strong class="num" id="confidence">—</strong></div>
+              </div>
+              <div class="stages" id="stages"></div>
+              <div class="reason-foot">
+                <span>샘플 처리 시간<strong class="num" id="total-time">3.0</strong><span class="mono">sec</span></span>
+                <span class="mono">추론<b>CLOUD</b></span>
+              </div>
+            </div>
+          </article>
+
+          <!-- 04 현재 대화 내역 -->
+          <article class="panel">
+            <header class="panel-head">
+              <span class="panel-no">04</span>
+              <h2 class="panel-title">현재 대화 내역</h2>
+              <span class="panel-en is-right">RECENT ACTIVITY</span>
+            </header>
+            <div class="log-body">
+              <ul class="log-list" id="log-list"></ul>
+              <p class="log-note">현재 화면의 대화와 분석은 시연용 예시입니다.</p>
+            </div>
+          </article>
+        </div>
+
+        <!-- 시연 도크: 상태를 골라 화면 반응을 확인한다 -->
+        <div class="dock" id="dock" role="group" aria-label="시연 상태 선택">
+          <div class="dock-label"><b>INTERACTION DEMO</b>상태를 선택해 보세요</div>
+          <div class="dock-steps">
+            <button class="dock-step" type="button" data-step="idle" aria-pressed="true"><span>01</span>대기</button>
+            <button class="dock-step" type="button" data-step="wake" aria-pressed="false"><span>02</span>호출어 감지</button>
+            <button class="dock-step" type="button" data-step="processing" aria-pressed="false"><span>03</span>처리 중</button>
+            <button class="dock-step" type="button" data-step="response" aria-pressed="false"><span>04</span>응답</button>
+          </div>
+          <button class="play-btn" id="play-btn" type="button">
+            <svg><use href="#i-play"/></svg><span>시연 재생</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- ====================== 관리자: 성능 리포트 ====================== -->
+      <section class="view" id="view-admin" data-view="admin" hidden>
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">JARVISEO / Admin console</p>
+            <h1 class="page-title">성능 리포트</h1>
+            <p class="page-sub">인식부터 응답까지, 자비서의 품질을 확인하세요.</p>
+          </div>
+        </div>
+
+        <div class="report-meta">
+          <div class="report-range">
+            <span class="chip is-accent">샘플 리포트</span>
+            <span class="num" id="range-label">2026.09.16 — 09.22</span>
+          </div>
+          <label class="period" for="period">평가 기간
+            <span class="select">
+              <select id="period">
+                <option value="7">최근 7일</option>
+                <option value="14">최근 14일</option>
+                <option value="30">최근 30일</option>
+              </select>
+            </span>
+          </label>
+        </div>
+
+        <div class="overview">
+          <div>
+            <p class="eyebrow">Performance overview</p>
+            <h2>정확도는 안정적, 응답 속도는 개선 중</h2>
+            <p>장면 이해 단계가 전체 평균 지연의 47%를 차지합니다.</p>
+          </div>
+          <div class="overview-num">
+            <strong class="num">1,248</strong>
+            <span>평가 요청</span>
+          </div>
+        </div>
+
+        <div class="kpis">
+          <div class="kpi">
+            <div class="kpi-head">지시 대상 특정 정확도<span>01</span></div>
+            <div class="kpi-val num">94.2<small>%</small></div>
+            <div class="kpi-desc">가리킨 대상과 선택 결과의 일치율</div>
+            <div class="kpi-bar"><i style="width:94.2%"></i></div>
+            <div class="kpi-goal">목표 ≥ 95%</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-head">되묻기 비율<span>02</span></div>
+            <div class="kpi-val num">8.6<small>%</small></div>
+            <div class="kpi-desc">추가 질문이 발생한 요청 비율</div>
+            <div class="kpi-bar"><i style="width:43%"></i></div>
+            <div class="kpi-goal">낮을수록 좋음 · 목표 ≤ 10%</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-head">알레르기 인식률<span>03</span></div>
+            <div class="kpi-val num">97.8<small>%</small></div>
+            <div class="kpi-desc">알레르기 성분 재현율 · Recall</div>
+            <div class="kpi-bar is-lavender"><i style="width:97.8%"></i></div>
+            <div class="kpi-goal">목표 ≥ 99% · 미탐지 점검 필요</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-head">YOLO mAP<span>04</span></div>
+            <div class="kpi-val num">86.4<small>%</small></div>
+            <div class="kpi-desc">mAP@0.5:0.95 · 검출 성능</div>
+            <div class="kpi-bar"><i style="width:86.4%"></i></div>
+            <div class="kpi-goal">목표 ≥ 85%</div>
+          </div>
+        </div>
+
+        <div class="report-grid">
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2 class="card-title">단계별 지연</h2>
+                <p class="card-sub">요청 수신부터 음성 응답 시작까지</p>
+              </div>
+              <div class="seg" role="group" aria-label="지연 집계 방식">
+                <button type="button" data-agg="avg" aria-pressed="true">평균</button>
+                <button type="button" data-agg="p95" aria-pressed="false">P95</button>
+              </div>
+            </div>
+            <div class="lat-total">
+              <div>
+                <strong class="num" id="lat-total">3.00</strong>
+                <span class="unit"><b>초</b><span id="lat-total-label">평균 응답 시간</span></span>
+              </div>
+              <span class="lat-goal" id="lat-goal">예시 목표 ≤ 3.0초</span>
+            </div>
+            <div class="lat-rows" id="lat-rows"></div>
+            <div class="callout">
+              <span class="k">병목 구간</span>
+              <div>
+                <strong>장면 이해 · VLM</strong>
+                <p>입력 이미지 크기와 추론 시간을 우선 점검하세요.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2 class="card-title">인식 성능 추이</h2>
+                <p class="card-sub">동일 평가 세트 기준 · 일별 정확도</p>
+              </div>
+              <span class="card-unit">단위 %</span>
+            </div>
+            <div class="legend">
+              <span><i class="is-c-accent"></i>지시 대상 특정</span>
+              <span><i class="is-c-lavender"></i>알레르기 인식</span>
+            </div>
+            <div class="chart-wrap" id="chart-wrap">
+              <svg class="chart" id="trend-chart" viewBox="0 0 600 250" role="img" aria-label="일별 정확도 추이 그래프"></svg>
+              <div class="chart-tip" id="chart-tip" hidden></div>
+            </div>
+            <div class="chart-caption" id="chart-caption">일별 평가 결과 · 7일</div>
+            <div class="callout">
+              <span class="k">품질 관찰</span>
+              <p class="is-body">알레르기 인식은 전체 정확도와 함께<br>미탐지 건수를 확인해야 합니다.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="card table-card">
+          <div class="card-head">
+            <div>
+              <h2 class="card-title">모델별 평가 상세</h2>
+              <p class="card-sub">각 지표의 기준과 개선 항목</p>
+            </div>
+            <span class="chip is-accent" style="font-family:var(--font-sans);letter-spacing:0">오프라인 평가 · 데모</span>
+          </div>
+          <div class="table-scroll">
+            <table class="eval-table">
+              <thead>
+                <tr><th>모델</th><th>지표</th><th>현재</th><th>목표</th><th>상태</th><th>다음 개선</th></tr>
+              </thead>
+              <tbody id="eval-rows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================== 환경설정 ====================== -->
+      <section class="view" id="view-settings" data-view="settings" hidden>
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Personal preferences</p>
+            <h1 class="page-title">환경설정</h1>
+            <p class="page-sub">편안한 목소리와 나에게 맞는 알러지 확인 기준을 설정하세요.</p>
+          </div>
+        </div>
+
+        <article class="panel settings-panel">
+          <header class="panel-head">
+            <span class="panel-en">PREFERENCES</span>
+            <h2 class="panel-title">나의 환경설정</h2>
+          </header>
+          <div class="settings-body">
+            <div class="pref-grid">
+              <section class="pref-card">
+                <div class="pref-card-head">
+                  <span class="no">01</span>
+                  <h2>AI 음성</h2>
+                  <p>자비서의 목소리를 조절하세요.</p>
+                </div>
+
+                <div class="field">
+                  <div class="field-head">
+                    <label for="volume">AI 음성 소리 크기</label>
+                    <output id="volume-out" for="volume">70%</output>
+                  </div>
+                  <input type="range" id="volume" min="0" max="100" step="5" value="70">
+                  <div class="range-scale"><span>음소거</span><span>100%</span></div>
+                </div>
+
+                <div class="field">
+                  <div class="field-head">
+                    <label for="rate">말하기 속도</label>
+                    <output id="rate-out" for="rate">1.0배</output>
+                  </div>
+                  <input type="range" id="rate" min="0.5" max="2" step="0.1" value="1">
+                  <div class="range-scale"><span>느리게 · 0.5배</span><span>빠르게 · 2.0배</span></div>
+                </div>
+
+                <div class="field">
+                  <div class="field-head"><label for="voice">보이스 선택</label></div>
+                  <span class="select is-wide">
+                    <select id="voice">
+                      <option>아라 · 차분하고 부드러운 목소리</option>
+                      <option>도윤 · 또렷하고 안정적인 목소리</option>
+                      <option>하린 · 밝고 경쾌한 목소리</option>
+                    </select>
+                  </span>
+                </div>
+                <p class="fine">음성 옵션은 디자인 미리보기이며 실제 음성 합성에는 연결되지 않습니다.</p>
+              </section>
+
+              <section class="pref-card">
+                <div class="pref-card-head">
+                  <span class="no">02</span>
+                  <h2>알러지 설정</h2>
+                  <p>확인할 성분과 제조 시설 확인 여부를 설정하세요.</p>
+                </div>
+
+                <div class="field">
+                  <div class="field-head"><label for="allergens">알러지 입력</label></div>
+                  <input class="text-input" id="allergens" type="text" placeholder="예: 땅콩, 우유, 달걀" autocomplete="off">
+                  <p class="help">여러 성분은 쉼표로 구분해 입력하세요.</p>
+                </div>
+
+                <div class="divider"></div>
+
+                <div class="field">
+                  <div class="field-head"><span class="label">미량 혼입 가능성 알림</span></div>
+                  <p class="field-desc">알러지에 민감한 경우, 같은 제조 시설 사용 등 미량 혼입 가능성도 알려드려요.</p>
+                  <div class="switch-row">
+                    <span id="trace-label">받지 않기</span>
+                    <span class="switch">
+                      <input type="checkbox" id="trace" role="switch" aria-labelledby="trace-label">
+                      <span></span>
+                    </span>
+                  </div>
+                  <p class="warn-text" id="trace-warn">미 선택시 같은 시설에서 제조된 제품은 확인하지 않습니다</p>
+                </div>
+                <p class="fine">알러지 입력 내용은 전송하거나 저장하지 않으며, 페이지를 새로고침하면 초기화됩니다.</p>
+              </section>
+            </div>
+
+            <div class="pref-rows">
+              <div class="pref-row">
+                <div>
+                  <h3 id="hud-label">HUD 애니메이션</h3>
+                  <p>AI 코어 회전과 음성 파형의 움직임을 켜거나 끕니다.</p>
+                </div>
+                <span class="switch">
+                  <input type="checkbox" id="pref-hud" role="switch" aria-labelledby="hud-label" checked>
+                  <span></span>
+                </span>
+              </div>
+              <div class="pref-row">
+                <div>
+                  <h3 id="overlay-label">대상 검출 표시</h3>
+                  <p>카메라 화면의 검출 박스와 가리킴 방향선을 표시합니다.</p>
+                </div>
+                <span class="switch">
+                  <input type="checkbox" id="pref-overlay" role="switch" aria-labelledby="overlay-label" checked>
+                  <span></span>
+                </span>
+              </div>
+              <p class="fine">HUD 애니메이션과 대상 검출 표시만 이 브라우저에 저장됩니다.</p>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <footer class="page-foot">
+        <span class="foot-brand"><svg><use href="#i-logo"/></svg>ASSISTANCE, IN SIGHT.</span>
+        <span>JARVISEO INTERFACE<b>V.01</b></span>
+      </footer>
+    </main>
+  </div>
+</div>
+
+<script src="jarviseo.js"></script>
+</body>
+</html>
