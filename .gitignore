@@ -38,6 +38,10 @@ env/
 .mypy_cache/
 .ipynb_checkpoints/
 
+# --- 대시보드 미리보기 (npm run dev) ----------------------------------
+# Vite 는 화면 확인용 개발 서버로만 쓴다. 설치 폴더는 각자 npm install 로 만든다.
+node_modules/
+
 # --- 에디터 · OS -------------------------------------------------------
 .vscode/
 .idea/

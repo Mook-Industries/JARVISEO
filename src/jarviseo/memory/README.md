@@ -1,0 +1,17 @@
+# memory — ③④ 소지품·개인 기억 + DB 저장소 · 담당 문태현
+
+관계형 DB(Postgres)와 벡터 DB(Chroma) 양쪽을 다룬다.
+**모든 팀원이 결과를 적재하는 곳**이라 스키마 변경은 팀 합의 후에 한다.
+
+| 파일 | 하는 일 |
+|---|---|
+| `models.py` | 테이블 정의 — ERD 를 코드로 옮긴 것 |
+| `store.py` | Postgres 접근 (대화 기록 · 지연시간 · 판정 결과) |
+| `vector.py` | Chroma 검색 — `belongings` · `observations` 컬렉션 |
+
+## 알아둘 것
+
+- **ERD 문서와 어긋나면 이 파일이 아니라 문서를 고친다.** 코드가 실제로 도는 쪽이다.
+- 이미지와 임베딩은 DB 에 넣지 않는다. 경로(`image_path`) / 참조(`chroma_id`)만 둔다.
+- Enum 은 문자열로 저장한다. Postgres ENUM 은 값 추가마다 마이그레이션이 필요하다.
+- 테이블 생성: `python -c "from jarviseo.memory import MemoryStore; MemoryStore().init_schema()"`

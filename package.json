@@ -1,0 +1,11 @@
+{
+  "name": "jarviseo-dashboard",
+  "private": true,
+  "description": "자비서 대시보드(src/jarviseo/api/static) 미리보기용 개발 서버",
+  "scripts": {
+    "dev": "vite src/jarviseo/api/static --port 5173 --open"
+  },
+  "devDependencies": {
+    "vite": "^8.3.1"
+  }
+}
