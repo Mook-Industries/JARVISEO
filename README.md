@@ -101,13 +101,10 @@ conda create -n JARVISEO python=3.12 -y && conda activate JARVISEO
 
 Postgres 만 컨테이너로 띄운다. 셋이 각자 설치하고 버전 맞추는 것보다 싸다.
 
+처음이면 [처음 DB 띄우기](#처음-db-띄우기--erd-대로-테이블-만들기)를 0단계부터 따라 한다. 해 본 적 있으면 이 두 줄이다.
+
 ```bash
 docker compose up -d db
-```
-
-테이블은 처음 한 번 만든다.
-
-```bash
 python -c "from jarviseo.memory import MemoryStore; MemoryStore().init_schema()"
 ```
 
@@ -161,18 +158,95 @@ docker compose up api          # 대시보드 → http://localhost:8000
 DB 만큼은 컨테이너를 쓴다. 셋이 각자 Postgres 를 설치하고 버전을 맞추는
 것보다 이쪽이 훨씬 싸다.
 
+### 처음 DB 띄우기 — ERD 대로 테이블 만들기
+
+처음 해 보는 사람 기준으로 적었다. 명령은 전부 **레포 루트 폴더**(이 README 가 있는 곳)에서 친다.
+맥은 터미널, 윈도우는 PowerShell 이면 된다.
+
+용어 두 개만 먼저.
+- **이미지**: DB 프로그램이 통째로 들어 있는 설치 파일 같은 것. 여기서는 `pgvector/pgvector:pg16`(Postgres 16 + 벡터 검색 확장).
+- **컨테이너**: 그 이미지를 실제로 실행한 것. 내 컴퓨터에 Postgres 를 직접 설치하지 않아도 DB 가 하나 떠 있게 된다.
+
+**0단계 — Docker Desktop 켜기**
+
+Docker Desktop 을 설치하고 **실행해 둔다**(맥은 메뉴 막대, 윈도우는 작업 표시줄에 고래 아이콘).
+꺼져 있으면 아래 명령이 전부 `Cannot connect to the Docker daemon` 으로 실패한다.
+
+```bash
+docker --version
+```
+
+버전이 나오면 준비 끝.
+
+**1단계 — DB 컨테이너 띄우기**
+
 ```bash
 docker compose up -d db
 ```
 
-처음 한 번은 테이블을 만들어야 한다.
+`docker-compose.yml` 의 `db` 서비스만 띄운다. `-d` 는 "뒤에서 돌게 두고 터미널은 돌려줘"라는 뜻이다.
+처음에는 이미지를 내려받느라 1~2분 걸린다.
+
+```bash
+docker compose ps
+```
+
+`STATUS` 에 `healthy` 가 보이면 DB 가 준비된 것이다. `starting` 이면 몇 초 뒤에 다시 본다.
+
+> ⚠️ **예전에 `postgres:16-alpine` 이미지로 띄운 적이 있으면** 먼저 한 번 비운다.
+> 이미지가 pgvector 판으로 바뀌어서, 옛 데이터 폴더를 그대로 쓰면 꼬일 수 있다.
+> ```bash
+> docker compose down -v
+> ```
+> `-v` 는 **DB 안의 데이터까지 지운다.** 개발용 데이터라 지워도 되지만, 남겨야 할 게 있으면 먼저 말한다.
+
+**2단계 — 테이블 만들기**
+
+먼저 [시작하기 1번](#1-파이썬-환경)에서 만든 파이썬 환경을 켠다
+(venv 는 `source .venv/bin/activate` · 윈도우 `.venv\Scripts\activate`, conda 는 `conda activate JARVISEO`).
 
 ```bash
 python -c "from jarviseo.memory import MemoryStore; MemoryStore().init_schema()"
 ```
 
-`docker compose down` 으로 내려도 데이터는 남는다. **통째로 비우려면
-`docker compose down -v`** — 스키마를 갈아엎었을 때 이걸 쓴다.
+`models.py`(ERD 를 코드로 옮긴 것)를 읽어서 **없는 테이블만** 만든다. 아무것도 출력되지 않으면 성공이다.
+임베딩 열(`VECTOR`)에 필요한 pgvector 확장도 이 명령이 먼저 켜 준다.
+
+**3단계 — 확인하기**
+
+```bash
+docker compose exec db psql -U jarviseo -d jarviseo -c "\dt"
+```
+
+`docker compose exec db` 는 "떠 있는 db 컨테이너 안에서 명령을 실행해줘"이고, `psql` 은 Postgres 에 SQL 을 보내는 프로그램이다.
+**ERD 와 같은 테이블 17개**가 나오면 성공이다. 그림으로 보고 싶으면 DBeaver 같은 DB 도구로 접속한다.
+
+| 항목 | 값 |
+|---|---|
+| Host | `localhost` |
+| Port | `5432` |
+| Database · User · Password | 전부 `jarviseo` |
+
+> **ERD 가 바뀌어 `models.py` 가 따라 바뀌면** `docker compose down -v` 로 비우고 1~2단계를 다시 한다.
+> 2단계는 없는 테이블만 만들어서, 이미 있는 테이블의 열은 바꾸지 않기 때문이다.
+
+**자주 막히는 곳**
+
+| 증상 | 원인 · 해결 |
+|---|---|
+| `Cannot connect to the Docker daemon` | Docker Desktop 이 꺼져 있다. 켜고 고래 아이콘이 멈출 때까지 기다린다 |
+| `port is already allocated` / `5432` 사용 중 | 내 컴퓨터에 Postgres 가 따로 설치돼 돌고 있다. 그걸 끄거나, 팀에 말해 포트를 바꾼다 |
+| 2단계에서 `connection refused` | DB 가 아직 안 떴다. `docker compose ps` 로 `healthy` 를 확인하고 다시 한다 |
+| 2단계에서 `No module named jarviseo` | 파이썬 환경이 안 켜졌거나 `pip install -e .` 를 안 했다 |
+| `type "vector" does not exist` | 옛 `postgres:16-alpine` 컨테이너가 떠 있다. 1단계의 ⚠️ 대로 `down -v` 후 다시 띄운다 |
+
+### 끄고 비우기
+
+```bash
+docker compose stop        # 잠깐 끄기. 데이터 남음
+docker compose down        # 컨테이너 지우기. 데이터 남음
+docker compose down -v     # 데이터까지 전부 지우기 — 스키마를 갈아엎었을 때
+```
 
 ### 두 저장소를 나눠 쓴다
 
@@ -187,8 +261,9 @@ pgvector 는 Postgres 의 확장이라 DB 를 하나 더 띄우지 않는다.
 
 ### 스키마
 
-`src/jarviseo/memory/models.py` 가 원본이다. Notion 의 DB 설계 문서와
-어긋나면 **Notion 을 고친다.** 코드가 실제로 도는 쪽이다.
+**원본은 ERDCloud `JARVISEO` 다이어그램이고, `src/jarviseo/memory/models.py` 가 그것을 따른다.**
+사람이 읽는 사본은 `docs/ERD.md`, 그림은 `docs/erd-diagram/JARVISEO-ERD.png` 다.
+셋이 어긋나면 ERD 가 맞다 — 세 사람이 같은 그림을 보고 작업해야 하기 때문이다.
 
 열을 추가·변경할 때 주의할 것이 있다. `init_schema()` 는 **없는 테이블만
 만들고 기존 테이블은 건드리지 않는다.** 개발 중에는 `docker compose down -v`
