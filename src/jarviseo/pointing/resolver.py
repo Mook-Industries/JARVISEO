@@ -19,6 +19,7 @@ cues.py 가 매긴 단서별 점수를 합쳐서 후보 순위를 정하고,
 
 from __future__ import annotations
 
+from jarviseo import config
 from jarviseo.types import (
     CueKind,
     Detection,
@@ -31,10 +32,11 @@ __all__ = ["WEIGHTS", "resolve_target"]
 # 단서별 가중치. 합이 1.0 이 되도록 유지한다.
 # 이 값이 곧 "무엇을 얼마나 믿는가"이고, ablation 의 비교 대상이다.
 WEIGHTS: dict[CueKind, float] = {
-    CueKind.HAND: 0.45,
-    CueKind.GAZE: 0.20,
-    CueKind.LANGUAGE: 0.25,
-    CueKind.SALIENCE: 0.10,
+    CueKind.CENTER: 0.10,
+    CueKind.POINT: 0.40,
+    CueKind.GAZE: 0.15,
+    CueKind.LANG: 0.25,
+    CueKind.CTX: 0.10,
 }
 
 
@@ -44,8 +46,9 @@ def resolve_target(
     gaze_vector: tuple[float, float] | None,
     text: str,
     frame_size: tuple[int, int],
+    prev_target_label: str | None = None,
     enabled_cues: set[CueKind] | None = None,
-    margin_threshold: float = 0.15,
+    margin_threshold: float = config.CLARIFY_MARGIN_THRESHOLD,
 ) -> TargetResolution:
     """사용자가 가리킨 물체를 결정한다.
 
@@ -55,9 +58,13 @@ def resolve_target(
         gaze_vector: 시선 방향. 못 구했으면 None.
         text: 사용자 발화 원문.
         frame_size: (width, height). 상대 위치 계산에 쓴다.
+        prev_target_label: 직전 턴에서 확정한 대상의 라벨. 없으면 None.
+            CTX 단서("그거 말고 옆에 거")의 근거다.
         enabled_cues: 켤 단서 집합. **ablation 실험의 스위치가 이것이다.**
-            None 이면 전부 켠다. {CueKind.SALIENCE} 하나만 주면 baseline 이 된다.
+            None 이면 전부 켠다. {CueKind.CENTER} 하나만 주면 baseline 이 된다.
         margin_threshold: 1위-2위 점수차가 이 값보다 작으면 되묻는다.
+            기본값은 ``config.CLARIFY_MARGIN_THRESHOLD`` 다. 숫자를 여기에 따로
+            적지 않는 이유는, 두 곳에 있으면 한쪽만 고쳐져 어긋나기 때문이다.
 
     Returns:
         후보 순위, 선택 결과, 되물을지 여부.

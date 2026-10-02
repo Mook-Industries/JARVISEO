@@ -62,5 +62,6 @@ class JarviseoState(TypedDict, total=False):
 
 
 # 되풀이 상한. 이걸 안 걸면 흐린 장면 앞에서 영원히 다시 찍는다.
-MAX_RECAPTURE = 3
+# 값은 AI 워크플로(가리킴 모델)의 "재촬영 요청 최대 2회"를 따른다.
+MAX_RECAPTURE = 2
 MAX_CLARIFY = 2
