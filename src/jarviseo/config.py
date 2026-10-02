@@ -109,10 +109,6 @@ DATABASE_URL = _get("JARVISEO_DATABASE_URL") or (
     f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 )
 
-# --- 벡터 DB (Chroma) -----------------------------------------------------
-# 이쪽은 서버로 띄우지 않는다. 한 프로세스만 읽고 쓰므로 파일 모드로 충분하다.
-CHROMA_PATH = Path(_get("JARVISEO_CHROMA_PATH") or (DATA_DIR / "chroma"))
-
 # --- 음성 ----------------------------------------------------------------
 WAKE_WORD = _get("JARVISEO_WAKE_WORD", "자비서")
 # TTS 재생이 끝난 뒤 이만큼 더 마이크를 막는다.

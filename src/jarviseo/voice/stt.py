@@ -1,6 +1,8 @@
 """음성 인식 (STT).  담당: 문태현
 
-로컬에서 돌린다. 상시 동작하는 것은 클라우드에 올리지 않는다.
+OpenAI STT API 로 받아쓴다. 호출어 뒤의 발화만 보내고, 상시 듣는 것은
+웨이크워드(로컬)뿐이다. 지연이 너무 크면 faster-whisper(로컬)로 바꾸는 것을
+검토한다. 그래서 바깥에서는 이 클래스만 부르고 어느 쪽인지 몰라도 되게 둔다.
 
 started_at 이 핵심이다
 ----------------------
@@ -23,7 +25,7 @@ __all__ = ["SpeechToText"]
 class SpeechToText:
     """녹음된 오디오를 글자로 바꾼다."""
 
-    def __init__(self, model_name: str = "base", language: str = "ko") -> None:
+    def __init__(self, model_name: str = "gpt-4o-mini-transcribe", language: str = "ko") -> None:
         self.model_name = model_name
         self.language = language
         raise NotImplementedError

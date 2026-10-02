@@ -259,7 +259,7 @@ HACCP 공공데이터 / OCR 결과 캐시.
 **ERD 에 없어서 코드에서도 빠진 것**
 
 - `belongings` · `observations` — ③④ 소지품 재인식 / 개인 기억의 관계형 앵커.
-  지금은 Chroma(`memory/vector.py`)에만 있고 Postgres 쪽 대응 테이블이 없다.
+  벡터 검색은 pgvector 로 확정(2026-10-02)했으므로 Postgres 테이블로 들어와야 한다.
   두 기능을 Should 로 남겨둘지, 테이블을 추가할지 팀에서 정해야 한다.
 - 실행 장비 · 프레임 입력원 — 예전 스키마의 `sessions.device` / `frame_source`.
   벤치마크를 "맥북에서 잰 것"과 "Colab 에서 잰 것"으로 나눌 근거였다.
