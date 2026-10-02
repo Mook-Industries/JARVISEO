@@ -272,7 +272,15 @@ class MemoryStore:
                 if target.chosen is not None:
                     inference.target_label = target.chosen.detection.label
                     inference.confidence = target.chosen.detection.confidence
-                inference.resolved_by = "USER" if response.needs_clarify else "MODEL"
+                # 되물은 턴에서는 아직 아무도 고르지 않았다. 사용자가 실제로 고르는 것은
+                # 다음 턴(CLARIFY_REPLY)이다. 여기서 USER 를 적으면 USER 행을 정답 라벨로
+                # 쓸 때 "모델이 헷갈려 한 후보"가 정답으로 섞여 들어간다.
+                if response.needs_clarify:
+                    inference.resolved_by = None
+                elif trigger_type == "CLARIFY_REPLY":
+                    inference.resolved_by = "USER"
+                else:
+                    inference.resolved_by = "MODEL"
 
                 for rank, cand in enumerate(target.candidates, start=1):
                     box = cand.detection.bbox

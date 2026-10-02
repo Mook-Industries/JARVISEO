@@ -113,14 +113,14 @@ def _sample_response() -> tuple[Utterance, AssistantResponse]:
     first = TargetCandidate(
         detection=Detection(label="backpack", confidence=0.91, bbox=BBox(10, 20, 110, 220)),
         cue_scores=[
-            CueScore(kind=CueKind.HAND, score=0.82),
-            CueScore(kind=CueKind.SALIENCE, score=0.30),
+            CueScore(kind=CueKind.POINT, score=0.82),
+            CueScore(kind=CueKind.CENTER, score=0.30),
         ],
         total_score=0.74,
     )
     second = TargetCandidate(
         detection=Detection(label="cup", confidence=0.66, bbox=BBox(300, 20, 360, 90)),
-        cue_scores=[CueScore(kind=CueKind.SALIENCE, score=0.25)],
+        cue_scores=[CueScore(kind=CueKind.CENTER, score=0.25)],
         total_score=0.41,
     )
     response = AssistantResponse(
@@ -185,8 +185,26 @@ def test_후보와_단서별_점수가_남는다(store: MemoryStore):
         assert [r.label for r in rows] == ["backpack", "cup"]
         assert [r.is_chosen for r in rows] == [True, False]
         # 어느 단서가 1위를 밀어올렸는지 남아 있어야 한다
-        assert rows[0].cue_scores == {"hand": 0.82, "salience": 0.30}
+        assert rows[0].cue_scores == {"point": 0.82, "center": 0.30}
         assert rows[0].bbox == {"x1": 10, "y1": 20, "x2": 110, "y2": 220}
+
+
+def test_되물은_턴은_정답_라벨로_남지_않는다(store: MemoryStore):
+    """resolved_by=USER 는 정답 라벨로 쓴다. 되물은 턴에 USER 가 찍히면 라벨이 오염된다."""
+    session_id = store.start_session(store.ensure_user())
+    utterance, response = _sample_response()
+
+    response.needs_clarify = True
+    asked = store.log_turn(session_id, utterance, response)
+
+    response.needs_clarify = False
+    answered = store.log_turn(session_id, utterance, response, trigger_type="CLARIFY_REPLY")
+    plain = store.log_turn(session_id, utterance, response)
+
+    with store.session() as db:
+        assert db.get(TurnInference, asked).resolved_by is None
+        assert db.get(TurnInference, answered).resolved_by == "USER"
+        assert db.get(TurnInference, plain).resolved_by == "MODEL"
 
 
 def test_지연_백분위(store: MemoryStore):

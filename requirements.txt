@@ -34,6 +34,7 @@ easyocr>=1.7
 langgraph>=0.2
 langchain-core>=0.3
 openai>=1.66              # STT · VLM · TTS 전부 OpenAI. Responses API 가 필요해 1.66 이상
+                          # STT 가 너무 느리면 faster-whisper(로컬)로 바꾸는 것을 검토한다
 
 # --- 관계형 DB ----------------------------------------------------------
 # Postgres 를 docker compose 로 띄운다. 팀원이 각자 설치할 필요가 없다.
@@ -50,7 +51,6 @@ chromadb>=0.5
 # PyAudio 는 윈도우에서 설치가 자주 실패한다. 팀 전체가 sounddevice 로 통일한다.
 sounddevice>=0.4
 soundfile>=0.12
-openai-whisper>=20231117
 
 # --- 서버 · 대시보드 ----------------------------------------------------
 fastapi>=0.110

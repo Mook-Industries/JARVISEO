@@ -55,4 +55,5 @@ def test_알레르기_판정에_uncertain이_있다():
 
 def test_의도와_단서_목록():
     assert Intent.GENERAL in set(Intent)
-    assert {CueKind.HAND, CueKind.GAZE, CueKind.LANGUAGE} <= set(CueKind)
+    # ERD turn_candidate.cue_scores 의 키와 같아야 한다
+    assert {c.value for c in CueKind} == {"center", "point", "gaze", "lang", "ctx"}

@@ -16,14 +16,15 @@ from __future__ import annotations
 from jarviseo.types import CueScore, Detection
 
 __all__ = [
-    "score_hand",
+    "score_center",
+    "score_point",
     "score_gaze",
-    "score_language",
-    "score_salience",
+    "score_lang",
+    "score_ctx",
 ]
 
 
-def score_hand(
+def score_point(
     fingertip: Detection | None,
     candidates: list[Detection],
     frame_size: tuple[int, int],
@@ -52,13 +53,13 @@ def score_gaze(
     들어가지 않는다는 점을 발표 때 명확히 구분해야 한다.
 
     안경 카메라는 착용자 시점이라 화면 중앙이 대략 시선 방향이다.
-    그래서 이 단서는 score_salience 와 상관관계가 높을 수 있다.
+    그래서 이 단서는 score_center 와 상관관계가 높을 수 있다.
     ablation 에서 둘을 같이 켰을 때 기여도가 겹치는지 확인할 것.
     """
     raise NotImplementedError
 
 
-def score_language(
+def score_lang(
     text: str,
     candidates: list[Detection],
     frame_size: tuple[int, int],
@@ -74,7 +75,7 @@ def score_language(
     raise NotImplementedError
 
 
-def score_salience(
+def score_center(
     candidates: list[Detection],
     frame_size: tuple[int, int],
 ) -> list[CueScore]:
@@ -83,5 +84,20 @@ def score_salience(
     다른 단서가 하나도 없을 때의 기본값 역할을 한다.
     baseline(단서를 아무것도 안 쓴 상태)을 이 단서 하나만 켠 상태로 잡으면
     ablation 표의 첫 줄이 된다.
+    """
+    raise NotImplementedError
+
+
+def score_ctx(
+    prev_target_label: str | None,
+    candidates: list[Detection],
+) -> list[CueScore]:
+    """직전 턴에서 확정한 대상과 이어지는 물체일수록 높은 점수.
+
+    "그거 뭐야?" 다음에 "그거 얼마야?"처럼 같은 대상을 다시 가리키는 경우가 많다.
+    직전 대상과 라벨이 같은 후보에 점수를 준다.
+
+    prev_target_label 이 None 이면(세션의 첫 질문이면) 이 단서는 기권한다.
+    score_point 와 마찬가지로 빈 리스트가 아니라 전부 0.0 을 반환한다.
     """
     raise NotImplementedError

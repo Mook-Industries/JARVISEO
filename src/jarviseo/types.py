@@ -165,12 +165,16 @@ class CueKind(StrEnum):
 
     ablation(단서를 하나씩 껐다 켜며 기여도를 재는 실험)의 축이 이것이다.
     단서를 추가할 때 여기에 먼저 항목을 넣는다.
+
+    값은 ERD ``turn_candidate.cue_scores`` 의 키와 같다. 순서는 ablation
+    v1~v5 에서 단서가 하나씩 켜지는 순서다.
     """
 
-    HAND = "hand"  # 손끝에서 뻗은 방향
-    GAZE = "gaze"  # 머리/시선 방향
-    LANGUAGE = "language"  # "빨간 거", "왼쪽 거" 같은 말 속 단서
-    SALIENCE = "salience"  # 화면 중앙·크기 등 눈에 띄는 정도
+    CENTER = "center"  # v1 화면 중앙·크기 (baseline)
+    POINT = "point"  # v2 손끝에서 뻗은 방향
+    GAZE = "gaze"  # v3 머리/시선 방향
+    LANG = "lang"  # v4 "빨간 거", "왼쪽 거" 같은 말 속 단서
+    CTX = "ctx"  # v5 대화 맥락 — 직전 턴에서 확정한 대상
 
 
 @dataclass
