@@ -7,23 +7,23 @@
 #    없는 계정을 적으면 GitHub 이 경고를 띄우고 자동 지정이 동작하지 않는다.
 
 # 기본 — 아래 규칙에 안 걸리는 모든 파일
-*                               @LeoChoi224
+*                               @LeoChoi224 @Moontaehyeon01 @Kweonyh0
 
 # 계약 파일 — 세 사람이 전부 의존하므로 통합 담당이 반드시 본다
-/src/jarviseo/types.py          @LeoChoi224
-/src/jarviseo/graph/            @LeoChoi224
+# /src/jarviseo/types.py          @LeoChoi224
+# /src/jarviseo/graph/            @LeoChoi224
 
 # 최홍묵 — 지시 대상 특정
-/src/jarviseo/pointing/         @LeoChoi224
-/src/jarviseo/capture/          @LeoChoi224
+# /src/jarviseo/pointing/         @LeoChoi224
+# /src/jarviseo/capture/          @LeoChoi224
 
 # 권용현 — 성분표 인식 · 서버 · 대시보드
-# /src/jarviseo/nutrition/      @권용현_깃허브계정
-# /src/jarviseo/api/            @권용현_깃허브계정
+# /src/jarviseo/nutrition/      @Kweonyh0
+# /src/jarviseo/api/            @Kweonyh0
 
 # 문태현 — 음성 · 검색 · 배포
-# /src/jarviseo/voice/          @문태현_깃허브계정
-# /src/jarviseo/memory/         @문태현_깃허브계정
-# /Dockerfile                   @문태현_깃허브계정
-# /docker-compose.yml           @문태현_깃허브계정
-# /.github/workflows/           @문태현_깃허브계정
+# /src/jarviseo/voice/          @Moontaehyeon01
+# /src/jarviseo/memory/         @Moontaehyeon01
+# /Dockerfile                   @Moontaehyeon01
+# /docker-compose.yml           @Moontaehyeon01
+# /.github/workflows/           @Moontaehyeon01
