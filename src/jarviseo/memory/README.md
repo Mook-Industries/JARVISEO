@@ -11,7 +11,8 @@
 
 ## 알아둘 것
 
-- **ERD 문서와 어긋나면 이 파일이 아니라 문서를 고친다.** 코드가 실제로 도는 쪽이다.
+- **원본은 팀 ERD(`docs/ERD.md`, ERDCloud `JARVISEO-v5`)다.** 어긋나면 ERD 가 맞다.
+  세 사람이 같은 그림을 보고 작업해야 하므로 다이어그램을 기준으로 삼는다.
 - 이미지와 임베딩은 DB 에 넣지 않는다. 경로(`image_path`) / 참조(`chroma_id`)만 둔다.
 - Enum 은 문자열로 저장한다. Postgres ENUM 은 값 추가마다 마이그레이션이 필요하다.
 - 테이블 생성: `python -c "from jarviseo.memory import MemoryStore; MemoryStore().init_schema()"`

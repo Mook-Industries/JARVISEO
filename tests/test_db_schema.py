@@ -12,9 +12,27 @@ Postgres 에서만 터지는 문제(타입 불일치 등)는 여기서 안 잡�
 
 import pytest
 
-from jarviseo.memory.models import Session, Turn, TurnLatency, User, UserAllergen
+from jarviseo.memory.models import (
+    ChatSession,
+    SessionTurn,
+    TurnCandidate,
+    TurnInference,
+    User,
+    UserAllergen,
+)
 from jarviseo.memory.store import MemoryStore
-from jarviseo.types import AssistantResponse, Frame, Intent, Utterance
+from jarviseo.types import (
+    AssistantResponse,
+    BBox,
+    CueKind,
+    CueScore,
+    Detection,
+    Frame,
+    Intent,
+    TargetCandidate,
+    TargetResolution,
+    Utterance,
+)
 
 
 @pytest.fixture
@@ -29,42 +47,61 @@ def test_테이블이_전부_만들어진다(store: MemoryStore):
     from sqlalchemy import inspect
 
     tables = set(inspect(store.engine).get_table_names())
+    # 팀 ERD(JARVISEO-v5)의 13개 테이블
     expected = {
         "users",
-        "user_allergens",
-        "sessions",
-        "frames",
-        "turns",
-        "turn_latencies",
-        "detections",
-        "target_resolutions",
-        "allergen_judgements",
-        "belongings",
-        "observations",
+        "user_setting",
+        "allergen",
+        "ingredient_synonym",
+        "user_allergen",
+        "chat_session",
+        "session_turn",
+        "turn_inference",
+        "turn_candidate",
+        "product",
+        "turn_ingredient",
+        "eval_run",
+        "eval_sample",
     }
     missing = expected - tables
     assert not missing, f"만들어지지 않은 테이블: {missing}"
 
 
 def test_사용자와_알레르기(store: MemoryStore):
-    user_id = store.ensure_user("owner")
+    user_id = store.ensure_user()
 
-    # 같은 이름으로 다시 불러도 새로 만들지 않는다.
-    assert store.ensure_user("owner") == user_id
+    # 같은 이메일로 다시 불러도 새로 만들지 않는다.
+    assert store.ensure_user() == user_id
 
     store.set_user_allergens(user_id, ["땅콩", "우유"])
     assert set(store.get_user_allergens(user_id)) == {"땅콩", "우유"}
 
-    # 통째로 교체된다. 예전 값이 남으면 안 된다.
+    # 통째로 교체된다. 빠진 것은 조회에서 사라진다.
     store.set_user_allergens(user_id, ["땅콩"])
     assert store.get_user_allergens(user_id) == ["땅콩"]
 
 
-def test_대화_한_건을_기록한다(store: MemoryStore):
-    import numpy as np
-
+def test_알레르기는_지우지_않고_표시만_한다(store: MemoryStore):
+    """소프트 삭제. 과거 판정 기록이 "그때는 등록돼 있었다"를 설명할 수 있어야 한다."""
     user_id = store.ensure_user()
-    session_id = store.start_session(user_id, device="macbook-m3", frame_source="folder")
+    store.set_user_allergens(user_id, ["우유"])
+    store.set_user_allergens(user_id, [])
+
+    with store.session() as db:
+        rows = db.query(UserAllergen).all()
+        assert len(rows) == 1  # 행은 남아 있고
+        assert rows[0].deleted_at is not None  # 표시만 됐다
+
+    # 다시 등록하면 되살아난다. 새 행이 생기지 않는다.
+    store.set_user_allergens(user_id, ["우유"])
+    assert store.get_user_allergens(user_id) == ["우유"]
+    with store.session() as db:
+        assert db.query(UserAllergen).count() == 1
+
+
+def _sample_response() -> tuple[Utterance, AssistantResponse]:
+    """가리킴까지 끝난 턴 하나를 만든다."""
+    import numpy as np
 
     utterance = Utterance(text="저거 뭐야?", started_at=10.0, ended_at=11.2, confidence=0.9)
     frame = Frame(
@@ -73,45 +110,96 @@ def test_대화_한_건을_기록한다(store: MemoryStore):
         source_id="folder/img_001.jpg",
         sharpness=142.5,
     )
+    first = TargetCandidate(
+        detection=Detection(label="backpack", confidence=0.91, bbox=BBox(10, 20, 110, 220)),
+        cue_scores=[
+            CueScore(kind=CueKind.HAND, score=0.82),
+            CueScore(kind=CueKind.SALIENCE, score=0.30),
+        ],
+        total_score=0.74,
+    )
+    second = TargetCandidate(
+        detection=Detection(label="cup", confidence=0.66, bbox=BBox(300, 20, 360, 90)),
+        cue_scores=[CueScore(kind=CueKind.SALIENCE, score=0.25)],
+        total_score=0.41,
+    )
     response = AssistantResponse(
         text="저 가방은 검은색 백팩입니다.",
         intent=Intent.POINTING,
         used_frame=frame,
+        target=TargetResolution(
+            candidates=[first, second],
+            chosen=first,
+            margin=0.33,
+            needs_clarify=False,
+        ),
         latency_ms={"stt": 120.0, "detect": 45.0, "vlm": 830.0, "tts": 210.0},
     )
+    return utterance, response
 
-    turn_id = store.log_turn(session_id, utterance, response, frame_path="data/x.jpg")
+
+def test_대화_한_건을_기록한다(store: MemoryStore):
+    user_id = store.ensure_user()
+    session_id = store.start_session(user_id, title="데모")
+    utterance, response = _sample_response()
+
+    turn_id = store.log_turn(
+        session_id, utterance, response, image_path="data/x.jpg", pointing_variant="v2"
+    )
 
     with store.session() as db:
-        turn = db.get(Turn, turn_id)
-        assert turn.utterance == "저거 뭐야?"
-        assert turn.intent == "pointing"
-        assert turn.utterance_started_monotonic == 10.0
-        # 프레임이 같이 저장되고 크기가 (width, height) 순서로 들어갔는지
-        assert turn.frame is not None
-        assert (turn.frame.width, turn.frame.height) == (640, 480)
-        # 지연은 단계별로 행이 나뉘어야 한다
-        assert len(turn.latencies) == 4
+        turn = db.get(SessionTurn, turn_id)
+        assert turn.question_text == "저거 뭐야?"
+        assert turn.answer_text.startswith("저 가방")
+        assert turn.turn_no == 1
+        assert turn.trigger_type == "WAKEWORD"
+
+        inf = turn.inference
+        assert inf is not None
+        assert inf.target_label == "backpack"
+        assert inf.pointing_variant == "v2"
+        # 단계 이름이 ERD 의 열 이름으로 옮겨졌는지 (detect→vision, vlm→llm)
+        assert inf.stt_ms == 120
+        assert inf.vision_ms == 45
+        assert inf.llm_ms == 830
+        assert inf.total_ms == 1205
+        # 프레임 선택이 발화 시작에서 얼마나 벌어졌는지가 남아야 한다
+        assert inf.frame_offset_ms == 100
+        assert float(inf.blur_score) == pytest.approx(142.5)
+        assert inf.detected_count == 2
+
+
+def test_후보와_단서별_점수가_남는다(store: MemoryStore):
+    """ablation 결과를 해석하려면 합산 점수만으로는 부족하다."""
+    session_id = store.start_session(store.ensure_user())
+    utterance, response = _sample_response()
+    turn_id = store.log_turn(session_id, utterance, response)
+
+    with store.session() as db:
+        rows = (
+            db.query(TurnCandidate)
+            .filter(TurnCandidate.turn_id == turn_id)
+            .order_by(TurnCandidate.rank)
+            .all()
+        )
+        assert [r.label for r in rows] == ["backpack", "cup"]
+        assert [r.is_chosen for r in rows] == [True, False]
+        # 어느 단서가 1위를 밀어올렸는지 남아 있어야 한다
+        assert rows[0].cue_scores == {"hand": 0.82, "salience": 0.30}
+        assert rows[0].bbox == {"x1": 10, "y1": 20, "x2": 110, "y2": 220}
 
 
 def test_지연_백분위(store: MemoryStore):
-    user_id = store.ensure_user()
-    session_id = store.start_session(user_id)
+    session_id = store.start_session(store.ensure_user())
 
     with store.session() as db:
-        turn = Turn(
-            session_id=session_id,
-            utterance="x",
-            utterance_started_monotonic=0.0,
-            intent="general",
-        )
-        db.add(turn)
-        db.flush()
-        # 1~100ms 를 넣으면 p50 은 50 언저리, p95 는 95 언저리여야 한다.
-        db.add_all(
-            TurnLatency(turn_id=turn.id, stage="vlm", elapsed_ms=float(i)) for i in range(1, 101)
-        )
+        for i in range(1, 101):
+            turn = SessionTurn(session_id=session_id, turn_no=i, question_text="x")
+            db.add(turn)
+            db.flush()
+            db.add(TurnInference(turn_id=turn.turn_id, llm_ms=i))
 
+    # 1~100ms 를 넣으면 p50 은 50 언저리, p95 는 95 언저리여야 한다.
     stats = store.latency_percentiles("vlm")
     assert stats["count"] == 100
     assert 49 <= stats["p50"] <= 52
@@ -132,4 +220,4 @@ def test_사용자를_지우면_딸린_기록도_지워진다(store: MemoryStore
 
     with store.session() as db:
         assert db.query(UserAllergen).count() == 0
-        assert db.query(Session).count() == 0
+        assert db.query(ChatSession).count() == 0
