@@ -1,7 +1,7 @@
-"""관계형 저장소 접근.  담당: 문태현
+"""관계형 저장소 접근.
 
 Postgres 에 붙어서 대화 기록·지연시간·판정 결과를 남기고 조회한다.
-스키마는 ``models.py`` 에 있다.
+스키마는 ``models.py`` 에 있고, 그 원본은 팀 ERD(``docs/ERD.md``)다.
 
 연결 대상은 ``config.DATABASE_URL`` 하나로 정해진다. Postgres 든 SQLite 든
 이 파일의 코드는 똑같다. 발표 데모에서 컨테이너를 못 띄우는 상황이 오면
@@ -12,24 +12,42 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import sessionmaker
 
 from jarviseo import config
 from jarviseo.memory.models import (
+    Allergen,
     Base,
-    Frame,
-    Session,
-    Turn,
-    TurnLatency,
+    ChatSession,
+    SessionTurn,
+    TurnCandidate,
+    TurnInference,
     User,
     UserAllergen,
 )
 from jarviseo.types import AssistantResponse, Utterance
 
-__all__ = ["MemoryStore"]
+__all__ = ["MemoryStore", "STAGE_COLUMNS"]
+
+
+# 파이프라인이 넘겨주는 단계 이름 → turn_inference 의 열 이름.
+# 두 이름을 모두 받는 이유는, 그래프 노드가 쓰는 말("detect", "vlm")과
+# ERD 의 열 이름("vision_ms", "llm_ms")이 다르기 때문이다.
+STAGE_COLUMNS: dict[str, str] = {
+    "stt": "stt_ms",
+    "route": "route_ms",
+    "router": "route_ms",
+    "detect": "vision_ms",
+    "vision": "vision_ms",
+    "vlm": "llm_ms",
+    "llm": "llm_ms",
+    "tts": "tts_ms",
+    "total": "total_ms",
+}
 
 
 class MemoryStore:
@@ -85,41 +103,103 @@ class MemoryStore:
 
     # -- 사용자 ------------------------------------------------------------
 
-    def ensure_user(self, name: str = "owner") -> int:
-        """사용자가 없으면 만들고 id 를 반환한다."""
+    def ensure_user(self, email: str = "owner@jarviseo.local", nickname: str = "owner") -> int:
+        """사용자가 없으면 만들고 user_id 를 반환한다.
+
+        email 이 식별자다. 데모에서는 기본값 하나만 쓰면 된다.
+        """
         with self.session() as db:
-            user = db.scalar(select(User).where(User.name == name))
+            user = db.scalar(select(User).where(User.email == email))
             if user is None:
-                user = User(name=name)
+                user = User(email=email, nickname=nickname)
                 db.add(user)
                 db.flush()
-            return user.id
+            return user.user_id
+
+    def ensure_allergen(self, name: str, category: str = "") -> int:
+        """알레르기 마스터에 이름을 등록하고 allergen_id 를 반환한다."""
+        with self.session() as db:
+            row = db.scalar(select(Allergen).where(Allergen.name == name))
+            if row is None:
+                row = Allergen(name=name, category=category)
+                db.add(row)
+                db.flush()
+            return row.allergen_id
 
     def get_user_allergens(self, user_id: int) -> list[str]:
-        """등록된 알레르기 목록. ``allergen.judge_allergens`` 가 이걸 받아 쓴다."""
+        """살아 있는 알레르기 목록. ``allergen.judge_allergens`` 가 이걸 받아 쓴다."""
         with self.session() as db:
-            rows = db.scalars(select(UserAllergen.allergen).where(UserAllergen.user_id == user_id))
-            return list(rows)
+            stmt = (
+                select(Allergen.name)
+                .join(UserAllergen, UserAllergen.allergen_id == Allergen.allergen_id)
+                .where(UserAllergen.user_id == user_id)
+                .where(UserAllergen.deleted_at.is_(None))
+                .order_by(Allergen.name)
+            )
+            return list(db.scalars(stmt))
 
     def set_user_allergens(self, user_id: int, allergens: list[str]) -> None:
-        """알레르기 목록을 통째로 바꾼다."""
+        """알레르기 목록을 통째로 바꾼다.
+
+        지우지 않고 ``deleted_at`` 을 채운다. 과거 판정 기록이 "그때는 등록돼
+        있었다"를 설명할 수 있어야 하기 때문이다. 다시 등록하면 되살린다.
+        """
+        wanted = {a for a in allergens if a}
+        now = datetime.now(UTC)
+
+        for name in wanted:
+            self.ensure_allergen(name)
+
         with self.session() as db:
-            db.query(UserAllergen).filter(UserAllergen.user_id == user_id).delete()
-            db.add_all(UserAllergen(user_id=user_id, allergen=a) for a in allergens)
+            id_by_name = (
+                {
+                    name: aid
+                    for name, aid in db.execute(
+                        select(Allergen.name, Allergen.allergen_id).where(Allergen.name.in_(wanted))
+                    ).all()
+                }
+                if wanted
+                else {}
+            )
+
+            rows = list(db.scalars(select(UserAllergen).where(UserAllergen.user_id == user_id)))
+            existing = {r.allergen_id: r for r in rows}
+
+            for row in rows:
+                alive = row.allergen_id in id_by_name.values()
+                if not alive and row.deleted_at is None:
+                    row.deleted_at = now
+
+            for name in wanted:
+                aid = id_by_name[name]
+                row = existing.get(aid)
+                if row is None:
+                    db.add(UserAllergen(user_id=user_id, allergen_id=aid))
+                elif row.deleted_at is not None:
+                    row.deleted_at = None
 
     # -- 세션 --------------------------------------------------------------
 
-    def start_session(self, user_id: int, device: str = "", frame_source: str = "") -> int:
-        """실행 세션을 시작하고 id 를 반환한다.
+    def start_session(self, user_id: int | None = None, title: str = "") -> int:
+        """대화 세션을 시작하고 session_id 를 반환한다.
 
-        device 와 frame_source 를 남기는 이유는, 나중에 벤치마크 표를 만들 때
-        "맥북에서 잰 것"과 "Colab 에서 잰 것"을 섞으면 안 되기 때문이다.
+        비로그인 사용도 가능하므로 user_id 는 없어도 된다.
+        실행 장비·프레임 입력원 같은 벤치마크 조건은 ERD 에 열이 없으므로
+        ``eval_run.metrics`` 에 함께 적어 둔다.
         """
         with self.session() as db:
-            row = Session(user_id=user_id, device=device, frame_source=frame_source)
+            row = ChatSession(user_id=user_id, title=title or None)
             db.add(row)
             db.flush()
-            return row.id
+            return row.session_id
+
+    def end_session(self, session_id: int, reason: str = "USER") -> None:
+        """세션을 닫는다. reason: TIMEOUT / USER / APP_CLOSE."""
+        with self.session() as db:
+            row = db.get(ChatSession, session_id)
+            if row is not None:
+                row.ended_at = datetime.now(UTC)
+                row.end_reason = reason
 
     # -- 대화 기록 ---------------------------------------------------------
 
@@ -128,48 +208,93 @@ class MemoryStore:
         session_id: int,
         utterance: Utterance,
         response: AssistantResponse,
-        frame_path: str | None = None,
+        image_path: str | None = None,
+        trigger_type: str = "WAKEWORD",
+        pointing_variant: str | None = None,
+        detector_version: str | None = None,
     ) -> int:
-        """대화 한 번을 기록하고 turn id 를 반환한다.
+        """대화 한 번을 기록하고 turn_id 를 반환한다.
 
-        ``response.latency_ms`` 를 단계별로 풀어서 별도 행으로 저장한다.
-        나중에 p50/p95 를 내려면 단계별 원본이 남아 있어야 한다.
+        한 턴이 세 테이블에 나뉘어 들어간다.
+        ``session_turn`` (질문·응답) / ``turn_inference`` (판정·지연) /
+        ``turn_candidate`` (후보 목록). 한 트랜잭션 안에서 같이 써야
+        "턴은 있는데 추론 결과가 없는" 반쪽 기록이 남지 않는다.
         """
         with self.session() as db:
-            frame_id = None
-            if response.used_frame is not None and frame_path is not None:
-                f = response.used_frame
-                width, height = f.size
-                frame = Frame(
-                    image_path=frame_path,
-                    source_id=f.source_id,
-                    captured_at_monotonic=f.timestamp,
-                    sharpness=f.sharpness,
-                    width=width,
-                    height=height,
+            turn_no = (
+                db.scalar(
+                    select(func.count(SessionTurn.turn_id)).where(
+                        SessionTurn.session_id == session_id
+                    )
                 )
-                db.add(frame)
-                db.flush()
-                frame_id = frame.id
+                or 0
+            ) + 1
 
-            turn = Turn(
+            turn = SessionTurn(
                 session_id=session_id,
-                frame_id=frame_id,
-                utterance=utterance.text,
-                utterance_started_monotonic=utterance.started_at,
+                turn_no=turn_no,
+                trigger_type=trigger_type,
+                question_text=utterance.text,
+                answer_text=response.text,
+                image_path=image_path,
+                stt_raw_text=utterance.text,
                 stt_confidence=utterance.confidence,
-                intent=str(response.intent),
-                response=response.text,
-                needs_clarify=response.needs_clarify,
             )
             db.add(turn)
             db.flush()
 
-            db.add_all(
-                TurnLatency(turn_id=turn.id, stage=stage, elapsed_ms=ms)
-                for stage, ms in response.latency_ms.items()
+            inference = TurnInference(
+                turn_id=turn.turn_id,
+                is_reask=response.needs_clarify,
+                pointing_variant=pointing_variant,
+                detector_version=detector_version,
             )
-            return turn.id
+
+            frame = response.used_frame
+            if frame is not None:
+                inference.blur_score = frame.sharpness
+                # 발화 시작과 실제로 고른 프레임이 얼마나 벌어졌는지.
+                # 둘 다 time.monotonic() 기준이라 그대로 빼면 된다.
+                # 잘라내지 않고 반올림한다. 0.1초가 99ms 로 기록되면 측정값이 아니라 버그다.
+                inference.frame_offset_ms = round((frame.timestamp - utterance.started_at) * 1000)
+
+            for stage, ms in (response.latency_ms or {}).items():
+                column = STAGE_COLUMNS.get(stage)
+                if column is not None:
+                    setattr(inference, column, round(ms))
+            if inference.total_ms is None and response.latency_ms:
+                inference.total_ms = round(sum(response.latency_ms.values()))
+
+            target = response.target
+            if target is not None:
+                inference.margin = target.margin
+                inference.detected_count = len(target.candidates)
+                if target.chosen is not None:
+                    inference.target_label = target.chosen.detection.label
+                    inference.confidence = target.chosen.detection.confidence
+                inference.resolved_by = "USER" if response.needs_clarify else "MODEL"
+
+                for rank, cand in enumerate(target.candidates, start=1):
+                    box = cand.detection.bbox
+                    db.add(
+                        TurnCandidate(
+                            turn_id=turn.turn_id,
+                            rank=rank,
+                            label=cand.detection.label,
+                            score=cand.total_score,
+                            bbox={
+                                "x1": box.x1,
+                                "y1": box.y1,
+                                "x2": box.x2,
+                                "y2": box.y2,
+                            },
+                            cue_scores={c.kind.value: c.score for c in cand.cue_scores},
+                            is_chosen=cand is target.chosen,
+                        )
+                    )
+
+            db.add(inference)
+            return turn.turn_id
 
     # -- 대시보드 ----------------------------------------------------------
 
@@ -180,17 +305,27 @@ class MemoryStore:
         SQLite 에는 그 함수가 없어서, 쓰면 발표 데모용 SQLite 폴백이 깨진다.
         행 수가 수천 개 수준이라 속도 차이는 문제가 되지 않는다.
 
+        Args:
+            stage: "stt" / "detect" / "vlm" / "tts" / "total" 등.
+                ``STAGE_COLUMNS`` 에 없는 이름이면 전부 0 을 돌려준다.
+
         Returns:
             {"p50": ..., "p95": ..., "count": ...}. 기록이 없으면 전부 0.
         """
+        empty = {"p50": 0.0, "p95": 0.0, "count": 0}
+        column_name = STAGE_COLUMNS.get(stage)
+        if column_name is None:
+            return empty
+
+        column = getattr(TurnInference, column_name)
         with self.session() as db:
-            stmt = select(TurnLatency.elapsed_ms).where(TurnLatency.stage == stage)
+            stmt = select(column).where(column.is_not(None))
             if session_id is not None:
-                stmt = stmt.join(Turn).where(Turn.session_id == session_id)
-            values = sorted(db.scalars(stmt))
+                stmt = stmt.join(SessionTurn).where(SessionTurn.session_id == session_id)
+            values = sorted(float(v) for v in db.scalars(stmt))
 
         if not values:
-            return {"p50": 0.0, "p95": 0.0, "count": 0}
+            return empty
 
         def pick(q: float) -> float:
             # 가장 가까운 순위값을 고른다(nearest-rank).
@@ -201,10 +336,10 @@ class MemoryStore:
 
         return {"p50": pick(0.50), "p95": pick(0.95), "count": len(values)}
 
-    def recent_turns(self, session_id: int | None = None, limit: int = 50) -> list[Turn]:
+    def recent_turns(self, session_id: int | None = None, limit: int = 50) -> list[SessionTurn]:
         """최근 대화 기록. 대시보드의 채팅 이력에 쓴다."""
         with self.session() as db:
-            stmt = select(Turn).order_by(Turn.created_at.desc()).limit(limit)
+            stmt = select(SessionTurn).order_by(SessionTurn.asked_at.desc()).limit(limit)
             if session_id is not None:
-                stmt = stmt.where(Turn.session_id == session_id)
+                stmt = stmt.where(SessionTurn.session_id == session_id)
             return list(db.scalars(stmt))

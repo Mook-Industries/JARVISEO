@@ -55,6 +55,7 @@ Thumbs.db
 CLAUDE.local.md
 CLAUDE.md
 MEMORY.md
+/memory/
 ai/eval/*
 
 # --- 하드웨어 점검 산출물 -------------------------------------------------------
