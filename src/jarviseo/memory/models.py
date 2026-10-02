@@ -1,6 +1,6 @@
 """데이터베이스 스키마 — ERD 를 코드로 옮긴 것.
 
-**원본은 팀 ERDCloud 다이어그램 `JARVISEO-v5` 이고, 사람이 읽는 사본이
+**원본은 팀 ERDCloud 다이어그램 `JARVISEO` 이고, 사람이 읽는 사본이
 ``docs/ERD.md`` 에 있다. 셋이 어긋나면 ERD 가 맞다.**
 (예전 주석에는 "코드가 맞다"고 되어 있었으나, 세 사람이 같은 그림을 보고
 작업해야 해서 다이어그램을 기준으로 삼기로 바꿨다.)
@@ -17,6 +17,20 @@
   운영 DB 가 Postgres 이므로 실제 컬럼은 JSONB 로 올라간다.
 - ``BIGSERIAL`` 은 SQLite 에서 자동증가가 안 되므로 ``BigInteger`` 에
   sqlite 변형을 붙여 ``INTEGER`` 로 떨어지게 한다.
+- 임베딩은 pgvector 의 ``VECTOR(n)`` 열에 그 기록과 같은 행으로 둔다.
+  벡터 DB 를 따로 두면 두 곳이 어긋났을 때 어느 쪽이 맞는지 알 수 없다.
+
+ERD 와 일부러 다르게 둔 곳
+-------------------------
+ERDCloud 내보내기에서 그대로 옮기면 깨지거나 뜻이 틀어지는 자리만 고쳤다.
+고칠 곳은 ``docs/ERD.md`` 의 "ERD 쪽에서 고쳐야 할 것" 에 적어 둔다.
+
+- 복합 PK(``turn_candidate``, ``eval_sample``) 는 대리키 하나로 둔다.
+  ERDCloud 의 식별 관계가 FK 를 PK 에 끼워 넣은 것이고, ``eval_sample.turn_id``
+  는 NULL 허용이라 Postgres 에서 PK 에 들어갈 수 없다.
+- ``user_allergen.allergen_id2`` 는 끝의 ``2`` 를 뺀 ``allergen_id`` 로 둔다(오타).
+- ``product`` 의 엉뚱한 기본값(``false`` · ``now()``)과 참조 열의 ``SMALLSERIAL``
+  은 다른 열에서 복사돼 온 것이라 옮기지 않았다.
 """
 
 from __future__ import annotations
@@ -24,6 +38,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     BigInteger,
@@ -59,7 +74,7 @@ class Base(DeclarativeBase):
 
 
 class User(Base):
-    """사용자. 로그인 계정이자 알레르기·설정의 주인."""
+    """사용자. 로그인 계정이자 알레르기·설정·소지품의 주인."""
 
     __tablename__ = "users"
 
@@ -67,8 +82,6 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True)
     password_hash: Mapped[str] = mapped_column(String(60), default="")  # bcrypt. 평문 금지
     nickname: Mapped[str | None] = mapped_column(String(50))
-    # USER / ADMIN. 성능 리포트 접근 제어에 쓴다.
-    role: Mapped[str] = mapped_column(String(20), default="USER")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -81,6 +94,12 @@ class User(Base):
         back_populates="user", cascade="all, delete-orphan"
     )
     sessions: Mapped[list[ChatSession]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    belongings: Mapped[list[Belonging]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    observations: Mapped[list[Observation]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
@@ -98,11 +117,12 @@ class UserSetting(Base):
         BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True
     )
     tts_volume: Mapped[int] = mapped_column(SmallInteger, default=70)
-    tts_instructions: Mapped[str] = mapped_column(Text, default="")  # 말투·속도 지시문
+    # SLOW / NORMAL / FAST. gpt-4o-mini-tts 는 speed 파라미터를 지원하지 않아서
+    # 코드에서 instructions 문구나 재생 속도(time-stretch)로 바꿔 적용한다.
+    tts_speed: Mapped[str] = mapped_column(String(10), default="NORMAL")
     tts_voice: Mapped[str] = mapped_column(String(50), default="ko-KR-SunHiNeural")
     # 무응답이 이 분수만큼 이어지면 세션을 닫는다.
     session_timeout_min: Mapped[int] = mapped_column(SmallInteger, default=10)
-    hud_animation: Mapped[bool] = mapped_column(Boolean, default=True)
     show_detection_box: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -222,6 +242,8 @@ class SessionTurn(Base):
 
     "자비서, 저거 뭐야?" 부터 음성 답변까지가 한 행이다.
     대시보드의 채팅 이력, 지연 그래프, 정확도 측정이 전부 여기서 갈라져 나온다.
+    음성 쪽 기록은 ``turn_voice``, 가리킴은 ``turn_inference``, 성분은
+    ``turn_ingredient`` 로 나뉘고 전부 이 행에 1:1 로 붙는다.
 
     이미지는 **질문 시점 1장만** 경로로 남긴다. 영상이나 연속 사진을 저장하면
     개인정보 문제가 생기고, 1080p 한 장이 수백 KB 라 DB 가 금방 무거워진다.
@@ -233,7 +255,6 @@ class SessionTurn(Base):
     session_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("chat_session.session_id", ondelete="CASCADE"), index=True
     )
-    turn_no: Mapped[int] = mapped_column(Integer, default=1)
     asked_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
@@ -245,18 +266,13 @@ class SessionTurn(Base):
 
     image_path: Mapped[str | None] = mapped_column(String(500))
     ocr_text: Mapped[str | None] = mapped_column(Text)
-
-    speech_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    speech_ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    stt_raw_text: Mapped[str | None] = mapped_column(Text)
-    stt_confidence: Mapped[Decimal | None] = mapped_column(Score)
-
-    is_interrupted: Mapped[bool | None] = mapped_column(Boolean, default=False)
-    is_filler_sent: Mapped[bool | None] = mapped_column(Boolean, default=False)
-    # 개발·평가 모드에서만 저장한다(STT 평가셋용). 운영에서는 NULL.
-    audio_path: Mapped[str | None] = mapped_column(String(500))
+    # 질문 한 번의 처음부터 끝까지 걸린 시간.
+    total_ms: Mapped[int | None] = mapped_column(Integer)
 
     session: Mapped[ChatSession] = relationship(back_populates="turns")
+    voice: Mapped[TurnVoice | None] = relationship(
+        back_populates="turn", cascade="all, delete-orphan", uselist=False
+    )
     inference: Mapped[TurnInference | None] = relationship(
         back_populates="turn", cascade="all, delete-orphan", uselist=False
     )
@@ -266,6 +282,36 @@ class SessionTurn(Base):
     ingredient: Mapped[TurnIngredient | None] = relationship(
         back_populates="turn", cascade="all, delete-orphan", uselist=False
     )
+    observations: Mapped[list[Observation]] = relationship(
+        back_populates="turn", cascade="all, delete-orphan"
+    )
+
+
+class TurnVoice(Base):
+    """한 턴의 음성 기록.  턴과 1:1.
+
+    STT·TTS 를 다루는 쪽이 한 테이블만 보면 되도록 ``session_turn`` 에서 떼어 냈다.
+    """
+
+    __tablename__ = "turn_voice"
+
+    turn_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("session_turn.turn_id", ondelete="CASCADE"), primary_key=True
+    )
+    speech_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    speech_ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    stt_raw_text: Mapped[str | None] = mapped_column(Text)
+    # BARGE_IN 으로 재생이 중단됐으면 true.
+    is_interrupted: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 1.5초 안에 응답이 없어 "잠깐만요" 선응답이 나갔으면 true.
+    is_filler_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 개발·평가 모드에서만 저장한다(STT 평가셋용). 운영에서는 NULL.
+    audio_path: Mapped[str | None] = mapped_column(String(500))
+    stt_ms: Mapped[int | None] = mapped_column(Integer)
+    # 응답 텍스트 확정 → 첫 오디오 청크 수신까지(TTFB). 전체 합성 시간이 아니다.
+    tts_ms: Mapped[int | None] = mapped_column(Integer)
+
+    turn: Mapped[SessionTurn] = relationship(back_populates="voice")
 
 
 # ==========================================================================
@@ -277,8 +323,9 @@ class TurnInference(Base):
     """한 턴의 추론 결과와 단계별 지연.  턴과 1:1.
 
     PK 를 FK 로 그대로 쓴다. 턴 하나에 추론 결과는 하나뿐이다.
-    지연을 열로 두는 이유는 단계가 6개로 고정돼 있고, 한 턴의 전체 흐름을
+    지연을 열로 두는 이유는 단계가 고정돼 있고, 한 턴의 흐름을
     한 행으로 읽는 편이 대시보드 질의가 단순하기 때문이다.
+    음성 지연(stt·tts)은 ``turn_voice``, 전체 지연은 ``session_turn`` 에 있다.
     """
 
     __tablename__ = "turn_inference"
@@ -297,11 +344,15 @@ class TurnInference(Base):
     fingertip_xy: Mapped[dict | None] = mapped_column(JSON)
     # Laplacian variance. 재촬영 임계값을 사후에 조정할 근거.
     blur_score: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
-    # USER 면 되묻기로 사용자가 직접 고른 것 = 정답 라벨로 쓸 수 있다.
+    # MODEL: 모델이 바로 확정 / USER: 되묻기에 대한 대답 턴(CLARIFY_REPLY)에서
+    # 사용자가 고름 = 정답 라벨로 쓴다 / NULL: 이 턴에서 되물어 아직 미확정.
     resolved_by: Mapped[str | None] = mapped_column(String(10))
     is_reask: Mapped[bool] = mapped_column(Boolean, default=False)
     is_retake: Mapped[bool] = mapped_column(Boolean, default=False)
-    allergy_hit: Mapped[bool | None] = mapped_column(Boolean)
+
+    vision_ms: Mapped[int | None] = mapped_column(Integer)
+    llm_ms: Mapped[int | None] = mapped_column(Integer)
+    route_ms: Mapped[int | None] = mapped_column(Integer)
 
     # turn_candidate.candidate_id 참조. 되묻기 전 1위와 최종 확정을 구분해
     # "되묻기가 정확도를 몇 %p 올렸나"를 계산한다.
@@ -313,14 +364,6 @@ class TurnInference(Base):
     detected_count: Mapped[int | None] = mapped_column(SmallInteger)
     # YOLO 가중치 버전. 재학습하면 같은 pointing_variant 라도 결과가 달라진다.
     detector_version: Mapped[str | None] = mapped_column(String(30))
-
-    stt_ms: Mapped[int | None] = mapped_column(Integer)
-    route_ms: Mapped[int | None] = mapped_column(Integer)
-    vision_ms: Mapped[int | None] = mapped_column(Integer)
-    llm_ms: Mapped[int | None] = mapped_column(Integer)
-    # 응답 텍스트 확정 → 첫 오디오 청크 수신까지(TTFB). 전체 합성 시간이 아니다.
-    tts_ms: Mapped[int | None] = mapped_column(Integer)
-    total_ms: Mapped[int | None] = mapped_column(Integer)
 
     turn: Mapped[SessionTurn] = relationship(back_populates="inference")
 
@@ -355,6 +398,7 @@ class TurnCandidate(Base):
     score: Mapped[Decimal] = mapped_column(Score, default=0)
     # 0~1 정규화 좌표. 픽셀로 넣으면 해상도가 바뀔 때 못 쓴다.
     bbox: Mapped[dict] = mapped_column(JSON, default=dict)
+    # 키 = types.CueKind = ablation 단서. center(v1)·point(v2)·gaze(v3)·lang(v4)·ctx(v5)
     # {"center":0.30,"point":0.82,"gaze":0.15,"lang":0.55,"ctx":0.00}
     cue_scores: Mapped[dict] = mapped_column(JSON, default=dict)
     is_chosen: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -380,12 +424,15 @@ class Product(Base):
     barcode: Mapped[str] = mapped_column(String(20), primary_key=True)
     product_name: Mapped[str] = mapped_column(String(200), default="")
     report_no: Mapped[str] = mapped_column(String(30), default="")  # 품목보고번호
-    raw_ingredients: Mapped[str] = mapped_column(Text, default="")  # 원재료 원문
-    ingredients: Mapped[list] = mapped_column(JSON, default=list)  # 파싱한 성분 목록
-    allergen_notice: Mapped[str | None] = mapped_column(String(500))  # 알레르기 표시 문구
-    cross_contamination: Mapped[str | None] = mapped_column(String(500))  # 교차오염 문구
-    source: Mapped[str | None] = mapped_column(String(10))  # API / OCR
-    ocr_conf: Mapped[Decimal | None] = mapped_column(Score)
+    raw_ingredients: Mapped[str] = mapped_column(Text, default="")  # 성분표에 있는 그대로
+    ingredients: Mapped[list] = mapped_column(JSON, default=list)  # 성분을 나눈 목록
+    allergen_notice: Mapped[str | None] = mapped_column(String(500))  # "OO 함유" 문구
+    cross_contamination: Mapped[str | None] = mapped_column(String(500))  # "같은 제조시설" 문구
+    # pending : OCR 로 처음 저장됨, 아직 확인 전
+    # verified: HACCP 에서 왔거나, OCR 결과가 다시 일치해서 확인됨
+    # invalid : 잘못된 걸로 판명됨, 캐시로 쓰지 않음
+    status: Mapped[str | None] = mapped_column(String(10))
+    verify_count: Mapped[int | None] = mapped_column(SmallInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -409,22 +456,104 @@ class TurnIngredient(Base):
     turn_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("session_turn.turn_id", ondelete="CASCADE"), primary_key=True
     )
-    barcode: Mapped[str | None] = mapped_column(
-        String(20), ForeignKey("product.barcode"), index=True
-    )
-    source: Mapped[str | None] = mapped_column(String(10))  # CACHE / API / OCR
+    barcode: Mapped[str] = mapped_column(String(20), ForeignKey("product.barcode"), index=True)
+    source: Mapped[str | None] = mapped_column(String(10))  # 출처: CACHE / API / OCR
     verdict: Mapped[str | None] = mapped_column(String(10), index=True)  # 위험 / 주의 / 안전
-    matched: Mapped[list] = mapped_column(JSON, default=list)  # 걸린 성분 표기
-    normalized: Mapped[list] = mapped_column(JSON, default=list)  # 정규화된 알레르겐
+    matched: Mapped[list] = mapped_column(JSON, default=list)  # 걸린 이유(성분 표기)
+    normalized: Mapped[list] = mapped_column(JSON, default=list)  # 정규화된 성분 목록
     ocr_conf: Mapped[Decimal | None] = mapped_column(Score)
-    retry_count: Mapped[int] = mapped_column(SmallInteger, default=0)
+    retry_count: Mapped[int] = mapped_column(SmallInteger, default=0)  # 최대 시도 한계 설정용
     response_text: Mapped[str | None] = mapped_column(Text)
-    ocr_ms: Mapped[int | None] = mapped_column(Integer)
+    ocr_ms: Mapped[int | None] = mapped_column(Integer)  # 최대 지연 한계 설정용
     match_ms: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     turn: Mapped[SessionTurn] = relationship(back_populates="ingredient")
-    product: Mapped[Product | None] = relationship(back_populates="judgements")
+    product: Mapped[Product] = relationship(back_populates="judgements")
+
+
+# ==========================================================================
+# ③④ 소지품 재인식 · 개인 기억  (담당: 문태현)
+# ==========================================================================
+
+
+class Belonging(Base):
+    """사용자가 등록한 내 물건 하나. "내 가방 어디 있어?"의 대상."""
+
+    __tablename__ = "belonging"
+
+    belonging_id: Mapped[int] = mapped_column(BigPK, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str | None] = mapped_column(String(100))
+    description: Mapped[str | None] = mapped_column(Text)  # 특징 설명
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    user: Mapped[User] = relationship(back_populates="belongings")
+    images: Mapped[list[BelongingImage]] = relationship(
+        back_populates="belonging", cascade="all, delete-orphan"
+    )
+    observations: Mapped[list[Observation]] = relationship(back_populates="belonging")
+
+
+class BelongingImage(Base):
+    """내 물건의 등록 사진 한 장과 그 이미지 임베딩.
+
+    같은 물건을 여러 각도에서 여러 장 등록해야 재인식이 된다.
+    한 장만 있으면 조명이나 각도가 바뀌는 순간 못 찾는다.
+    """
+
+    __tablename__ = "belonging_image"
+
+    belonging_image_id: Mapped[int] = mapped_column(BigPK, primary_key=True)
+    belonging_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("belonging.belonging_id", ondelete="CASCADE"), index=True
+    )
+    image_path: Mapped[str | None] = mapped_column(String(500))
+    # CLIP 이미지 임베딩(512차원).
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(512))
+    embed_model: Mapped[str | None] = mapped_column(String(50))
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    belonging: Mapped[Belonging] = relationship(back_populates="images")
+
+
+class Observation(Base):
+    """과거에 본 장면 하나. "아까 본 그거"를 찾을 때 검색하는 기록."""
+
+    __tablename__ = "observation"
+
+    observation_id: Mapped[int] = mapped_column(BigPK, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), index=True
+    )
+    turn_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("session_turn.turn_id", ondelete="CASCADE"), index=True
+    )
+    # CLIP 임베딩으로 내 물건을 알아봤을 때만 연결한다. 못 알아보면 NULL.
+    belonging_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("belonging.belonging_id", ondelete="SET NULL"), index=True
+    )
+    description: Mapped[str | None] = mapped_column(Text)  # 장면 설명
+    place: Mapped[str | None] = mapped_column(String(100))
+    # 장면 설명의 텍스트 임베딩(text-embedding-3-small, 1536차원).
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(1536))
+    embed_model: Mapped[str | None] = mapped_column(String(50))
+    observed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    user: Mapped[User] = relationship(back_populates="observations")
+    turn: Mapped[SessionTurn] = relationship(back_populates="observations")
+    belonging: Mapped[Belonging | None] = relationship(back_populates="observations")
 
 
 # ==========================================================================
@@ -487,10 +616,14 @@ __all__ = [
     "UserAllergen",
     "ChatSession",
     "SessionTurn",
+    "TurnVoice",
     "TurnInference",
     "TurnCandidate",
     "Product",
     "TurnIngredient",
+    "Belonging",
+    "BelongingImage",
+    "Observation",
     "EvalRun",
     "EvalSample",
 ]

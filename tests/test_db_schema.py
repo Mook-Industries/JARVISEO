@@ -13,10 +13,14 @@ Postgres 에서만 터지는 문제(타입 불일치 등)는 여기서 안 잡�
 import pytest
 
 from jarviseo.memory.models import (
+    Belonging,
+    BelongingImage,
     ChatSession,
+    Observation,
     SessionTurn,
     TurnCandidate,
     TurnInference,
+    TurnVoice,
     User,
     UserAllergen,
 )
@@ -47,7 +51,7 @@ def test_테이블이_전부_만들어진다(store: MemoryStore):
     from sqlalchemy import inspect
 
     tables = set(inspect(store.engine).get_table_names())
-    # 팀 ERD(JARVISEO-v5)의 13개 테이블
+    # 팀 ERD(ERDCloud JARVISEO)의 17개 테이블
     expected = {
         "users",
         "user_setting",
@@ -56,15 +60,18 @@ def test_테이블이_전부_만들어진다(store: MemoryStore):
         "user_allergen",
         "chat_session",
         "session_turn",
+        "turn_voice",
         "turn_inference",
         "turn_candidate",
         "product",
         "turn_ingredient",
         "eval_run",
         "eval_sample",
+        "belonging",
+        "belonging_image",
+        "observation",
     }
-    missing = expected - tables
-    assert not missing, f"만들어지지 않은 테이블: {missing}"
+    assert tables == expected, f"빠진 것: {expected - tables} / ERD 에 없는 것: {tables - expected}"
 
 
 def test_사용자와_알레르기(store: MemoryStore):
@@ -151,18 +158,24 @@ def test_대화_한_건을_기록한다(store: MemoryStore):
         turn = db.get(SessionTurn, turn_id)
         assert turn.question_text == "저거 뭐야?"
         assert turn.answer_text.startswith("저 가방")
-        assert turn.turn_no == 1
         assert turn.trigger_type == "WAKEWORD"
+        # 전체 지연은 session_turn 에 남는다
+        assert turn.total_ms == 1205
+
+        # 음성 쪽은 turn_voice 로 떨어진다
+        voice = db.get(TurnVoice, turn_id)
+        assert voice is not None
+        assert voice.stt_raw_text == "저거 뭐야?"
+        assert voice.stt_ms == 120
+        assert voice.tts_ms == 210
 
         inf = turn.inference
         assert inf is not None
         assert inf.target_label == "backpack"
         assert inf.pointing_variant == "v2"
         # 단계 이름이 ERD 의 열 이름으로 옮겨졌는지 (detect→vision, vlm→llm)
-        assert inf.stt_ms == 120
         assert inf.vision_ms == 45
         assert inf.llm_ms == 830
-        assert inf.total_ms == 1205
         # 프레임 선택이 발화 시작에서 얼마나 벌어졌는지가 남아야 한다
         assert inf.frame_offset_ms == 100
         assert float(inf.blur_score) == pytest.approx(142.5)
@@ -212,7 +225,7 @@ def test_지연_백분위(store: MemoryStore):
 
     with store.session() as db:
         for i in range(1, 101):
-            turn = SessionTurn(session_id=session_id, turn_no=i, question_text="x")
+            turn = SessionTurn(session_id=session_id, question_text="x", total_ms=i)
             db.add(turn)
             db.flush()
             db.add(TurnInference(turn_id=turn.turn_id, llm_ms=i))
@@ -222,6 +235,9 @@ def test_지연_백분위(store: MemoryStore):
     assert stats["count"] == 100
     assert 49 <= stats["p50"] <= 52
     assert 94 <= stats["p95"] <= 97
+
+    # session_turn 에 있는 전체 지연도 같은 방식으로 집계된다
+    assert store.latency_percentiles("total", session_id=session_id)["count"] == 100
 
     # 기록이 없는 단계는 0 을 돌려준다. 예외를 던지면 대시보드가 깨진다.
     assert store.latency_percentiles("없는단계") == {"p50": 0.0, "p95": 0.0, "count": 0}
@@ -239,3 +255,40 @@ def test_사용자를_지우면_딸린_기록도_지워진다(store: MemoryStore
     with store.session() as db:
         assert db.query(UserAllergen).count() == 0
         assert db.query(ChatSession).count() == 0
+
+
+def test_소지품과_관찰_기록에_임베딩이_남는다(store: MemoryStore):
+    """③④ 기능의 테이블. 임베딩은 같은 행의 VECTOR 열에 둔다."""
+    user_id = store.ensure_user()
+    session_id = store.start_session(user_id)
+    utterance, response = _sample_response()
+    turn_id = store.log_turn(session_id, utterance, response)
+
+    with store.session() as db:
+        bag = Belonging(user_id=user_id, name="검은 백팩")
+        db.add(bag)
+        db.flush()
+        db.add(BelongingImage(belonging_id=bag.belonging_id, embedding=[0.1] * 512))
+        db.add(
+            Observation(
+                user_id=user_id,
+                turn_id=turn_id,
+                belonging_id=bag.belonging_id,
+                description="책상 위 검은 백팩",
+                embedding=[0.2] * 1536,
+            )
+        )
+
+    with store.session() as db:
+        image = db.query(BelongingImage).one()
+        assert len(image.embedding) == 512
+        obs = db.query(Observation).one()
+        assert len(obs.embedding) == 1536
+        assert obs.belonging.name == "검은 백팩"
+
+    # 사용자를 지우면 소지품·관찰 기록도 같이 지워진다
+    with store.session() as db:
+        db.delete(db.get(User, user_id))
+    with store.session() as db:
+        assert db.query(Belonging).count() == 0
+        assert db.query(Observation).count() == 0

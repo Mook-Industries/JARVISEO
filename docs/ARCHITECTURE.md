@@ -148,7 +148,7 @@ src/jarviseo/
 ├── pointing/         ① 지시 대상 특정                    최홍묵
 ├── nutrition/        ② 식품 성분 판정                    권용현
 ├── memory/           DB + ③④ 소지품·기억
-│   ├── models.py       테이블 13개 정의                  ✅ 구현됨
+│   ├── models.py       테이블 17개 정의                  ✅ 구현됨
 │   ├── store.py        DB 읽고 쓰기                      ✅ 구현됨
 │   └── vector.py       pgvector 벡터 검색                문태현
 ├── voice/            웨이크워드·STT·TTS                  문태현
@@ -262,39 +262,41 @@ python scripts/spike/spike_01_capture.py
 
 ---
 
-## 5. DB — 테이블 13개
+## 5. DB — 테이블 17개
 
-원본은 ERDCloud `JARVISEO-v6`이고, 사람이 읽는 사본은 `docs/ERD.md`다. **셋(ERDCloud·ERD.md·코드)이 어긋나면 ERDCloud가 맞다.**
+원본은 ERDCloud `JARVISEO`이고, 사람이 읽는 사본은 `docs/ERD.md`다. **셋(ERDCloud·ERD.md·코드)이 어긋나면 ERDCloud가 맞다.**
 
 코드로는 SQLAlchemy ORM(파이썬 클래스 하나 = 테이블 하나로 매핑해 주는 도구. 자바의 JPA와 같은 역할)을 쓴다. `models.py`의 클래스 하나가 테이블 하나다.
 
-### 다섯 무리
+### 여섯 무리
 
 | 무리 | 테이블 | 담당 |
 |---|---|---|
 | 사용자 | `users`, `user_setting`, `allergen`, `ingredient_synonym`, `user_allergen` | 공용 / 권용현 |
-| 대화 | `chat_session`, `session_turn` | 공용 |
+| 대화 | `chat_session`, `session_turn`, `turn_voice` | 공용 / 음성은 문태현 |
 | ① 가리킴 | `turn_inference`, `turn_candidate` | 최홍묵 |
 | ② 성분 | `product`, `turn_ingredient` | 권용현 |
+| ③④ 소지품·기억 | `belonging`, `belonging_image`, `observation` | 문태현 |
 | 평가 | `eval_run`, `eval_sample` | 최홍묵 |
 
 ### 가장 중요한 건 `session_turn`
 
 **질문 1번 = 1행**이다. "자비서, 저거 뭐야?"부터 음성 답까지가 한 줄이다. 다른 테이블은 거의 다 이 행에 매달린다.
 
-`store.log_turn()`이 질문 1번을 **세 테이블에 한꺼번에** 나눠 쓴다.
+`store.log_turn()`이 질문 1번을 **네 테이블에 한꺼번에** 나눠 쓴다.
 
 ```
-session_turn     질문·답·사진 경로          ← 1행
-turn_inference   가리킴 결과·단계별 지연    ← 1행 (turn_id를 그대로 PK로 씀)
-turn_candidate   후보 물체들                ← 후보 수만큼
+session_turn     질문·답·사진 경로·전체 지연   ← 1행
+turn_voice       STT 원문·음성 지연            ← 1행 (turn_id를 그대로 PK로 씀)
+turn_inference   가리킴 결과·추론 지연         ← 1행 (turn_id를 그대로 PK로 씀)
+turn_candidate   후보 물체들                   ← 후보 수만큼
 ```
 
-세 테이블을 **하나의 트랜잭션**(전부 성공하거나 전부 취소되는 묶음)으로 쓴다. 중간에 실패해서 "질문은 있는데 추론 결과가 없는" 반쪽 기록이 남는 것을 막기 위해서다.
+네 테이블을 **하나의 트랜잭션**(전부 성공하거나 전부 취소되는 묶음)으로 쓴다. 중간에 실패해서 "질문은 있는데 추론 결과가 없는" 반쪽 기록이 남는 것을 막기 위해서다.
 
 ### 설계에서 눈여겨볼 선택들
 
-- **지연 시간을 열로 저장한다.** `turn_inference`에 `stt_ms`, `vision_ms`, `llm_ms`, `tts_ms`, `total_ms`가 열로 있다. 한 질문을 한 행으로 읽는 편이 대시보드 질의가 단순하기 때문이다.
+- **지연 시간을 열로 저장한다.** 음성은 `turn_voice`(`stt_ms`, `tts_ms`), 추론은 `turn_inference`(`route_ms`, `vision_ms`, `llm_ms`), 전체는 `session_turn.total_ms`에 열로 있다. 행으로 쌓는 것보다 대시보드 질의가 단순하다.
 - **후보마다 단서별 점수를 남긴다.** `turn_candidate.cue_scores`에 `{"point": 0.82, "lang": 0.55, ...}`가 들어간다. 합계만 있으면 "왜 틀렸는지"를 되짚을 수 없다.
 - **알레르기는 지우지 않고 지운 시각만 적는다**(소프트 삭제). `user_allergen.deleted_at`이다. 그래야 "그때는 우유 알레르기가 등록돼 있었다"를 나중에 설명할 수 있다.
 - **사진은 질문 시점 1장만, 파일 경로로 저장한다.** 영상을 저장하면 개인정보 문제가 생기고 DB도 금방 무거워진다.
@@ -378,7 +380,7 @@ ruff check . && ruff format --check . && pytest -q
 4. ~~`docs/README.md`의 "코드가 먼저" 규칙~~ → 정리됨.
 5. ~~**`store.log_turn()`의 `resolved_by` 판정**~~ → **고침**(10/2). 되물은 턴은 `NULL`, 되묻기에 대한 대답 턴(`CLARIFY_REPLY`)은 `USER`, 나머지는 `MODEL`로 적는다.
 6. ~~**되묻기 기준값이 두 군데 있다.**~~ → **고침**(10/2). `resolve_target()`의 기본값이 `config.CLARIFY_MARGIN_THRESHOLD`를 그대로 쓴다.
-7. **ERD에 새로 생긴 테이블이 코드에 없다.** 벡터 검색은 **pgvector로 확정**(10/2)했고, ERDCloud에는 `belonging` · `belonging_image` · `observation`이 들어갔다. 하지만 `models.py`와 `docs/ERD.md` 사본에는 아직 없다. 실행 장비·입력원 열은 여전히 없어서 당분간 `eval_run.metrics`에 같이 적는다.
+7. ~~**ERD에 새로 생긴 테이블이 코드에 없다.**~~ → **반영함**(10/2). 벡터 검색은 pgvector로 확정하고, `turn_voice` · `belonging` · `belonging_image` · `observation`을 `models.py`와 `docs/ERD.md`에 넣었다. 실행 장비·입력원 열은 여전히 없어서 당분간 `eval_run.metrics`에 같이 적는다.
 
 ---
 
