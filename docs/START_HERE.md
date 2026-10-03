@@ -40,7 +40,7 @@ python -c "import jarviseo, cv2; print('OK')"
 > `pip install -e .` 는 **우리 코드를 파이썬이 찾을 수 있게 등록**하는 겁니다.
 > 이게 없으면 `import jarviseo` 가 안 됩니다. 한 번만 하면 됩니다.
 
-`.env` 를 열어 `JARVISEO_LLM_API_KEY` 를 채웁니다. 키는 팀 채널에서 공유받습니다.
+`.env` 를 열어 `OPENAI_API_KEY` 를 채웁니다. 키는 팀 채널에서 공유받습니다.
 **`.env` 는 절대 커밋하지 않습니다.**
 
 > **conda 를 쓰는 사람은** 위의 venv 두 줄 대신 이걸 쓰세요. 나머지는 같습니다.
