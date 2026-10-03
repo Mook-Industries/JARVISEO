@@ -117,7 +117,7 @@ python -c "from jarviseo.memory import MemoryStore; MemoryStore().init_schema()"
 cp .env.example .env
 ```
 
-`.env` 를 열어 `JARVISEO_LLM_API_KEY` 를 채운다. 키는 팀 채널에서 공유받는다.
+`.env` 를 열어 `OPENAI_API_KEY` 를 채운다. 키는 팀 채널에서 공유받는다.
 **`.env` 는 절대 커밋하지 않는다.**
 
 카메라 없이 개발하려면 입력원을 바꾼다.
