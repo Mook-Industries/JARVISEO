@@ -14,7 +14,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import sessionmaker
 
@@ -26,6 +26,7 @@ from jarviseo.memory.models import (
     SessionTurn,
     TurnCandidate,
     TurnInference,
+    TurnVoice,
     User,
     UserAllergen,
 )
@@ -34,19 +35,21 @@ from jarviseo.types import AssistantResponse, Utterance
 __all__ = ["MemoryStore", "STAGE_COLUMNS"]
 
 
-# 파이프라인이 넘겨주는 단계 이름 → turn_inference 의 열 이름.
+# 파이프라인이 넘겨주는 단계 이름 → 그 지연을 담는 열.
 # 두 이름을 모두 받는 이유는, 그래프 노드가 쓰는 말("detect", "vlm")과
 # ERD 의 열 이름("vision_ms", "llm_ms")이 다르기 때문이다.
-STAGE_COLUMNS: dict[str, str] = {
-    "stt": "stt_ms",
-    "route": "route_ms",
-    "router": "route_ms",
-    "detect": "vision_ms",
-    "vision": "vision_ms",
-    "vlm": "llm_ms",
-    "llm": "llm_ms",
-    "tts": "tts_ms",
-    "total": "total_ms",
+# ERD 에서 지연 열이 세 테이블에 나뉘어 있다. 음성은 turn_voice,
+# 추론은 turn_inference, 전체는 session_turn 이다.
+STAGE_COLUMNS = {
+    "stt": TurnVoice.stt_ms,
+    "route": TurnInference.route_ms,
+    "router": TurnInference.route_ms,
+    "detect": TurnInference.vision_ms,
+    "vision": TurnInference.vision_ms,
+    "vlm": TurnInference.llm_ms,
+    "llm": TurnInference.llm_ms,
+    "tts": TurnVoice.tts_ms,
+    "total": SessionTurn.total_ms,
 }
 
 
@@ -77,7 +80,13 @@ class MemoryStore:
         스키마를 **바꿀 때는 이것만으로 부족하다.** create_all 은 없는 테이블만
         만들고 기존 테이블의 열은 건드리지 않는다. 열을 추가·변경하려면
         DB 를 지우고 다시 만들거나(개발 중에는 이게 빠르다) Alembic 을 붙여야 한다.
+
+        Postgres 면 pgvector 확장부터 켠다. 이게 없으면 ``VECTOR`` 열이 있는
+        테이블을 만들 때 ``type "vector" does not exist`` 로 실패한다.
         """
+        if self.engine.dialect.name == "postgresql":
+            with self.engine.begin() as conn:
+                conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         Base.metadata.create_all(self.engine)
 
     def drop_all(self) -> None:
@@ -215,34 +224,24 @@ class MemoryStore:
     ) -> int:
         """대화 한 번을 기록하고 turn_id 를 반환한다.
 
-        한 턴이 세 테이블에 나뉘어 들어간다.
-        ``session_turn`` (질문·응답) / ``turn_inference`` (판정·지연) /
-        ``turn_candidate`` (후보 목록). 한 트랜잭션 안에서 같이 써야
-        "턴은 있는데 추론 결과가 없는" 반쪽 기록이 남지 않는다.
+        한 턴이 네 테이블에 나뉘어 들어간다.
+        ``session_turn`` (질문·응답·전체 지연) / ``turn_voice`` (STT·TTS) /
+        ``turn_inference`` (판정·지연) / ``turn_candidate`` (후보 목록).
+        한 트랜잭션 안에서 같이 써야 "턴은 있는데 추론 결과가 없는"
+        반쪽 기록이 남지 않는다.
         """
         with self.session() as db:
-            turn_no = (
-                db.scalar(
-                    select(func.count(SessionTurn.turn_id)).where(
-                        SessionTurn.session_id == session_id
-                    )
-                )
-                or 0
-            ) + 1
-
             turn = SessionTurn(
                 session_id=session_id,
-                turn_no=turn_no,
                 trigger_type=trigger_type,
                 question_text=utterance.text,
                 answer_text=response.text,
                 image_path=image_path,
-                stt_raw_text=utterance.text,
-                stt_confidence=utterance.confidence,
             )
             db.add(turn)
             db.flush()
 
+            voice = TurnVoice(turn_id=turn.turn_id, stt_raw_text=utterance.text)
             inference = TurnInference(
                 turn_id=turn.turn_id,
                 is_reask=response.needs_clarify,
@@ -258,12 +257,14 @@ class MemoryStore:
                 # 잘라내지 않고 반올림한다. 0.1초가 99ms 로 기록되면 측정값이 아니라 버그다.
                 inference.frame_offset_ms = round((frame.timestamp - utterance.started_at) * 1000)
 
+            # 열이 속한 테이블의 행에 지연을 적는다.
+            row_by_table = {"session_turn": turn, "turn_voice": voice, "turn_inference": inference}
             for stage, ms in (response.latency_ms or {}).items():
                 column = STAGE_COLUMNS.get(stage)
                 if column is not None:
-                    setattr(inference, column, round(ms))
-            if inference.total_ms is None and response.latency_ms:
-                inference.total_ms = round(sum(response.latency_ms.values()))
+                    setattr(row_by_table[column.class_.__tablename__], column.key, round(ms))
+            if turn.total_ms is None and response.latency_ms:
+                turn.total_ms = round(sum(response.latency_ms.values()))
 
             target = response.target
             if target is not None:
@@ -301,6 +302,7 @@ class MemoryStore:
                         )
                     )
 
+            db.add(voice)
             db.add(inference)
             return turn.turn_id
 
@@ -321,15 +323,17 @@ class MemoryStore:
             {"p50": ..., "p95": ..., "count": ...}. 기록이 없으면 전부 0.
         """
         empty = {"p50": 0.0, "p95": 0.0, "count": 0}
-        column_name = STAGE_COLUMNS.get(stage)
-        if column_name is None:
+        column = STAGE_COLUMNS.get(stage)
+        if column is None:
             return empty
 
-        column = getattr(TurnInference, column_name)
+        model = column.class_
         with self.session() as db:
             stmt = select(column).where(column.is_not(None))
             if session_id is not None:
-                stmt = stmt.join(SessionTurn).where(SessionTurn.session_id == session_id)
+                if model is not SessionTurn:
+                    stmt = stmt.join(SessionTurn, SessionTurn.turn_id == model.turn_id)
+                stmt = stmt.where(SessionTurn.session_id == session_id)
             values = sorted(float(v) for v in db.scalars(stmt))
 
         if not values:
