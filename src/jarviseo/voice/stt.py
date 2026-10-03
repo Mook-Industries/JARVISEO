@@ -1,43 +1,26 @@
-"""음성 인식 (STT).  담당: 문태현
+"""받아쓰기 (STT).  담당: 문태현
 
-OpenAI STT API 로 받아쓴다. 호출어 뒤의 발화만 보내고, 상시 듣는 것은
-웨이크워드(로컬)뿐이다. 지연이 너무 크면 faster-whisper(로컬)로 바꾸는 것을
-검토한다. 그래서 바깥에서는 이 클래스만 부르고 어느 쪽인지 몰라도 되게 둔다.
+호출어 뒤의 발화 한 번만 OpenAI 받아쓰기 API 로 보낸다.
+상시 듣는 호출어 감지는 로컬(``wakeword.py``)에 남는다.
 
-started_at 이 핵심이다
-----------------------
-알려진 함정: 발화가 끝난 뒤에 프레임을 캡처하면 이미 고개가 돌아가서
-엉뚱한 장면이 잡힌다. 그래서 VAD 가 발화 '시작' 시각을 반환해야 하고,
-그 시각으로 FrameBuffer 에서 프레임을 고른다.
+모델 이름은 이 파일에 적지 않는다. ``config.STT_MODEL``
+(``.env`` 의 ``JARVISEO_STT_MODEL``) 하나만 본다.
 
-Utterance.started_at 을 대충 채우면 이 함정이 그대로 살아난다.
+녹음 · VAD · 받아쓰기는 스파이크 02 결과를 보고 다음 이슈에서 채운다.
+그때도 결과에서 가장 중요한 값은 글자가 아니라 ``Utterance.started_at``
+(말을 시작한 시각)이다. 프레임을 이 시각 기준으로 고른다.
 """
 
 from __future__ import annotations
 
-import numpy as np
-
-from jarviseo.types import Utterance
+from jarviseo import config
 
 __all__ = ["SpeechToText"]
 
 
 class SpeechToText:
-    """녹음된 오디오를 글자로 바꾼다."""
+    """녹음된 발화를 글자로 바꾼다."""
 
-    def __init__(self, model_name: str = "gpt-4o-mini-transcribe", language: str = "ko") -> None:
-        self.model_name = model_name
+    def __init__(self, model: str = config.STT_MODEL, language: str = "ko") -> None:
+        self.model = model
         self.language = language
-        raise NotImplementedError
-
-    def listen(self, timeout: float = 5.0) -> Utterance | None:
-        """웨이크워드 이후 사용자 발화를 듣고 받아쓴다.
-
-        VAD 로 발화 시작·끝을 잡고, started_at 에 **시작** 시각을 넣는다.
-        timeout 안에 말이 없으면 None.
-        """
-        raise NotImplementedError
-
-    def transcribe(self, audio: np.ndarray, started_at: float) -> Utterance:
-        """이미 녹음된 오디오를 받아쓴다. 테스트·재현용."""
-        raise NotImplementedError
