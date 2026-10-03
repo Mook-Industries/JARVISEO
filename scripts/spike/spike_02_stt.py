@@ -1,8 +1,9 @@
-"""스파이크 2 — 마이크 → VAD, 발화 시작 시각 출력.  담당: 문태현
+"""스파이크 2 — 마이크 → VAD → STT, 발화 시작 시각 출력.  담당: 문태현
 
 확인할 것:
   1. sounddevice 로 마이크가 열리는가 (윈도우에서도)
   2. 발화 '시작' 시각을 잡을 수 있는가  <- 이게 제일 중요하다
+  3. 한국어가 받아써지는가, 왕복 몇 ms 걸리는가
 
 VAD 는 소리 크기(RMS) 문턱값 방식이다. 처음 0.5초로 잡음 크기를 재고, 30ms 블록이
 그 3배를 넘으면 말 시작, 0.8초 조용하면 말 끝으로 본다.
@@ -13,11 +14,16 @@ VAD 는 소리 크기(RMS) 문턱값 방식이다. 처음 0.5초로 잡음 크�
     python scripts/spike/spike_02_stt.py 2    # 2번 장치 (번호는 tools/device_check/mic_test.py)
 """
 
+import io
 import sys
 import time
 
 import numpy as np
 import sounddevice as sd
+import soundfile as sf
+from openai import OpenAI
+
+from jarviseo import config
 
 SR, BLOCK = 16000, 480  # 30ms 블록
 CALIB_SEC, SILENCE_SEC, MAX_SEC = 0.5, 0.8, 10
@@ -54,6 +60,17 @@ def main() -> None:
     print(f"started_at {started_at:.3f}  녹음 +{s0 / SR:.2f}s, 오차 {(s0 - onset) / 16:+.0f}ms")
     print(f"  입력 지연 {latency * 1000:.0f}ms 는 장치가 알려준 값으로 이미 뺐다")
     print(f"ended_at   {ended_at:.3f}  끝 시각으로 프레임을 고르면 {(s1 - s0) / SR:.2f}s 늦다")
+
+    wav = io.BytesIO()
+    sf.write(wav, audio[lo : s1 + SR // 5], SR, format="WAV", subtype="PCM_16")
+    client = OpenAI(api_key=config.OPENAI_API_KEY)
+    sent_at = time.monotonic()
+    text = client.audio.transcriptions.create(
+        model=config.STT_MODEL, file=("speech.wav", wav.getvalue()), language="ko"
+    ).text
+    done = time.monotonic()
+    print(f"[{config.STT_MODEL}] {text}")
+    print(f"STT 왕복 {(done - sent_at) * 1000:.0f}ms, 말 끝→글자 {(done - ended_at) * 1000:.0f}ms")
 
 
 if __name__ == "__main__":
