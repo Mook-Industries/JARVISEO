@@ -85,7 +85,11 @@ ENABLE_RECALL = _get_bool("JARVISEO_ENABLE_RECALL", False)
 # --- 외부 API -------------------------------------------------------------
 # 팀 공용 OpenAI 키 1개를 STT · VLM · TTS 가 함께 쓴다. 월 사용 한도 설정 필수.
 LLM_API_KEY = _get("JARVISEO_LLM_API_KEY")
+# 모델 이름은 여기서만 정한다. 모듈마다 기본값을 따로 적어두면 결정이 바뀔 때
+# 한쪽만 고쳐져서 어긋난다.
 VLM_MODEL = _get("JARVISEO_VLM_MODEL", "gpt-6-sol")
+STT_MODEL = _get("JARVISEO_STT_MODEL", "gpt-transcribe")
+TTS_MODEL = _get("JARVISEO_TTS_MODEL", "gpt-4o-mini-tts")
 
 # --- 관계형 DB (Postgres) -------------------------------------------------
 # docker compose 로 띄운 Postgres 에 붙는다.
