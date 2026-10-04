@@ -16,7 +16,8 @@
 실제 구현이 들어오면 `SpeechToText`, `TextToSpeech` 로 바꿔 끼운다. 메서드 모양은 같다.
 
 `listen()` 은 정리한 질문을 돌려주고, 원문은 `last_raw_text`, 받아쓰기 왕복 시간(ms)은
-`last_latency_ms` 에 남긴다. 그래프는 이 둘을 `log_turn` 의 `stt_raw_text`, `latency_ms["stt"]` 로 넘긴다.
+`last_latency_ms` 에 남긴다. 그래프는 원문을 `log_turn(..., stt_raw_text=...)` 로,
+왕복 시간을 응답의 `latency_ms["stt"]` 로 넘긴다.
 
 모델 이름은 `config.py` 에서만 정한다. 지금은 STT `gpt-transcribe`, TTS `gpt-4o-mini-tts`
 (`.env` 의 `JARVISEO_STT_MODEL`, `JARVISEO_TTS_MODEL`).

@@ -151,7 +151,12 @@ def test_대화_한_건을_기록한다(store: MemoryStore):
     utterance, response = _sample_response()
 
     turn_id = store.log_turn(
-        session_id, utterance, response, image_path="data/x.jpg", pointing_variant="v2"
+        session_id,
+        utterance,
+        response,
+        image_path="data/x.jpg",
+        pointing_variant="v2",
+        stt_raw_text="자비서, 저거 뭐야?",
     )
 
     with store.session() as db:
@@ -165,7 +170,8 @@ def test_대화_한_건을_기록한다(store: MemoryStore):
         # 음성 쪽은 turn_voice 로 떨어진다
         voice = db.get(TurnVoice, turn_id)
         assert voice is not None
-        assert voice.stt_raw_text == "저거 뭐야?"
+        # 원문은 호출어를 빼기 전 그대로, 질문은 정리된 글자로 남는다
+        assert voice.stt_raw_text == "자비서, 저거 뭐야?"
         assert voice.stt_ms == 120
         assert voice.tts_ms == 210
 
