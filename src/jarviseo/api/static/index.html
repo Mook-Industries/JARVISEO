@@ -121,7 +121,6 @@
         <svg><use href="#i-menu"/></svg>
       </button>
       <a class="brand" href="#monitor">
-        <svg class="brand-mark"><use href="#i-logo"/></svg>
         <span class="brand-word">JARVISEO</span>
         <span class="brand-sub">자비서</span>
       </a>
@@ -165,41 +164,42 @@
               <h2 class="panel-title">비전 모니터</h2>
               <span class="panel-en">VISION FEED</span>
               <span class="chip">CAM 01</span>
+              <button class="cam-toggle" id="cam-toggle" type="button" hidden>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 3v8"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/>
+                </svg>
+                <span id="cam-toggle-label">카메라 끄기</span>
+              </button>
             </header>
 
-            <div class="feed">
-              <img class="feed-img" src="demo-feed.svg" alt="조리대 위 봉지 세 개 중 가운데 청록색 봉지를 손가락으로 가리키는 시연 장면">
+            <div class="feed" id="feed" data-cam="off">
+              <video class="feed-video" id="feed-video" autoplay muted playsinline></video>
+
+              <!-- 카메라가 꺼져 있거나 쓸 수 없을 때 -->
+              <div class="no-signal" id="no-signal">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 3l18 18"/>
+                  <path d="M10.5 6H14a2 2 0 0 1 2 2v3.5l5-3v9"/>
+                  <path d="M16 16a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h1"/>
+                </svg>
+                <strong>신호 없음</strong>
+                <span id="no-signal-msg">카메라가 연결되지 않았습니다.</span>
+                <button class="cam-btn" id="cam-retry" type="button">카메라 켜기</button>
+              </div>
+
               <div class="feed-hud">
                 <div class="feed-top">
-                  <span class="feed-tag"><i class="dot"></i><span id="feed-tag">DEMO FEED</span></span>
-                  <span class="feed-spec num"><span>1920 × 1080</span><span>30 FPS</span></span>
+                  <span class="feed-tag"><i class="dot"></i><span id="feed-tag">NO SIGNAL</span></span>
+                  <span class="feed-spec num" id="feed-spec"><span>— × —</span><span>— FPS</span></span>
                 </div>
 
                 <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
 
-                <div class="det" style="left:18%;top:22.6%;width:17.8%;height:43.4%">
-                  <span class="det-label">OBJECT&nbsp;&nbsp;0.88</span>
-                </div>
-                <div class="det is-target" id="det-target" style="left:38.9%;top:22%;width:18.1%;height:44%">
-                  <span class="det-label" id="target-label">TARGET LOCKED<b>0.96</b></span>
-                  <i class="crosshair"></i>
-                  <span class="det-caption" id="target-caption">선택한 대상 · 스낵</span>
-                </div>
-                <div class="det" style="left:60%;top:25%;width:19%;height:41%">
-                  <span class="det-label">OBJECT&nbsp;&nbsp;0.84</span>
-                </div>
-
-                <svg class="pointer-line" viewBox="0 0 1600 900" preserveAspectRatio="none" aria-hidden="true">
-                  <line x1="1299" y1="816" x2="866" y2="468" stroke="#5fd9cb" stroke-opacity="0.55" stroke-width="1.6" stroke-dasharray="7 7" vector-effect="non-scaling-stroke"/>
-                  <circle cx="866" cy="468" r="9" fill="#5fd9cb" fill-opacity="0.75"/>
-                  <circle cx="1299" cy="816" r="17" fill="#3b9a93" fill-opacity="0.9"/>
-                </svg>
-
                 <i class="scanline" id="scanline"></i>
 
                 <div class="feed-bottom">
-                  <span>가리킴 추적<em>활성화</em></span>
-                  <span id="det-count">3 OBJECTS DETECTED</span>
+                  <span>카메라<em id="cam-state">꺼짐</em></span>
+                  <span id="cam-name">—</span>
                 </div>
               </div>
             </div>
@@ -219,75 +219,9 @@
             </header>
 
             <div class="core-body">
-              <div class="core-hud" aria-hidden="true">
-                <svg viewBox="0 0 240 240">
-                  <defs>
-                    <radialGradient id="core-glow-g" cx="0.5" cy="0.5" r="0.5">
-                      <stop offset="0" stop-color="#5fd9cb" stop-opacity="0.32"/>
-                      <stop offset="1" stop-color="#5fd9cb" stop-opacity="0"/>
-                    </radialGradient>
-                    <pattern id="core-dots" width="4.6" height="4.6" patternUnits="userSpaceOnUse">
-                      <circle cx="2.3" cy="2.3" r="0.75" fill="#7ff0e2"/>
-                    </pattern>
-                    <radialGradient id="core-shade" cx="0.42" cy="0.38" r="0.62">
-                      <stop offset="0" stop-color="#fff"/>
-                      <stop offset="0.7" stop-color="#fff" stop-opacity="0.45"/>
-                      <stop offset="1" stop-color="#fff" stop-opacity="0.08"/>
-                    </radialGradient>
-                    <mask id="core-mask">
-                      <circle cx="120" cy="120" r="54" fill="url(#core-shade)"/>
-                    </mask>
-                  </defs>
-
-                  <circle class="core-glow" cx="120" cy="120" r="86" fill="url(#core-glow-g)"/>
-
-                  <g class="spin rev">
-                    <circle cx="120" cy="120" r="113" fill="none" stroke="#5fd9cb" stroke-opacity="0.45" stroke-width="7" stroke-dasharray="0.9 2.1"/>
-                  </g>
-                  <circle cx="120" cy="120" r="104" fill="none" stroke="#5fd9cb" stroke-opacity="0.22" stroke-width="0.7"/>
-                  <g class="spin">
-                    <circle cx="120" cy="120" r="97" fill="none" stroke="#5fd9cb" stroke-width="3" stroke-linecap="round" stroke-dasharray="168 74 128 239.5"/>
-                  </g>
-                  <circle cx="120" cy="120" r="90" fill="none" stroke="#5fd9cb" stroke-opacity="0.35" stroke-width="0.8" stroke-dasharray="1 6"/>
-                  <g class="spin fast">
-                    <circle cx="120" cy="120" r="83" fill="none" stroke="#86f3e5" stroke-opacity="0.7" stroke-width="1" stroke-dasharray="70 451.5"/>
-                  </g>
-                  <g stroke="#5fd9cb" stroke-opacity="0.6" stroke-width="1">
-                    <path d="M120 23v8M120 209v8M23 120h8M209 120h8"/>
-                  </g>
-
-                  <circle cx="120" cy="120" r="54" fill="url(#core-dots)" mask="url(#core-mask)"/>
-                  <g fill="none" stroke="#5fd9cb" stroke-width="0.7">
-                    <circle cx="120" cy="120" r="54" stroke-opacity="0.7"/>
-                    <ellipse cx="120" cy="120" rx="36" ry="54" stroke-opacity="0.35"/>
-                    <ellipse cx="120" cy="120" rx="16" ry="54" stroke-opacity="0.3"/>
-                    <ellipse cx="120" cy="120" rx="54" ry="18" stroke-opacity="0.3"/>
-                    <ellipse cx="120" cy="120" rx="54" ry="38" stroke-opacity="0.22"/>
-                  </g>
-
-                  <g class="spin">
-                    <ellipse cx="120" cy="120" rx="76" ry="24" fill="none" stroke="#5fd9cb" stroke-opacity="0.55" stroke-width="0.9" transform="rotate(-32 120 120)"/>
-                    <circle cx="184" cy="80" r="2.4" fill="#86f3e5"/>
-                  </g>
-                  <g class="spin rev">
-                    <ellipse cx="120" cy="120" rx="72" ry="20" fill="none" stroke="#5fd9cb" stroke-opacity="0.4" stroke-width="0.8" transform="rotate(38 120 120)"/>
-                    <circle cx="64" cy="76" r="2" fill="#86f3e5"/>
-                  </g>
-
-                  <g stroke="#86f3e5" stroke-opacity="0.75" stroke-width="0.8" fill="none">
-                    <path d="M96 98L126 88L148 110L140 140L112 150L94 128Z"/>
-                    <path d="M96 98L120 118L148 110M120 118L112 150M120 118L94 128M126 88L120 118L140 140"/>
-                  </g>
-                  <g fill="#bafaf2">
-                    <circle cx="96" cy="98" r="1.8"/>
-                    <circle cx="126" cy="88" r="1.8"/>
-                    <circle cx="148" cy="110" r="1.8"/>
-                    <circle cx="140" cy="140" r="1.8"/>
-                    <circle cx="112" cy="150" r="1.8"/>
-                    <circle cx="94" cy="128" r="1.8"/>
-                    <circle cx="120" cy="118" r="2.6"/>
-                  </g>
-                </svg>
+              <div class="core-hud">
+                <!-- AI 코어 애니메이션. jarviseo.js 의 'AI 코어' 블록이 그린다 -->
+                <canvas id="neural-core" role="img" aria-label="움직이는 자비서 AI 코어"></canvas>
               </div>
               <div class="core-state" id="core-state">READY</div>
               <h3 class="core-title" id="core-title">부르시면, 함께 볼게요.</h3>
@@ -342,19 +276,6 @@
           </article>
         </div>
 
-        <!-- 시연 도크: 상태를 골라 화면 반응을 확인한다 -->
-        <div class="dock" id="dock" role="group" aria-label="시연 상태 선택">
-          <div class="dock-label"><b>INTERACTION DEMO</b>상태를 선택해 보세요</div>
-          <div class="dock-steps">
-            <button class="dock-step" type="button" data-step="idle" aria-pressed="true"><span>01</span>대기</button>
-            <button class="dock-step" type="button" data-step="wake" aria-pressed="false"><span>02</span>호출어 감지</button>
-            <button class="dock-step" type="button" data-step="processing" aria-pressed="false"><span>03</span>처리 중</button>
-            <button class="dock-step" type="button" data-step="response" aria-pressed="false"><span>04</span>응답</button>
-          </div>
-          <button class="play-btn" id="play-btn" type="button">
-            <svg><use href="#i-play"/></svg><span>시연 재생</span>
-          </button>
-        </div>
       </section>
 
       <!-- ====================== 관리자: 성능 리포트 ====================== -->
@@ -616,6 +537,20 @@
         <span>JARVISEO INTERFACE<b>V.01</b></span>
       </footer>
     </main>
+  </div>
+</div>
+
+<!-- 카메라 사용 확인 창 -->
+<div class="cam-modal" id="cam-modal" hidden>
+  <div class="cam-dialog" role="dialog" aria-modal="true" aria-labelledby="cam-modal-title" aria-describedby="cam-modal-desc">
+    <p class="eyebrow">Camera access</p>
+    <h2 id="cam-modal-title">카메라를 켤까요?</h2>
+    <p id="cam-modal-desc">비전 모니터에 실시간 영상을 보여주려면 카메라가 필요합니다.
+      다음 단계에서 브라우저가 한 번 더 권한을 물어봅니다.</p>
+    <div class="cam-actions">
+      <button class="cam-btn is-ghost" id="cam-deny" type="button">나중에</button>
+      <button class="cam-btn" id="cam-allow" type="button">카메라 켜기</button>
+    </div>
   </div>
 </div>
 
