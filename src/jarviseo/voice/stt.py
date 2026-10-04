@@ -64,7 +64,11 @@ class SpeechToText:
     def transcribe(self, audio: np.ndarray, started_at: float, ended_at: float) -> Utterance:
         """이미 녹음된 발화(16kHz 모노 int16)를 받아쓴다. 받아쓴 원문을 그대로 담아 돌려준다."""
         result = self.client.audio.transcriptions.create(
-            model=self.model, file=("speech.wav", _to_wav(audio)), language=self.language
+            model=self.model,
+            file=("speech.wav", _to_wav(audio)),
+            language=self.language,
+            # 힌트가 없으면 호출어 "자비서"가 "자비스"로 받아써졌다(스파이크 02).
+            prompt=config.WAKE_WORD,
         )
         return Utterance(result.text, started_at, ended_at)
 
