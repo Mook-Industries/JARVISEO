@@ -13,7 +13,7 @@ import pytest
 from openai import OpenAIError
 
 from jarviseo import config
-from jarviseo.voice import stt
+from jarviseo.voice import stt, vad
 from jarviseo.voice.mic import SAMPLE_RATE
 from jarviseo.voice.transcript import clean, is_question
 from jarviseo.voice.vad import Speech
@@ -56,7 +56,7 @@ def heard(monkeypatch):
         return Speech(np.zeros(SAMPLE_RATE, np.int16), 100.0, 101.0)
 
     monkeypatch.setattr(stt, "Microphone", Mic)
-    monkeypatch.setattr(stt, "record_speech", record)
+    monkeypatch.setattr(vad, "record_speech", record)
 
 
 def test_transcribe_는_모델·언어·호출어_힌트와_WAV_를_보낸다():
@@ -115,7 +115,7 @@ def test_listen_은_받아쓰기가_실패하면_None_을_준다(heard):
 
 
 def test_listen_은_말이_없으면_API_를_부르지_않는다(heard, monkeypatch):
-    monkeypatch.setattr(stt, "record_speech", lambda *args, **kwargs: None)
+    monkeypatch.setattr(vad, "record_speech", lambda *args, **kwargs: None)
     client = FakeClient()
 
     assert stt.SpeechToText(client=client).listen() is None

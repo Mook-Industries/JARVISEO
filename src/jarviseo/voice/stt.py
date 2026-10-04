@@ -25,7 +25,6 @@ from jarviseo import config
 from jarviseo.types import Utterance
 from jarviseo.voice.mic import SAMPLE_RATE, Microphone
 from jarviseo.voice.transcript import clean, is_question
-from jarviseo.voice.vad import record_speech
 
 if TYPE_CHECKING:
     import numpy as np
@@ -75,6 +74,10 @@ class SpeechToText:
         timeout 초 안에 말이 시작되지 않거나, 받아쓰기가 끝내 실패하거나,
         정리하고 나니 비었거나 너무 짧으면 None.
         """
+        # webrtcvad 는 여기서 읽는다. jarviseo.voice 를 import 만 하는 쪽(Fake 사용)은
+        # 필요 없고, python -m jarviseo.voice.vad 도 미리 읽힌 모듈 경고 없이 돈다.
+        from jarviseo.voice.vad import record_speech
+
         self.last_raw_text = self.last_latency_ms = None
         # 받아쓰는 동안 마이크를 붙잡고 있지 않게, 녹음이 끝나면 바로 닫는다.
         # 호출어 감지와 마이크 하나를 같이 쓰는 것은 웨이크워드 이슈에서 다룬다.
