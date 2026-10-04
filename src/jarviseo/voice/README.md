@@ -7,6 +7,7 @@
 | `wakeword.py` | "자비서" 호출어 감지 | 로컬 (상시) | FAR / FRR |
 | `stt.py` | 호출어 뒤 발화 받아쓰기 | OpenAI STT | — |
 | `tts.py` | 응답 음성 합성 · 재생 | OpenAI TTS | — |
+| `mic.py` | 마이크를 30ms 블록으로 읽고 블록마다 들어온 시각을 붙인다 | 로컬 | — |
 | `fake.py` | 키 없이 쓰는 가짜 STT · TTS (그래프 개발 · CI 용) | 로컬 | — |
 
 그래프에서는 `from jarviseo.voice import FakeSpeechToText, FakeTextToSpeech` 로 먼저 개발하고,
