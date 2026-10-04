@@ -24,7 +24,7 @@ from openai import OpenAI, OpenAIError
 from jarviseo import config
 from jarviseo.types import Utterance
 from jarviseo.voice.mic import SAMPLE_RATE, Microphone
-from jarviseo.voice.transcript import clean
+from jarviseo.voice.transcript import clean, is_question
 from jarviseo.voice.vad import record_speech
 
 if TYPE_CHECKING:
@@ -72,7 +72,8 @@ class SpeechToText:
         """마이크에서 발화 하나를 받아쓰고, 호출어·필러를 뺀 질문을 돌려준다.
 
         말 시작을 잡는 순간 ``on_speech_start(started_at)`` 을 부른다.
-        timeout 초 안에 말이 시작되지 않거나, 받아쓰기가 끝내 실패하면 None.
+        timeout 초 안에 말이 시작되지 않거나, 받아쓰기가 끝내 실패하거나,
+        정리하고 나니 비었거나 너무 짧으면 None.
         """
         self.last_raw_text = self.last_latency_ms = None
         # 받아쓰는 동안 마이크를 붙잡고 있지 않게, 녹음이 끝나면 바로 닫는다.
@@ -87,7 +88,10 @@ class SpeechToText:
             # 말이 없던 것과 같이 다룬다. 그래프는 호출어 대기로 돌아가면 된다.
             log.warning("받아쓰기 실패: %s", e)
             return None
-        return Utterance(clean(raw.text), raw.started_at, raw.ended_at)
+        text = clean(raw.text)
+        if not is_question(text):
+            return None
+        return Utterance(text, raw.started_at, raw.ended_at)
 
     def transcribe(self, audio: np.ndarray, started_at: float, ended_at: float) -> Utterance:
         """이미 녹음된 발화(16kHz 모노 int16)를 받아쓴다. 받아쓴 원문을 그대로 담아 돌려준다."""

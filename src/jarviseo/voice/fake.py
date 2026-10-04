@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING
 
 from jarviseo.types import Utterance
-from jarviseo.voice.transcript import clean
+from jarviseo.voice.transcript import clean, is_question
 
 if TYPE_CHECKING:
     import numpy as np
@@ -28,7 +28,8 @@ __all__ = ["FakeSpeechToText", "FakeTextToSpeech"]
 class FakeSpeechToText:
     """정해 둔 문장을 차례로 돌려준다. 다 쓰면 말이 없는 것(None)으로 친다.
 
-    listen() 은 실제처럼 호출어·필러를 뺀 질문을 준다. 원문은 last_raw_text 에 남는다.
+    listen() 은 실제처럼 호출어·필러를 뺀 질문을 주고, 비었거나 너무 짧으면 None 을 준다.
+    원문은 last_raw_text 에 남는다.
     """
 
     def __init__(self, texts: Iterable[str] = ("자비서, 저거 뭐야?",)) -> None:
@@ -42,11 +43,12 @@ class FakeSpeechToText:
         self.last_raw_text = self.last_latency_ms = None
         if not self._texts:
             return None
-        self.last_raw_text, self.last_latency_ms = self._texts[0], 0.0
+        self.last_raw_text, self.last_latency_ms = self._texts.pop(0), 0.0
         started_at = time.monotonic()
         if on_speech_start is not None:
             on_speech_start(started_at)
-        return Utterance(clean(self._texts.pop(0)), started_at, started_at + 1.0)
+        text = clean(self.last_raw_text)
+        return Utterance(text, started_at, started_at + 1.0) if is_question(text) else None
 
     def transcribe(self, audio: np.ndarray, started_at: float, ended_at: float) -> Utterance:
         self.last_raw_text, self.last_latency_ms = self._texts.pop(0) if self._texts else "", 0.0
