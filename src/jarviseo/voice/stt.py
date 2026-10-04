@@ -24,6 +24,7 @@ from openai import OpenAI, OpenAIError
 from jarviseo import config
 from jarviseo.types import Utterance
 from jarviseo.voice.mic import SAMPLE_RATE, Microphone
+from jarviseo.voice.transcript import clean
 from jarviseo.voice.vad import record_speech
 
 if TYPE_CHECKING:
@@ -61,15 +62,19 @@ class SpeechToText:
         # 마지막 받아쓰기 요청의 왕복 시간(ms). 실패했으면 None.
         # 그래프가 latency_ms["stt"] 로 넘기면 log_turn 이 turn_voice.stt_ms 에 적는다.
         self.last_latency_ms: float | None = None
+        # 마지막 받아쓰기 원문. listen() 은 정리한 질문을 돌려주고, 원문은 여기 남긴다
+        # (turn_voice.stt_raw_text 용).
+        self.last_raw_text: str | None = None
 
     def listen(
         self, on_speech_start: Callable[[float], None] | None = None, timeout: float = 5.0
     ) -> Utterance | None:
-        """마이크에서 발화 하나를 받아쓴다.
+        """마이크에서 발화 하나를 받아쓰고, 호출어·필러를 뺀 질문을 돌려준다.
 
         말 시작을 잡는 순간 ``on_speech_start(started_at)`` 을 부른다.
         timeout 초 안에 말이 시작되지 않거나, 받아쓰기가 끝내 실패하면 None.
         """
+        self.last_raw_text = self.last_latency_ms = None
         # 받아쓰는 동안 마이크를 붙잡고 있지 않게, 녹음이 끝나면 바로 닫는다.
         # 호출어 감지와 마이크 하나를 같이 쓰는 것은 웨이크워드 이슈에서 다룬다.
         with Microphone(self.device) as mic:
@@ -77,11 +82,12 @@ class SpeechToText:
         if speech is None:
             return None
         try:
-            return self.transcribe(speech.audio, speech.started_at, speech.ended_at)
+            raw = self.transcribe(speech.audio, speech.started_at, speech.ended_at)
         except OpenAIError as e:
             # 말이 없던 것과 같이 다룬다. 그래프는 호출어 대기로 돌아가면 된다.
             log.warning("받아쓰기 실패: %s", e)
             return None
+        return Utterance(clean(raw.text), raw.started_at, raw.ended_at)
 
     def transcribe(self, audio: np.ndarray, started_at: float, ended_at: float) -> Utterance:
         """이미 녹음된 발화(16kHz 모노 int16)를 받아쓴다. 받아쓴 원문을 그대로 담아 돌려준다."""
@@ -95,6 +101,7 @@ class SpeechToText:
             prompt=config.WAKE_WORD,
         )
         self.last_latency_ms = (time.monotonic() - sent_at) * 1000
+        self.last_raw_text = result.text
         return Utterance(result.text, started_at, ended_at)
 
 
