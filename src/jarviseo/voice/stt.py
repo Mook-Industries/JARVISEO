@@ -21,14 +21,13 @@ from openai import OpenAI
 
 from jarviseo import config
 from jarviseo.types import Utterance
-from jarviseo.voice.mic import SAMPLE_RATE
+from jarviseo.voice.mic import SAMPLE_RATE, Microphone
+from jarviseo.voice.vad import record_speech
 
 if TYPE_CHECKING:
     import numpy as np
 
 __all__ = ["SpeechToText"]
-
-_TODO = "다음 이슈에서 구현한다. 그때까지는 FakeSpeechToText 를 쓴다."
 
 
 class SpeechToText:
@@ -59,7 +58,13 @@ class SpeechToText:
         말 시작을 잡는 순간 ``on_speech_start(started_at)`` 을 부른다.
         timeout 초 안에 말이 시작되지 않으면 None.
         """
-        raise NotImplementedError(_TODO)
+        # 받아쓰는 동안 마이크를 붙잡고 있지 않게, 녹음이 끝나면 바로 닫는다.
+        # 호출어 감지와 마이크 하나를 같이 쓰는 것은 웨이크워드 이슈에서 다룬다.
+        with Microphone(self.device) as mic:
+            speech = record_speech(mic.blocks(), on_speech_start, timeout=timeout)
+        if speech is None:
+            return None
+        return self.transcribe(speech.audio, speech.started_at, speech.ended_at)
 
     def transcribe(self, audio: np.ndarray, started_at: float, ended_at: float) -> Utterance:
         """이미 녹음된 발화(16kHz 모노 int16)를 받아쓴다. 받아쓴 원문을 그대로 담아 돌려준다."""
