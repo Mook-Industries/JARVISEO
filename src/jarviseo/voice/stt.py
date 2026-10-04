@@ -12,11 +12,16 @@
 
 from __future__ import annotations
 
+import io
+import wave
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from openai import OpenAI
+
 from jarviseo import config
 from jarviseo.types import Utterance
+from jarviseo.voice.mic import SAMPLE_RATE
 
 if TYPE_CHECKING:
     import numpy as np
@@ -30,12 +35,21 @@ class SpeechToText:
     """마이크에서 발화 하나를 받아 글자로 바꾼다."""
 
     def __init__(
-        self, model: str = config.STT_MODEL, language: str = "ko", device: int | None = None
+        self,
+        model: str = config.STT_MODEL,
+        language: str = "ko",
+        device: int | None = None,
+        client: OpenAI | None = None,
     ) -> None:
-        """device 는 sounddevice 입력 장치 번호다. None 이면 기본 마이크."""
+        """device 는 sounddevice 입력 장치 번호다. None 이면 기본 마이크.
+
+        client 는 테스트에서 가짜 API 를 끼울 때만 넘긴다.
+        """
         self.model = model
         self.language = language
         self.device = device
+        # 키가 비어 있으면 None 으로 넘긴다. 그래야 첫 요청이 아니라 여기서 바로 알려 준다.
+        self.client = client or OpenAI(api_key=config.OPENAI_API_KEY or None)
 
     def listen(
         self, on_speech_start: Callable[[float], None] | None = None, timeout: float = 5.0
@@ -48,5 +62,19 @@ class SpeechToText:
         raise NotImplementedError(_TODO)
 
     def transcribe(self, audio: np.ndarray, started_at: float, ended_at: float) -> Utterance:
-        """이미 녹음된 발화(16kHz 모노 int16)를 받아쓴다. 녹음 파일로 재현할 때 쓴다."""
-        raise NotImplementedError(_TODO)
+        """이미 녹음된 발화(16kHz 모노 int16)를 받아쓴다. 받아쓴 원문을 그대로 담아 돌려준다."""
+        result = self.client.audio.transcriptions.create(
+            model=self.model, file=("speech.wav", _to_wav(audio)), language=self.language
+        )
+        return Utterance(result.text, started_at, ended_at)
+
+
+def _to_wav(audio: np.ndarray) -> bytes:
+    """int16 배열을 WAV 로 감싼다. API 는 헤더를 보고 형식과 샘플레이트를 안다."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SAMPLE_RATE)
+        w.writeframes(audio.astype("<i2").tobytes())
+    return buf.getvalue()
