@@ -13,11 +13,12 @@
 from __future__ import annotations
 
 import io
+import logging
 import wave
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 
 from jarviseo import config
 from jarviseo.types import Utterance
@@ -28,6 +29,11 @@ if TYPE_CHECKING:
     import numpy as np
 
 __all__ = ["SpeechToText"]
+
+log = logging.getLogger(__name__)
+
+# 한 번 기다리는 최대 시간(초)과 다시 보내는 횟수. 왕복은 보통 1~2.5초였다(스파이크 02).
+TIMEOUT_SEC, RETRIES = 8.0, 1
 
 
 class SpeechToText:
@@ -48,7 +54,9 @@ class SpeechToText:
         self.language = language
         self.device = device
         # 키가 비어 있으면 None 으로 넘긴다. 그래야 첫 요청이 아니라 여기서 바로 알려 준다.
-        self.client = client or OpenAI(api_key=config.OPENAI_API_KEY or None)
+        self.client = client or OpenAI(
+            api_key=config.OPENAI_API_KEY or None, timeout=TIMEOUT_SEC, max_retries=RETRIES
+        )
 
     def listen(
         self, on_speech_start: Callable[[float], None] | None = None, timeout: float = 5.0
@@ -56,7 +64,7 @@ class SpeechToText:
         """마이크에서 발화 하나를 받아쓴다.
 
         말 시작을 잡는 순간 ``on_speech_start(started_at)`` 을 부른다.
-        timeout 초 안에 말이 시작되지 않으면 None.
+        timeout 초 안에 말이 시작되지 않거나, 받아쓰기가 끝내 실패하면 None.
         """
         # 받아쓰는 동안 마이크를 붙잡고 있지 않게, 녹음이 끝나면 바로 닫는다.
         # 호출어 감지와 마이크 하나를 같이 쓰는 것은 웨이크워드 이슈에서 다룬다.
@@ -64,7 +72,12 @@ class SpeechToText:
             speech = record_speech(mic.blocks(), on_speech_start, timeout=timeout)
         if speech is None:
             return None
-        return self.transcribe(speech.audio, speech.started_at, speech.ended_at)
+        try:
+            return self.transcribe(speech.audio, speech.started_at, speech.ended_at)
+        except OpenAIError as e:
+            # 말이 없던 것과 같이 다룬다. 그래프는 호출어 대기로 돌아가면 된다.
+            log.warning("받아쓰기 실패: %s", e)
+            return None
 
     def transcribe(self, audio: np.ndarray, started_at: float, ended_at: float) -> Utterance:
         """이미 녹음된 발화(16kHz 모노 int16)를 받아쓴다. 받아쓴 원문을 그대로 담아 돌려준다."""
