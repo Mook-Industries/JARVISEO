@@ -20,6 +20,15 @@ def test_fake_의_공개_메서드가_실제와_같다(real, fake):
             assert inspect.signature(getattr(fake, name)) == inspect.signature(method), name
 
 
+def test_fake_stt_도_실제와_같은_결과_속성을_가진다():
+    def last_attrs(obj):
+        return {name for name in vars(obj) if name.startswith("last_")}
+
+    real = SpeechToText(client=object())  # 키 없이 만들려고 가짜 client 를 넘긴다
+
+    assert last_attrs(FakeSpeechToText()) == last_attrs(real)
+
+
 def test_fake_stt_는_돌려주기_전에_시작_콜백을_부른다():
     starts = []
     stt = FakeSpeechToText(["저거 뭐야?"])

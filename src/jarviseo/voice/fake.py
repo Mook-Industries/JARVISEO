@@ -29,18 +29,21 @@ class FakeSpeechToText:
 
     def __init__(self, texts: Iterable[str] = ("자비서, 저거 뭐야?",)) -> None:
         self._texts = list(texts)
+        self.last_latency_ms: float | None = None
 
     def listen(
         self, on_speech_start: Callable[[float], None] | None = None, timeout: float = 5.0
     ) -> Utterance | None:
         if not self._texts:
             return None
+        self.last_latency_ms = 0.0
         started_at = time.monotonic()
         if on_speech_start is not None:
             on_speech_start(started_at)
         return Utterance(self._texts.pop(0), started_at, started_at + 1.0)
 
     def transcribe(self, audio: np.ndarray, started_at: float, ended_at: float) -> Utterance:
+        self.last_latency_ms = 0.0
         return Utterance(self._texts.pop(0) if self._texts else "", started_at, ended_at)
 
 

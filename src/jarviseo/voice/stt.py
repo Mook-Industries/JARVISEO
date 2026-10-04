@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import logging
+import time
 import wave
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -57,6 +58,9 @@ class SpeechToText:
         self.client = client or OpenAI(
             api_key=config.OPENAI_API_KEY or None, timeout=TIMEOUT_SEC, max_retries=RETRIES
         )
+        # 마지막 받아쓰기 요청의 왕복 시간(ms). 실패했으면 None.
+        # 그래프가 latency_ms["stt"] 로 넘기면 log_turn 이 turn_voice.stt_ms 에 적는다.
+        self.last_latency_ms: float | None = None
 
     def listen(
         self, on_speech_start: Callable[[float], None] | None = None, timeout: float = 5.0
@@ -81,6 +85,8 @@ class SpeechToText:
 
     def transcribe(self, audio: np.ndarray, started_at: float, ended_at: float) -> Utterance:
         """이미 녹음된 발화(16kHz 모노 int16)를 받아쓴다. 받아쓴 원문을 그대로 담아 돌려준다."""
+        self.last_latency_ms = None
+        sent_at = time.monotonic()
         result = self.client.audio.transcriptions.create(
             model=self.model,
             file=("speech.wav", _to_wav(audio)),
@@ -88,6 +94,7 @@ class SpeechToText:
             # 힌트가 없으면 호출어 "자비서"가 "자비스"로 받아써졌다(스파이크 02).
             prompt=config.WAKE_WORD,
         )
+        self.last_latency_ms = (time.monotonic() - sent_at) * 1000
         return Utterance(result.text, started_at, ended_at)
 
 
