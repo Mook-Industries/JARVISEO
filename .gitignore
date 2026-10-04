@@ -63,4 +63,6 @@ yolov8n.pt
 
 # 예전에 실행 위치에 흩어진 것들 (지금은 _captures/ 로만 생김)
 *.wav
+# 단, VAD 테스트용 합성 음성(tests/data)은 커밋한다. 마이크 없이 CI 에서 돌려야 해서.
+!tests/data/*.wav
 shot_*.jpg
