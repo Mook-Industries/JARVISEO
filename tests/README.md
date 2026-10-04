@@ -7,6 +7,7 @@ CI(`.github/workflows/ci.yml`)에서 ubuntu · windows · macOS 세 OS 로 돌�
 | `test_types_contract.py` | `types.py` 의 모듈 간 계약이 깨지지 않았는지 |
 | `test_db_schema.py` | 테이블·관계·외래키가 실제로 만들어지는지 |
 | `test_voice_fake.py` | Fake STT·TTS 가 실제 클래스와 같은 모양인지 |
+| `test_voice_vad.py` | VAD 가 발화를 맞게 잘라 내는지 (마이크 없이) |
 
 ## 로컬에서 돌리는 법
 
