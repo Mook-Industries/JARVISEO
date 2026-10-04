@@ -52,6 +52,8 @@ pgvector>=0.3
 # PyAudio 는 윈도우에서 설치가 자주 실패한다. 팀 전체가 sounddevice 로 통일한다.
 sounddevice>=0.4
 soundfile>=0.12
+# VAD. 원래 webrtcvad 는 설치할 때 C 컴파일러가 필요해서 윈도우에서 막힌다. wheel 판을 쓴다.
+webrtcvad-wheels>=2.0.14
 
 # --- 서버 · 대시보드 ----------------------------------------------------
 fastapi>=0.110

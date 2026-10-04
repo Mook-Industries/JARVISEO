@@ -18,6 +18,7 @@ python-dotenv>=1.0
 # SQLite 인메모리로 스키마만 검사한다. 테이블·관계가 맞는지 보는 데는 그걸로 충분하다.
 sqlalchemy>=2.0
 pgvector>=0.3                 # models.py 의 VECTOR 열 타입. 가볍다
+webrtcvad-wheels>=2.0.14      # voice/vad.py 테스트. 가볍다
 
 pytest>=8.0
 
