@@ -11,6 +11,7 @@ from collections.abc import Iterator
 from openai import OpenAI
 
 from jarviseo import config
+from jarviseo.voice.tts_text import normalize
 
 __all__ = ["SAMPLE_RATE", "TextToSpeech"]
 
@@ -50,8 +51,8 @@ class TextToSpeech:
         raise NotImplementedError("다음 이슈에서 synthesize() 와 재생을 묶어 구현한다.")
 
     def synthesize(self, text: str) -> Iterator[bytes]:
-        """text 를 합성해 PCM(24kHz 16비트 모노) 조각을 받는 대로 낸다."""
+        """text 를 읽기 좋게 다듬어 합성하고, PCM(24kHz 16비트 모노) 조각을 받는 대로 낸다."""
         with self.client.audio.speech.with_streaming_response.create(
-            model=self.model, voice=self.voice, input=text, response_format="pcm"
+            model=self.model, voice=self.voice, input=normalize(text), response_format="pcm"
         ) as response:
             yield from response.iter_bytes(CHUNK_BYTES)
