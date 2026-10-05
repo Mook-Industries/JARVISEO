@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 
 from openai import OpenAI
@@ -45,6 +46,9 @@ class TextToSpeech:
         self.client = client or OpenAI(
             api_key=config.OPENAI_API_KEY or None, timeout=TIMEOUT_SEC, max_retries=RETRIES
         )
+        # 마지막 합성에서 첫 조각을 받기까지 걸린 시간(ms, TTFB). 아직 못 받았으면 None.
+        # 그래프가 latency_ms["tts"] 로 넘기면 log_turn 이 turn_voice.tts_ms 에 적는다.
+        self.last_latency_ms: float | None = None
 
     def speak(self, text: str) -> float:
         """text 를 읽어 준다. 재생이 끝날 때까지 기다린다.
@@ -54,7 +58,12 @@ class TextToSpeech:
         raise NotImplementedError("다음 이슈에서 synthesize() 와 재생을 묶어 구현한다.")
 
     def synthesize(self, text: str) -> Iterator[bytes]:
-        """text 를 읽기 좋게 다듬어 합성하고, PCM(24kHz 16비트 모노) 조각을 받는 대로 낸다."""
+        """text 를 읽기 좋게 다듬어 합성하고, PCM(24kHz 16비트 모노) 조각을 받는 대로 낸다.
+
+        첫 조각을 받기까지 걸린 시간(ms)을 ``last_latency_ms`` 에 남긴다.
+        """
+        self.last_latency_ms = None
+        asked_at = time.monotonic()
         with self.client.audio.speech.with_streaming_response.create(
             model=self.model,
             voice=self.voice,
@@ -62,4 +71,7 @@ class TextToSpeech:
             speed=SPEEDS.get(self.speed.upper(), 1.0),
             response_format="pcm",
         ) as response:
-            yield from response.iter_bytes(CHUNK_BYTES)
+            for chunk in response.iter_bytes(CHUNK_BYTES):
+                if self.last_latency_ms is None:
+                    self.last_latency_ms = (time.monotonic() - asked_at) * 1000
+                yield chunk
