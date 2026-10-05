@@ -62,13 +62,16 @@ class TextToSpeech:
 
         첫 조각을 받기까지 걸린 시간(ms)을 ``last_latency_ms`` 에 남긴다.
         """
+        speed = SPEEDS.get(self.speed.upper(), 1.0)
         self.last_latency_ms = None
         asked_at = time.monotonic()
         with self.client.audio.speech.with_streaming_response.create(
             model=self.model,
             voice=self.voice,
             input=normalize(text),
-            speed=SPEEDS.get(self.speed.upper(), 1.0),
+            # NORMAL 은 speed 를 아예 안 보낸다. 속도를 바꾸면 첫 소리가 늦어졌다
+            # (첫 조각 중앙값: 안 보냄 약 1.0초, 1.2 는 약 1.8초).
+            **({} if speed == 1.0 else {"speed": speed}),
             response_format="pcm",
         ) as response:
             for chunk in response.iter_bytes(CHUNK_BYTES):

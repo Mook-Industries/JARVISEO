@@ -45,14 +45,14 @@ def test_synthesize_는_다듬은_글자를_pcm_으로_요청하고_조각을_�
 
 @pytest.mark.parametrize(
     ("speed", "value"),
-    [("SLOW", 0.85), ("NORMAL", 1.0), ("FAST", 1.2), ("fast", 1.2), ("모르는값", 1.0)],
+    [("SLOW", 0.85), ("FAST", 1.2), ("fast", 1.2), ("NORMAL", None), ("모르는값", None)],
 )
 def test_tts_speed_를_speed_값으로_바꿔_보낸다(speed, value):
     client = FakeClient()
 
     list(TextToSpeech(speed=speed, client=client).synthesize("안녕하세요."))
 
-    assert client.requests[0]["speed"] == value
+    assert client.requests[0].get("speed") == value  # NORMAL 은 아예 안 보낸다
 
 
 @pytest.mark.parametrize(
