@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from typing import TYPE_CHECKING
 
 from jarviseo.types import Utterance
@@ -64,3 +64,6 @@ class FakeTextToSpeech:
     def speak(self, text: str) -> float:
         self.spoken.append(text)
         return 0.0
+
+    def synthesize(self, text: str) -> Iterator[bytes]:
+        yield bytes(4800)  # 무음 100ms (24kHz 16비트)
