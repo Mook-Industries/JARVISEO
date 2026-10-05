@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["normalize"]
+__all__ = ["normalize", "split_sentences"]
 
 # 성분표·안내에 자주 나오는 단위. 숫자 바로 뒤에 올 때만 바꾼다("gram" 같은 영어는 그대로).
 _UNITS = {
@@ -35,6 +35,7 @@ _UNIT = re.compile(
 _THOUSANDS = re.compile(r"(?<=\d),(?=\d{3}(?!\d))")  # 1,200 → 1200
 _RANGE = re.compile(r"(\d)\s?~\s?(\d)")  # 3~5 → 3에서 5
 _MARKDOWN = re.compile(r"[*_`#>]+|^[ \t]*[-•][ \t]+", re.MULTILINE)
+_SENTENCE_END = re.compile(r"(?<=[.?!…])\s+|\n+")
 
 
 def normalize(text: str) -> str:
@@ -44,3 +45,13 @@ def normalize(text: str) -> str:
     text = _RANGE.sub(r"\1에서 \2", text)
     text = _UNIT.sub(lambda m: m.group(1) + _UNITS[m.group(2)], text)
     return re.sub(r"[ \t]+", " ", text).strip()
+
+
+def split_sentences(text: str) -> list[str]:
+    """문장 끝(. ? ! …) 뒤 공백이나 줄바꿈에서 자른다. "3.5" 처럼 점 뒤에 공백이 없으면 안 자른다.
+
+    지금 synthesize() 는 답 전체를 한 번에 요청한다. 답이 1~3문장이라 나눠 보내도 첫 소리가
+    빨라지지 않았고(첫 조각 중앙값 859ms 대 876ms), 문장마다 요청하면 억양이 끊긴다.
+    VLM 답을 흘려받게 되면 문장이 완성될 때마다 이 함수로 잘라 바로 합성한다.
+    """
+    return [s.strip() for s in _SENTENCE_END.split(text) if s.strip()]
