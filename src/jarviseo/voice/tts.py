@@ -18,6 +18,9 @@ __all__ = ["SAMPLE_RATE", "TextToSpeech"]
 # response_format="pcm" 은 24kHz 16비트 모노(리틀엔디언)로 온다.
 SAMPLE_RATE = 24000
 CHUNK_BYTES = SAMPLE_RATE * 2 // 10  # 100ms 씩 받는다
+# user_setting.tts_speed → OpenAI speed 값. instructions 로 "천천히"를 부탁하면 같은 문장도
+# 길이가 ±0.6초씩 흔들려 효과가 안 보였고, speed 는 0.8 → 1.31배, 1.25 → 0.79배로 일정했다.
+SPEEDS = {"SLOW": 0.85, "NORMAL": 1.0, "FAST": 1.2}
 # 한 번 기다리는 최대 시간(초)과 다시 보내는 횟수.
 TIMEOUT_SEC, RETRIES = 10.0, 1
 
@@ -53,6 +56,10 @@ class TextToSpeech:
     def synthesize(self, text: str) -> Iterator[bytes]:
         """text 를 읽기 좋게 다듬어 합성하고, PCM(24kHz 16비트 모노) 조각을 받는 대로 낸다."""
         with self.client.audio.speech.with_streaming_response.create(
-            model=self.model, voice=self.voice, input=normalize(text), response_format="pcm"
+            model=self.model,
+            voice=self.voice,
+            input=normalize(text),
+            speed=SPEEDS.get(self.speed.upper(), 1.0),
+            response_format="pcm",
         ) as response:
             yield from response.iter_bytes(CHUNK_BYTES)

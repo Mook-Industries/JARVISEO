@@ -117,8 +117,7 @@ class UserSetting(Base):
         BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True
     )
     tts_volume: Mapped[int] = mapped_column(SmallInteger, default=70)
-    # SLOW / NORMAL / FAST. gpt-4o-mini-tts 는 speed 파라미터를 지원하지 않아서
-    # 코드에서 instructions 문구나 재생 속도(time-stretch)로 바꿔 적용한다.
+    # SLOW / NORMAL / FAST. voice/tts.py 가 OpenAI speed 값(0.85 / 1.0 / 1.2)으로 바꿔 보낸다.
     tts_speed: Mapped[str] = mapped_column(String(10), default="NORMAL")
     tts_voice: Mapped[str] = mapped_column(String(50), default="ko-KR-SunHiNeural")
     # 무응답이 이 분수만큼 이어지면 세션을 닫는다.
