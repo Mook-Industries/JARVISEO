@@ -13,6 +13,10 @@ Git 에는 올라가지 않는다(.gitignore).
     python scripts/wakeword/record.py similar 20                       # 비슷한 발음을 돌아가며
     python scripts/wakeword/record.py background --minutes 30 --env tv # TV 소리를 30분 그대로
     python scripts/wakeword/record.py wake 30 --split train --speaker s02 --distance 2m
+    python scripts/wakeword/record.py wake 100 --tts                   # TTS 로 합성 (키 필요)
+
+--tts 는 마이크 대신 OpenAI TTS 로 목소리 11종 × 속도 3종 × 문장부호(억양)를 바꿔 가며 합성한다.
+실제 녹음과 섞지 않도록 metadata.csv 의 source 가 tts 로 남는다.
 
 label
     wake        호출어 "자비서". 놓치면 FRR 에 잡힌다
@@ -23,6 +27,7 @@ label
 import argparse
 import csv
 import itertools
+import random
 import wave
 from datetime import datetime
 from pathlib import Path
@@ -39,6 +44,9 @@ TEXTS = {
     # wakeword.py 의 측정 방법에 적힌 유사어. "자비스"는 STT 가 "자비서"를 잘못 받아쓰던 말이다.
     "similar": ["자비스", "아비서", "자비", "비서"],
 }
+# gpt-4o-mini-tts 목소리. 속도는 TextToSpeech 의 SLOW 0.85 / NORMAL 1.0 / FAST 1.2 를 쓴다.
+VOICES = "alloy ash ballad coral echo fable nova onyx sage shimmer verse".split()
+SPEEDS = ["SLOW", "NORMAL", "FAST"]
 FIELDS = ["file", "label", "text", "speaker", "distance", "env", "source", "mic", "seconds", "at"]
 
 
@@ -94,6 +102,34 @@ def record_clips(
             print(f"  저장 {path.name} ({seconds:.2f}s)")
 
 
+def synth_clips(label: str, count: int, texts: list[str], folder: Path) -> None:
+    """마이크 대신 TTS 로 목소리·속도·문장부호를 바꿔 가며 합성해 16kHz 로 낮춰 저장한다."""
+    from scipy.signal import resample_poly
+
+    from jarviseo.voice.tts import SAMPLE_RATE as TTS_RATE
+    from jarviseo.voice.tts import TextToSpeech
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    # 같은 글자라도 "!" "?" 를 붙이면 억양이 달라진다.
+    variants = [t + mark for t in texts for mark in ("", "!", "?")]
+    combos = list(itertools.product(VOICES, SPEEDS, variants))
+    random.Random(0).shuffle(combos)  # count 가 조합 수보다 적어도 목소리가 골고루 섞이게
+    for n, (voice, speed, text) in enumerate(itertools.islice(itertools.cycle(combos), count), 1):
+        tts = TextToSpeech(voice=voice, speed=speed)
+        pcm = np.frombuffer(b"".join(tts.synthesize(text)), dtype="<i2")
+        audio = resample_poly(pcm.astype(np.float32), SAMPLE_RATE, TTS_RATE)
+        audio = np.clip(audio, -32768, 32767).astype(np.int16)
+        path = folder / label / f"{stamp}-tts-{n:03d}.wav"
+        seconds = len(audio) / SAMPLE_RATE
+        save(path, audio)
+        meta = {"speaker": f"tts-{voice}", "distance": "-", "env": "synthetic", "source": "tts"}
+        # 마이크 칸에는 무엇으로 만들었는지(모델과 속도)를 적는다.
+        write_meta(
+            folder, path, seconds, label=label, text=text, mic=f"{tts.model} {speed}", **meta
+        )
+        print(f"[{n}/{count}] {text!r} {voice} {speed} → {path.name} ({seconds:.2f}s)")
+
+
 def record_long(minutes: float, folder: Path, device: int | None, meta: dict) -> None:
     """마이크 소리를 그대로 minutes 분 녹음한다. Ctrl+C 로 멈춰도 그때까지는 남는다."""
     path = folder / "background" / f"{datetime.now():%Y%m%d-%H%M%S}.wav"
@@ -135,21 +171,27 @@ def main() -> None:
     parser.add_argument("--distance", default="0.5m", help="입과 마이크 사이 거리")
     parser.add_argument("--env", default="quiet", help="quiet / noisy / tv 등")
     parser.add_argument("--device", type=int, help="sounddevice 입력 장치 번호")
+    parser.add_argument("--tts", action="store_true", help="마이크 대신 TTS 로 합성한다")
     args = parser.parse_args()
+    if args.tts and args.label == "background":
+        parser.error("background 는 실제 소리를 녹음해야 한다. --tts 와 같이 쓸 수 없다")
 
     folder = ROOT / args.split
-    meta = {
-        "speaker": args.speaker,
-        "distance": args.distance,
-        "env": args.env,
-        "source": "mic",
-        "mic": mic_name(args.device),
-    }
+    texts = args.text or TEXTS.get(args.label, [])
     try:
+        if args.tts:
+            synth_clips(args.label, args.count, texts, folder)
+            return
+        meta = {
+            "speaker": args.speaker,
+            "distance": args.distance,
+            "env": args.env,
+            "source": "mic",
+            "mic": mic_name(args.device),
+        }
         if args.label == "background":
             record_long(args.minutes, folder, args.device, meta)
         else:
-            texts = args.text or TEXTS[args.label]
             record_clips(args.label, args.count, texts, folder, args.device, meta)
     except KeyboardInterrupt:
         print("\n멈췄다. 그때까지 저장한 파일은 남아 있다")
