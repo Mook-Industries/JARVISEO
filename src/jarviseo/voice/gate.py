@@ -7,6 +7,9 @@
 닫혀 있던 동안 들어온 블록은 버리지 않고 무음으로 바꿔 넘긴다. 버리면 VAD 가 그 시간을
 세지 못해서, 재생이 길면 ``listen()`` 의 timeout 이 재생 시간만큼 늘어난다.
 
+호출어 감지는 막지 않는다(소프트 게이트). 재생 중에도 "자비서"로 끼어들 수 있어야 해서,
+재생이 시작·끝날 때 콜백으로 알려 주기만 하고 판단은 호출어 쪽에 맡긴다.
+
 스피커와 마이크는 하나씩이라 게이트도 프로세스에 하나(``MIC_GATE``)를 같이 쓴다.
 """
 
@@ -14,7 +17,7 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 
 import numpy as np
@@ -31,6 +34,15 @@ class MicGate:
         self.grace_sec = grace_sec
         # 마지막으로 닫혀 있던 구간 [closed_at, open_at). 재생 중이면 open_at 은 무한대다.
         self._closed_at = self._open_at = -math.inf
+        self._hooks: list[Callable[[bool], None]] = []
+
+    def on_playback(self, hook: Callable[[bool], None]) -> None:
+        """재생이 시작되면 ``hook(True)``, 끝나면 ``hook(False)`` 를 부르게 등록한다.
+
+        호출어 쪽 소프트 게이트용이다. 재생 중에 임계값을 올리거나 재생음과 비교하는 것은
+        훅을 받는 쪽이 정한다. 끝날 때는 grace_sec 를 기다리지 않고 바로 부른다.
+        """
+        self._hooks.append(hook)
 
     @contextmanager
     def playing(self) -> Iterator[None]:
@@ -38,9 +50,13 @@ class MicGate:
         self._open_at = math.inf
         self._closed_at = time.monotonic()
         try:
+            for hook in self._hooks:
+                hook(True)
             yield
         finally:
             self._open_at = time.monotonic() + self.grace_sec
+            for hook in self._hooks:
+                hook(False)
 
     def is_open(self, t: float) -> bool:
         """t 시각(monotonic)에 마이크에 들어온 소리를 STT 에 넘겨도 되면 True."""
