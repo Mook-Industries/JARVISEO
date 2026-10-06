@@ -336,16 +336,10 @@
     setText("#reason-q", s.q);
     setText("#reason-a", s.a);
     setText("#confidence", s.conf);
-    setText("#feed-tag", s.feedTag);
     setText("#feed-msg", s.feedMsg);
-    $("#target-label").firstChild.textContent = s.targetLabel;
-
-    setStages(stages || s.stages);
 
     // 처리 중 스캔선은 CSS 가 data-state 를 보고 켠다
-    $("#det-target").classList.toggle("is-confirmed", name === "response");
-
-    $$(".dock-step").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.step === name)));
+    setStages(stages || s.stages);
 
     if (name === "response" && !demoLogged) {
       demoLogged = true;
@@ -358,10 +352,77 @@
   };
 
   /* ------------------------------------------------------------------------
+     AI 코어 (원본 neural-core 애니메이션)
+     그리기 코드는 원본 그대로다. 이 프로젝트에 맞게 바꾼 건 두 가지뿐:
+     - 상태: body[data-state] 대신 #core 의 상태 클래스에서 읽는다
+       (대기 0 · 듣기 1 · 처리 2 · 응답 3)
+     - 정지: 모니터 화면이 아님 / 탭 숨김 / HUD 애니메이션 끔(.no-motion) /
+       OS 동작 줄이기 일 때 멈춘다
+     ------------------------------------------------------------------------ */
+
+  (() => {
+  const canvas=document.querySelector('#neural-core');
+  if(!canvas)return;
+  const ctx=canvas.getContext('2d');
+  if(!ctx)return;
+  const coreEl=document.querySelector('#core');
+  const monitorView=document.querySelector('#view-monitor');
+  const appEl=document.querySelector('#app');
+  const motionQuery=matchMedia('(prefers-reduced-motion: reduce)');
+  let size=280,dpr=1,time=0,previous=0,frame=0;
+  const TAU=Math.PI*2;
+  const getPhase=()=>coreEl.classList.contains('is-listening')?1:coreEl.classList.contains('is-processing')?2:coreEl.classList.contains('is-responding')?3:0;
+  const particles=Array.from({length:180},(_,i)=>{const y=1-2*(i+.5)/180,r=Math.sqrt(1-y*y),a=i*2.39996323;return [Math.cos(a)*r,y,Math.sin(a)*r];});
+  function resize(){size=canvas.getBoundingClientRect().width;dpr=Math.min(devicePixelRatio||1,2);canvas.width=Math.round(size*dpr);canvas.height=Math.round(size*dpr);draw();}
+  function project(x,y,z,angle){const c=Math.cos(angle),s=Math.sin(angle),xx=x*c+z*s,zz=z*c-x*s;const tilt=.35,yy=y*Math.cos(tilt)-zz*Math.sin(tilt),depth=y*Math.sin(tilt)+zz*Math.cos(tilt);const scale=1/(1-depth*.16);return [xx*scale,yy*scale,depth];}
+  function line(points,color,width=1){ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.strokeStyle=color;ctx.lineWidth=width;ctx.stroke();}
+  function arc(r,start,length,color,width=1){ctx.beginPath();ctx.arc(0,0,r,start,start+length);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.stroke();}
+  function draw(){
+    if(!size)return;
+    ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,size,size);ctx.translate(size/2,size/2);ctx.scale(size/320,size/320);
+    const phase=getPhase(),power=[.65,.9,1,.8][phase];
+    const breathe=1+Math.sin(time*1.8)*.016;
+    const halo=ctx.createRadialGradient(0,0,7,0,0,149);halo.addColorStop(0,`rgba(70,230,245,${.12*power})`);halo.addColorStop(.5,'rgba(29,173,207,.055)');halo.addColorStop(1,'rgba(4,22,30,0)');ctx.fillStyle=halo;ctx.fillRect(-160,-160,320,320);
+    ctx.globalCompositeOperation='lighter';
+    // Circular spectrum follows the current assistant state.
+    for(let i=0;i<160;i++){const a=i/160*TAU;const wave=Math.sin(a*7+time*2.5)*Math.sin(a*3-time*1.7);const length=3+(wave+1)*([3,8,5,6][phase]);const radius=144;line([[Math.cos(a)*radius,Math.sin(a)*radius],[Math.cos(a)*(radius+length),Math.sin(a)*(radius+length)]],`rgba(91,231,244,${.23+Math.abs(wave)*.45})`,.85);}
+    arc(137,0,TAU,'rgba(84,228,241,.21)',.7);
+    for(let i=0;i<4;i++){const angle=time*.15+i*TAU/4;ctx.shadowColor='#39e8ee';ctx.shadowBlur=6;arc(131,angle,.98,'rgba(110,251,255,.85)',1.8);ctx.shadowBlur=0;}
+    arc(126,0,TAU,'rgba(83,228,236,.34)',.6);
+    for(let i=0;i<96;i++){const a=i/96*TAU-time*.11,r=i%8===0?113:118;line([[Math.cos(a)*r,Math.sin(a)*r],[Math.cos(a)*122,Math.sin(a)*122]],`rgba(120,234,244,${i%8===0?.65:.26})`,i%8===0?1.1:.65);}
+    for(let i=0;i<3;i++){arc(108,-time*.24+i*TAU/3,1.32,'rgba(61,199,220,.55)',1);arc(103,time*.12+i*TAU/3,.5,'rgba(146,246,255,.55)',.65);}
+    ctx.save();ctx.scale(breathe,breathe);
+    const angle=time*.24;
+    // A rotating wireframe sphere with depth-sensitive meridians.
+    for(let m=0;m<12;m++){const longitude=m*Math.PI/6;let last;
+      for(let k=0;k<=72;k++){const a=k/72*TAU,p=project(Math.cos(a)*Math.cos(longitude),Math.sin(a),Math.cos(a)*Math.sin(longitude),angle);const point=[p[0]*66,p[1]*66];if(last)line([last,point],`rgba(65,219,241,${.09+(p[2]+1)*.16})`,.65);last=point;}}
+    for(let j=-3;j<=3;j++){const y=j/4,r=Math.sqrt(1-y*y);const pts=[];for(let k=0;k<=96;k++){const a=k/96*TAU,p=project(r*Math.cos(a),y,r*Math.sin(a),angle);pts.push([p[0]*66,p[1]*66]);}line(pts,'rgba(83,224,244,.24)',.6);}
+    for(const [x,y,z] of particles){const p=project(x,y,z,angle),radius=.55+(p[2]+1)*.35;ctx.fillStyle=`rgba(150,250,255,${.2+(p[2]+1)*.28})`;ctx.beginPath();ctx.arc(p[0]*66,p[1]*66,radius,0,TAU);ctx.fill();}
+    // Independently precessing ellipses and moving light particles.
+    for(let orbit=0;orbit<5;orbit++){const inclination=orbit*Math.PI/5+time*.06;const rotation=time*(orbit%2?.19:-.14)+orbit;const pts=[];
+      const orbitPoint=a=>{const x=Math.cos(a)*91,y=Math.sin(a)*31;const xx=x*Math.cos(inclination)-y*Math.sin(inclination),yy=x*Math.sin(inclination)+y*Math.cos(inclination);return [xx,yy];};
+      for(let k=0;k<=120;k++)pts.push(orbitPoint(k/120*TAU));line(pts,`rgba(74,224,248,${.23+orbit*.025})`,.8);
+      const a=rotation+time*.7;const segment=[];for(let k=0;k<=22;k++)segment.push(orbitPoint(a-k*.025));ctx.shadowColor='#5af3ff';ctx.shadowBlur=7;line(segment,'rgba(116,248,255,.65)',1.3);const p=orbitPoint(a);ctx.fillStyle='#c4ffff';ctx.beginPath();ctx.arc(p[0],p[1],2,0,TAU);ctx.fill();ctx.shadowBlur=0;
+    }
+    const nucleus=ctx.createRadialGradient(0,0,0,0,0,20);nucleus.addColorStop(0,'rgba(163,253,255,.48)');nucleus.addColorStop(.25,'rgba(66,227,248,.2)');nucleus.addColorStop(1,'rgba(44,204,244,0)');ctx.fillStyle=nucleus;ctx.fillRect(-20,-20,40,40);
+    ctx.restore();ctx.globalCompositeOperation='source-over';
+  }
+  function active(){return !document.hidden&&!monitorView.hidden&&!appEl.classList.contains('no-motion')&&!motionQuery.matches;}
+  function animate(now){frame=0;const delta=previous?Math.min((now-previous)/1000,.05):0;previous=now;time+=delta*([1,1.35,2.1,1.15][getPhase()]);draw();if(active())frame=requestAnimationFrame(animate);}
+  function sync(){if(frame)cancelAnimationFrame(frame);frame=0;previous=0;draw();if(active())frame=requestAnimationFrame(animate);}
+  new ResizeObserver(resize).observe(canvas);
+  // 상태 클래스 · 화면 전환(hidden) · HUD 설정이 바뀌면 다시 맞춘다
+  const mo=new MutationObserver(sync);
+  mo.observe(coreEl,{attributes:true,attributeFilter:['class']});
+  mo.observe(monitorView,{attributes:true,attributeFilter:['hidden']});
+  mo.observe(appEl,{attributes:true,attributeFilter:['class']});
+  document.addEventListener('visibilitychange',sync);motionQuery.addEventListener('change',sync);resize();sync();
+  })();
+
+  /* ------------------------------------------------------------------------
      모니터: 시연 재생
      ------------------------------------------------------------------------ */
 
-  const playBtn = $("#play-btn");
   let timers = [];
   let playing = false;
 
@@ -371,15 +432,11 @@
     timers.forEach(clearTimeout);
     timers = [];
     playing = false;
-    $("use", playBtn).setAttribute("href", "#i-play");
-    $("span", playBtn).textContent = "시연 재생";
   }
 
   const playDemo = () => {
     stopDemo();
     playing = true;
-    $("use", playBtn).setAttribute("href", "#i-stop");
-    $("span", playBtn).textContent = "정지";
 
     // 실제 단계 시간(초)을 그대로 쓰면 너무 빨라서 1.5배로 늘려 보여준다
     const slow = 1500;
@@ -403,14 +460,6 @@
     });
   };
 
-  $$(".dock-step").forEach((btn) =>
-    btn.addEventListener("click", () => {
-      stopDemo();
-      setState(btn.dataset.step);
-    })
-  );
-
-  playBtn.addEventListener("click", () => (playing ? (stopDemo(), setState("idle")) : playDemo()));
   $("#call-btn").addEventListener("click", () => {
     if (!playing) playDemo();
   });
@@ -423,6 +472,129 @@
     e.preventDefault();
     if (!playing) playDemo();
   });
+
+  /* ------------------------------------------------------------------------
+     모니터: 실시간 카메라
+     - 켜기 전에 확인 창을 먼저 띄우고, 동의하면 브라우저 권한을 요청한다
+     - 카메라를 못 쓰는 환경(미지원·권한 거부·장치 없음)은 '신호 없음'으로 표시
+     ------------------------------------------------------------------------ */
+
+  const feed = $("#feed");
+  const video = $("#feed-video");
+  const camModal = $("#cam-modal");
+  const camRetry = $("#cam-retry");
+  const camToggle = $("#cam-toggle");
+  let camStream = null;
+
+  // 헤더 버튼: 켜져 있으면 '끄기', 꺼져 있으면 '켜기'
+  const syncCamToggle = () => {
+    const on = feed.dataset.cam === "on";
+    camToggle.classList.toggle("is-on", on);
+    camToggle.disabled = feed.dataset.cam === "connecting";
+    setText("#cam-toggle-label", on ? "카메라 끄기" : "카메라 켜기");
+  };
+
+  // getUserMedia 는 https 또는 localhost 에서만 동작한다
+  const camSupported = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) && window.isSecureContext;
+
+  const setNoSignal = (msg, { canRetry = true } = {}) => {
+    feed.dataset.cam = "off";
+    video.srcObject = null;
+    setText("#no-signal-msg", msg);
+    camRetry.hidden = !canRetry;
+    setText("#feed-tag", "NO SIGNAL");
+    $("#feed-spec").innerHTML = "<span>— × —</span><span>— FPS</span>";
+    setText("#cam-state", "꺼짐");
+    setText("#cam-name", "—");
+    syncCamToggle();
+  };
+
+  const stopCamera = () => {
+    if (camStream) camStream.getTracks().forEach((t) => t.stop());
+    camStream = null;
+  };
+
+  const startCamera = async () => {
+    stopCamera();
+    feed.dataset.cam = "connecting";
+    setText("#no-signal-msg", "카메라를 연결하는 중…");
+    camRetry.hidden = true;
+    setText("#feed-tag", "CONNECTING");
+    syncCamToggle();
+
+    try {
+      camStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: false,
+      });
+    } catch (err) {
+      camStream = null;
+      const reasons = {
+        NotAllowedError: "카메라 권한이 거부되었습니다. 주소창의 카메라 아이콘에서 허용해 주세요.",
+        NotFoundError: "연결된 카메라를 찾지 못했습니다.",
+        NotReadableError: "다른 프로그램이 카메라를 사용 중입니다.",
+        OverconstrainedError: "카메라가 요청한 해상도를 지원하지 않습니다.",
+      };
+      setNoSignal(reasons[err.name] || "카메라를 켜지 못했습니다.");
+      return;
+    }
+
+    const track = camStream.getVideoTracks()[0];
+    video.srcObject = camStream;
+    feed.dataset.cam = "on";
+
+    const s = track.getSettings();
+    $("#feed-spec").innerHTML =
+      `<span>${s.width || "—"} × ${s.height || "—"}</span><span>${s.frameRate ? Math.round(s.frameRate) : "—"} FPS</span>`;
+    setText("#feed-tag", "LIVE");
+    setText("#cam-state", "켜짐");
+    setText("#cam-name", track.label || "CAMERA");
+    syncCamToggle();
+
+    // USB 케이블이 빠지는 등 연결이 끊기면 다시 '신호 없음'
+    track.addEventListener("ended", () => {
+      camStream = null;
+      setNoSignal("카메라 연결이 끊겼습니다.");
+    });
+  };
+
+  const openCamModal = () => {
+    camModal.hidden = false;
+    $("#cam-allow").focus();
+  };
+  const closeCamModal = () => {
+    camModal.hidden = true;
+  };
+
+  $("#cam-allow").addEventListener("click", () => {
+    closeCamModal();
+    startCamera();
+  });
+  $("#cam-deny").addEventListener("click", () => {
+    closeCamModal();
+    setNoSignal("카메라를 켜지 않았습니다.");
+  });
+  camModal.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") $("#cam-deny").click();
+  });
+  camRetry.addEventListener("click", openCamModal);
+  camToggle.addEventListener("click", () => {
+    if (feed.dataset.cam === "on") {
+      stopCamera();
+      setNoSignal("카메라를 껐습니다.");
+    } else {
+      openCamModal();
+    }
+  });
+  window.addEventListener("pagehide", stopCamera);
+
+  if (camSupported) {
+    camToggle.hidden = false;
+    setNoSignal("카메라가 꺼져 있습니다.");
+    openCamModal();
+  } else {
+    setNoSignal("이 환경에서는 카메라를 사용할 수 없습니다.", { canRetry: false });
+  }
 
   /* ------------------------------------------------------------------------
      관리자: 단계별 지연
