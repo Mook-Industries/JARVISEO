@@ -23,6 +23,7 @@ from openai import OpenAI, OpenAIError
 
 from jarviseo import config
 from jarviseo.types import Utterance
+from jarviseo.voice.gate import MIC_GATE
 from jarviseo.voice.mic import SAMPLE_RATE, Microphone
 from jarviseo.voice.transcript import clean, is_question
 
@@ -81,8 +82,9 @@ class SpeechToText:
         self.last_raw_text = self.last_latency_ms = None
         # 받아쓰는 동안 마이크를 붙잡고 있지 않게, 녹음이 끝나면 바로 닫는다.
         # 호출어 감지와 마이크 하나를 같이 쓰는 것은 웨이크워드 이슈에서 다룬다.
+        # TTS 가 재생 중이거나 막 끝났으면 그동안 들어온 소리는 무음으로 바뀐다(gate.py).
         with Microphone(self.device) as mic:
-            speech = record_speech(mic.blocks(), on_speech_start, timeout=timeout)
+            speech = record_speech(MIC_GATE.mute(mic.blocks()), on_speech_start, timeout=timeout)
         if speech is None:
             return None
         try:

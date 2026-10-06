@@ -19,7 +19,7 @@ python-dotenv>=1.0
 sqlalchemy>=2.0
 pgvector>=0.3                 # models.py 의 VECTOR 열 타입. 가볍다
 webrtcvad-wheels>=2.0.14      # voice/vad.py 테스트. 가볍다
-openai>=1.66                  # voice/stt.py 가 import 한다. 테스트는 가짜 API 로 돈다
+openai>=2.47                  # voice/stt.py 가 import 한다. 테스트는 가짜 API 로 돈다
 
 pytest>=8.0
 

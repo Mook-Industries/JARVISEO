@@ -9,7 +9,8 @@ CI(`.github/workflows/ci.yml`)에서 ubuntu · windows · macOS 세 OS 로 돌�
 | `test_voice_fake.py` | Fake STT·TTS 가 실제 클래스와 같은 모양인지 |
 | `test_voice_vad.py` | VAD 가 발화를 맞게 잘라 내는지 (마이크 없이) |
 | `test_voice_stt.py` | STT 요청 모양과 받아쓴 글자 정리 (API 는 가짜로) |
-| `test_voice_tts.py` | TTS 요청 모양·속도 변환과 읽을 글자 다듬기 (API 는 가짜로) |
+| `test_voice_tts.py` | TTS 요청 모양·속도 변환·읽을 글자 다듬기와 재생, 스트림 끊김 (API·스피커는 가짜로) |
+| `test_voice_gate.py` | 재생 중 STT 입력 차단·0.3초 유예와 호출어 훅 (마이크·스피커 없이) |
 
 ## 로컬에서 돌리는 법
 

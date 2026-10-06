@@ -5,6 +5,7 @@
 | `spike/` | 기술 검증 5종 — 각 기술이 되는지만 확인하는 최소 코드 |
 | `check_listen.py` | 실제 마이크로 `listen()` 확인 — 원문·정리된 질문·시각·지연 출력 |
 | `check_tts.py` | 실제 TTS 합성 확인 — 속도별 첫 소리까지 시간·길이 출력하고 재생 |
+| `voice_loop.py` | Enter → STT → 에코 → TTS 음성 루프 — 턴마다 단계별 지연, 끝낼 때 중앙값 출력 |
 
 ## spike 란
 

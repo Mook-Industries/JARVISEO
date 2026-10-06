@@ -48,6 +48,10 @@ class WakeWordDetector:
     def stop(self) -> None:
         raise NotImplementedError
 
-    def mute(self, seconds: float) -> None:
-        """이만큼 감지를 쉰다. TTS 재생 중 되먹임을 막는 데 쓴다."""
+    def on_playback(self, playing: bool) -> None:
+        """소프트 게이트 훅. ``MIC_GATE.on_playback(detector.on_playback)`` 으로 건다.
+
+        STT 와 달리 재생 중에도 감지를 쉬지 않는다. 재생 중에 "자비서"로 끼어들 수 있어야 해서,
+        임계값을 0.8 로 올리고 감지되면 재생음과 비교해 자기 목소리면 무시한다.
+        """
         raise NotImplementedError

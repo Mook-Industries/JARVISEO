@@ -1,8 +1,13 @@
-"""TTS 가 요청을 맞게 보내고, 읽을 글자를 맞게 다듬는지 확인한다. OpenAI API 는 부르지 않는다."""
+"""TTS 가 요청을 맞게 보내고, 읽을 글자를 맞게 다듬고, 받은 조각을 재생하는지 확인한다.
 
+OpenAI API 와 스피커는 부르지 않는다.
+"""
+
+import sys
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+import httpx2
 import pytest
 
 from jarviseo import config
@@ -10,18 +15,47 @@ from jarviseo.voice.tts import CHUNK_BYTES, TextToSpeech
 from jarviseo.voice.tts_text import normalize, split_sentences
 
 
-class FakeClient:
-    """openai 클라이언트 대신 요청을 받아 두고, PCM 조각 두 개를 흘려준다."""
+def two_chunks(size):
+    yield b"\x01" * size
+    yield b"\x02" * size
 
-    def __init__(self):
+
+class FakeClient:
+    """openai 클라이언트 대신 요청을 받아 두고, chunks(size) 가 낸 PCM 조각을 흘려준다."""
+
+    def __init__(self, chunks=two_chunks):
         self.requests = []
+        self.chunks = chunks
         speech = SimpleNamespace(with_streaming_response=SimpleNamespace(create=self._create))
         self.audio = SimpleNamespace(speech=speech)
 
     @contextmanager
     def _create(self, **kwargs):
         self.requests.append(kwargs)
-        yield SimpleNamespace(iter_bytes=lambda size: iter([b"\x01" * size, b"\x02" * size]))
+        yield SimpleNamespace(iter_bytes=self.chunks)
+
+
+@pytest.fixture
+def played(monkeypatch):
+    """sounddevice 대신 스피커에 쓴 조각을 모은다. 리눅스 CI 에는 PortAudio 가 없다."""
+    written = []
+
+    class FakeOutputStream:
+        def __init__(self, samplerate, device, channels, dtype):
+            assert (samplerate, channels, dtype) == (24000, 1, "int16")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            pass
+
+        def write(self, data):
+            written.append(data)
+
+    sounddevice = SimpleNamespace(RawOutputStream=FakeOutputStream)
+    monkeypatch.setitem(sys.modules, "sounddevice", sounddevice)
+    return written
 
 
 def test_synthesize_는_다듬은_글자를_pcm_으로_요청하고_조각을_그대로_낸다():
@@ -41,6 +75,35 @@ def test_synthesize_는_다듬은_글자를_pcm_으로_요청하고_조각을_�
     assert req["input"] == "나트륨 1200밀리그램 이에요."
     assert chunks == [b"\x01" * CHUNK_BYTES, b"\x02" * CHUNK_BYTES]
     assert tts.last_latency_ms >= 0
+
+
+def test_speak_는_받은_조각을_순서대로_재생하고_첫_조각_시간을_돌려준다(played):
+    tts = TextToSpeech(client=FakeClient())
+
+    took = tts.speak("안녕하세요.")
+
+    assert played == [b"\x01" * CHUNK_BYTES, b"\x02" * CHUNK_BYTES]
+    assert took == tts.last_latency_ms >= 0
+
+
+def test_받는_도중_끊기면_받은_만큼만_재생하고_예외를_올리지_않는다(played):
+    def cut(size):
+        yield b"\x01" * size
+        raise httpx2.ReadTimeout("끊김")  # openai 가 감싸지 않고 그대로 올라온다
+
+    took = TextToSpeech(client=FakeClient(cut)).speak("안녕하세요.")
+
+    assert played == [b"\x01" * CHUNK_BYTES]
+    assert took is not None
+
+
+def test_첫_조각도_못_받으면_아무것도_재생하지_않고_None(played):
+    def dead(size):
+        raise httpx2.ReadTimeout("끊김")
+        yield
+
+    assert TextToSpeech(client=FakeClient(dead)).speak("안녕하세요.") is None
+    assert played == []
 
 
 @pytest.mark.parametrize(

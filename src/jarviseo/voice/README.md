@@ -7,8 +7,10 @@
 | `wakeword.py` | "자비서" 호출어 감지 | 로컬 (상시) | FAR / FRR |
 | `stt.py` | 호출어 뒤 발화 받아쓰기 (`listen()` 이 녹음·VAD·받아쓰기·정리를 묶는다) | OpenAI STT | — |
 | `transcript.py` | 받아쓴 원문에서 호출어·필러를 빼고, 비었거나 너무 짧은 발화를 거른다 | 로컬 | — |
-| `tts.py` | 응답 음성 합성 (`synthesize()` 가 PCM 조각을 받는 대로 낸다. 재생은 다음 이슈) | OpenAI TTS | — |
+| `tts.py` | 응답 음성 합성과 재생 (`speak()` 이 `synthesize()` 의 PCM 조각을 받는 대로 재생한다) | OpenAI TTS | — |
 | `tts_text.py` | TTS 에 넣기 전에 단위·쉼표·물결표를 읽는 말로 바꾸고 마크다운 기호를 뺀다. 문장 분할 함수도 있다 | 로컬 | — |
+| `speaker.py` | PCM 조각을 받는 순서대로 스피커로 낸다. 재생하는 동안 마이크 게이트를 닫는다 | 로컬 | — |
+| `gate.py` | 재생 중과 끝난 뒤 0.3초 동안 STT 쪽 마이크를 막고, 호출어 쪽에는 재생 시작·끝을 알린다 | 로컬 | — |
 | `mic.py` | 마이크를 30ms 블록으로 읽고 블록마다 들어온 시각을 붙인다 | 로컬 | — |
 | `vad.py` | webrtcvad 로 발화 하나를 잘라 낸다 (무음 700ms 면 끝) | 로컬 | — |
 | `fake.py` | 키 없이 쓰는 가짜 STT · TTS (그래프 개발 · CI 용) | 로컬 | — |
@@ -22,7 +24,8 @@
 
 TTS 는 `user_setting.tts_speed` 를 OpenAI speed 값으로 바꿔 보낸다(SLOW 0.85, FAST 1.2, NORMAL 은 안 보냄).
 첫 조각을 받기까지 걸린 시간은 `last_latency_ms` 에 남고, 그래프가 `latency_ms["tts"]` 로 넘기면
-`turn_voice.tts_ms` 에 적힌다.
+`turn_voice.tts_ms` 에 적힌다. `speak()` 은 재생이 끝날 때까지 기다리고 같은 값을 돌려준다.
+합성이 도중에 끊기면 받은 만큼만 재생하고, 소리를 하나도 못 냈으면 `None` 을 돌려준다.
 
 모델 이름은 `config.py` 에서만 정한다. 지금은 STT `gpt-transcribe`, TTS `gpt-4o-mini-tts`
 (`.env` 의 `JARVISEO_STT_MODEL`, `JARVISEO_TTS_MODEL`).
@@ -32,4 +35,8 @@ TTS 는 `user_setting.tts_speed` 를 OpenAI speed 값으로 바꿔 보낸다(SLO
 - **상시 동작하는 것은 호출어 감지뿐이고, 로컬에서 돈다.** 클라우드로 나가는 것은 호출어 뒤의 발화 한 번이다.
 - `stt.py` 의 `started_at`(말을 시작한 시각)이 핵심이다. 이 시각으로 `capture` 가 프레임을 고른다.
   잡히는지는 `scripts/spike/spike_02_stt.py` 로 확인한다.
-- **되먹임 루프 주의.** 스피커 소리를 마이크가 다시 듣는다. 재생 중에는 마이크를 막는다.
+- **되먹임 루프 주의.** 스피커 소리를 마이크가 다시 듣는다. 그래서 `gate.py` 의 `MIC_GATE` 가
+  재생하는 동안과 끝난 뒤 `TTS_MIC_GATE_SEC`(0.3초) 동안 들어온 소리를 무음으로 바꿔 STT 에 넘긴다.
+  STT·TTS 가 같은 게이트를 자동으로 쓰므로 그래프에서 따로 연결할 것은 없다.
+- 호출어는 재생 중에도 막지 않는다(소프트 게이트). 재생 중에 끼어들 수 있어야 해서,
+  `MIC_GATE.on_playback(hook)` 으로 재생 시작(`True`)·끝(`False`)만 알린다.
