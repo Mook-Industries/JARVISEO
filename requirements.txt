@@ -55,6 +55,10 @@ sounddevice>=0.4
 soundfile>=0.12
 # VAD. 원래 webrtcvad 는 설치할 때 C 컴파일러가 필요해서 윈도우에서 막힌다. wheel 판을 쓴다.
 webrtcvad-wheels>=2.0.14
+# 호출어. 리눅스에서는 tflite-runtime 을 같이 받으려 하는데 파이썬 3.12 용 wheel 이 없어
+# 설치가 실패한다. 호출어는 마이크가 달린 윈도우·맥에서 돌리므로 리눅스(CI·Docker)는 뺀다.
+# 윈도우·맥은 onnxruntime 으로 돈다. scipy·scikit-learn 도 이걸 따라 설치된다.
+openwakeword>=0.6 ; platform_system != "Linux"
 
 # --- 서버 · 대시보드 ----------------------------------------------------
 fastapi>=0.110
