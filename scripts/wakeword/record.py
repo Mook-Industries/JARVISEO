@@ -104,6 +104,8 @@ def record_clips(
 
 def synth_clips(label: str, count: int, texts: list[str], folder: Path) -> None:
     """마이크 대신 TTS 로 목소리·속도·문장부호를 바꿔 가며 합성해 16kHz 로 낮춰 저장한다."""
+    import httpx2
+    from openai import OpenAIError
     from scipy.signal import resample_poly
 
     from jarviseo.voice.tts import SAMPLE_RATE as TTS_RATE
@@ -114,9 +116,20 @@ def synth_clips(label: str, count: int, texts: list[str], folder: Path) -> None:
     variants = [t + mark for t in texts for mark in ("", "!", "?")]
     combos = list(itertools.product(VOICES, SPEEDS, variants))
     random.Random(0).shuffle(combos)  # count 가 조합 수보다 적어도 목소리가 골고루 섞이게
-    for n, (voice, speed, text) in enumerate(itertools.islice(itertools.cycle(combos), count), 1):
+    # 다시 돌리면 이미 만든 개수만큼 건너뛰고 이어서 만든다. 앞에서 만든 조합과 겹치지 않게.
+    done = len(list((folder / label).glob("*-tts-*.wav")))
+    todo = itertools.islice(itertools.cycle(combos), done, None)
+    n = 0
+    while n < count:
+        voice, speed, text = next(todo)
         tts = TextToSpeech(voice=voice, speed=speed)
-        pcm = np.frombuffer(b"".join(tts.synthesize(text)), dtype="<i2")
+        try:
+            pcm = np.frombuffer(b"".join(tts.synthesize(text)), dtype="<i2")
+        except (OpenAIError, httpx2.HTTPError) as e:
+            # 받는 도중에 끊기면(ReadTimeout) 반쪽 소리라 버리고 다음 조합으로 넘어간다.
+            print(f"  합성 실패, 건너뛴다: {text!r} {voice} {speed} ({e})")
+            continue
+        n += 1
         audio = resample_poly(pcm.astype(np.float32), SAMPLE_RATE, TTS_RATE)
         audio = np.clip(audio, -32768, 32767).astype(np.int16)
         path = folder / label / f"{stamp}-tts-{n:03d}.wav"
