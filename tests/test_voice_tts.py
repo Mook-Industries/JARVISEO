@@ -7,6 +7,7 @@ import sys
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+import httpx2
 import pytest
 
 from jarviseo import config
@@ -83,6 +84,26 @@ def test_speak_는_받은_조각을_순서대로_재생하고_첫_조각_시간�
 
     assert played == [b"\x01" * CHUNK_BYTES, b"\x02" * CHUNK_BYTES]
     assert took == tts.last_latency_ms >= 0
+
+
+def test_받는_도중_끊기면_받은_만큼만_재생하고_예외를_올리지_않는다(played):
+    def cut(size):
+        yield b"\x01" * size
+        raise httpx2.ReadTimeout("끊김")  # openai 가 감싸지 않고 그대로 올라온다
+
+    took = TextToSpeech(client=FakeClient(cut)).speak("안녕하세요.")
+
+    assert played == [b"\x01" * CHUNK_BYTES]
+    assert took is not None
+
+
+def test_첫_조각도_못_받으면_아무것도_재생하지_않고_None(played):
+    def dead(size):
+        raise httpx2.ReadTimeout("끊김")
+        yield
+
+    assert TextToSpeech(client=FakeClient(dead)).speak("안녕하세요.") is None
+    assert played == []
 
 
 @pytest.mark.parametrize(

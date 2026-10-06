@@ -62,7 +62,7 @@ class FakeTextToSpeech:
         self.spoken: list[str] = []
         self.last_latency_ms: float | None = None
 
-    def speak(self, text: str) -> float:
+    def speak(self, text: str) -> float | None:
         self.spoken.append(text)
         self.last_latency_ms = 0.0
         return 0.0
