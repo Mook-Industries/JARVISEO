@@ -93,6 +93,30 @@ VLM_MODEL = _get("JARVISEO_VLM_MODEL", "gpt-6-sol")
 STT_MODEL = _get("JARVISEO_STT_MODEL", "gpt-transcribe")
 TTS_MODEL = _get("JARVISEO_TTS_MODEL", "gpt-4o-mini-tts")
 
+# --- 식품 성분 판정 ------------------------------------------
+# 식품안전나라 OpenAPI. C005(바코드 → 품목제조보고번호) → C002/C006(원재료명).
+# 발급 전에는 "sample" 로 두면 샘플 데이터 몇 건만 응답한다.
+# C005 바코드 데이터는 2018년 이후 갱신이 멈춰 있어, 못 찾으면 OCR 로 넘어간다.
+# .env 에 빈 값으로 적혀 있으면 os.getenv 가 "" 를 돌려주므로 or 로 한 번 더 받는다.
+MFDS_API_KEY = _get("JARVISEO_MFDS_API_KEY") or "sample"
+MFDS_BASE_URL = _get("JARVISEO_MFDS_BASE_URL", "http://openapi.foodsafetykorea.go.kr/api")
+# 외부 API 가 느리면 사용자는 그동안 침묵을 듣는다. 짧게 끊고 OCR 로 넘어간다.
+MFDS_TIMEOUT_SEC = _get_float("JARVISEO_MFDS_TIMEOUT_SEC", 3.0)
+
+# OCR 평균 신뢰도가 이보다 낮으면 검증 실패로 본다 (Validate Agent).
+OCR_CONF_THRESHOLD = _get_float("JARVISEO_OCR_CONF_THRESHOLD", 0.8)
+# 기획 05-workflow (2026-10-02 반영):
+#   검증 실패 → 같은 사진에서 영역 재선택·보정 후 재처리 (사진당 1회)
+#   그래도 실패 → "성분표를 더 가까이 가리켜 주세요" 재촬영 (요청당 최대 2회)
+#   → 최대 사진 3장 × 사진당 OCR 2회 = 검증 최대 6회
+OCR_REPROCESS_PER_PHOTO = _get_int("JARVISEO_OCR_REPROCESS_PER_PHOTO", 1)
+OCR_MAX_RETAKE = _get_int("JARVISEO_OCR_MAX_RETAKE", 2)
+
+# 동의어 사전("탈지분유" → "우유"). 판정 recall 이 이 파일 품질에 달려 있다.
+ALLERGEN_SYNONYMS_PATH = DATASETS_DIR / "allergen_synonyms.json"
+# 성분표 검출 YOLO 가중치. 학습 전에는 파일이 없고, 그때는 크롭 전체를 OCR 한다.
+PANEL_DETECTOR_WEIGHTS = MODELS_DIR / "ingredient_panel.pt"
+
 # --- 관계형 DB (Postgres) -------------------------------------------------
 # docker compose 로 띄운 Postgres 에 붙는다.
 #   네이티브 실행   → localhost:5432

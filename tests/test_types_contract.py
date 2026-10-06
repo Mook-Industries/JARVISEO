@@ -48,9 +48,21 @@ def test_detection_필드_이름():
     assert det.track_id is None
 
 
-def test_알레르기_판정에_uncertain이_있다():
-    # 애매할 때 SAFE 로 떨어뜨리면 안 된다. 재현율 우선 원칙.
-    assert AllergenVerdict.UNCERTAIN.value == "uncertain"
+def test_알레르기_판정_값은_네_가지다():
+    # 2026-10-06 합의: 함유 / 혼입 가능 / 미검출 / 확인 불가.
+    # DB turn_ingredient.verdict 에 이 value 가 그대로 저장된다.
+    assert {v.value for v in AllergenVerdict} == {
+        "contains",
+        "may_contain",
+        "not_detected",
+        "undetermined",
+    }
+    assert [v.label for v in AllergenVerdict] == ["함유", "혼입 가능", "미검출", "확인 불가"]
+
+
+def test_알레르기_판정에_안전은_없다():
+    # 미검출을 '안전'으로 바꿔 말하면 안 된다. 재현율 우선 원칙.
+    assert "safe" not in {v.value for v in AllergenVerdict}
 
 
 def test_의도와_단서_목록():
