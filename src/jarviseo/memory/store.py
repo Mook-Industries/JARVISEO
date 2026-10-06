@@ -23,6 +23,7 @@ from jarviseo.memory.models import (
     Allergen,
     Base,
     ChatSession,
+    Product,
     SessionTurn,
     TurnCandidate,
     TurnInference,
@@ -30,7 +31,7 @@ from jarviseo.memory.models import (
     User,
     UserAllergen,
 )
-from jarviseo.types import AssistantResponse, Utterance
+from jarviseo.types import AssistantResponse, IngredientSource, ProductInfo, Utterance
 
 __all__ = ["MemoryStore", "STAGE_COLUMNS"]
 
@@ -186,6 +187,52 @@ class MemoryStore:
                     db.add(UserAllergen(user_id=user_id, allergen_id=aid))
                 elif row.deleted_at is not None:
                     row.deleted_at = None
+
+    # -- 제품 캐시 (② 식품 성분) --------------------------------------------
+
+    def get_product(self, barcode: str) -> ProductInfo | None:
+        """캐시된 제품 정보. 없거나 ``invalid`` 로 표시된 행이면 None.
+
+        반환값의 source 는 CACHE 다. 원래 API 에서 왔든 OCR 에서 왔든,
+        이번 턴에서는 캐시에서 꺼낸 것이기 때문이다.
+        """
+        with self.session() as db:
+            row = db.get(Product, barcode)
+            if row is None or row.status == "invalid":
+                return None
+            return ProductInfo(
+                barcode=row.barcode,
+                product_name=row.product_name or "",
+                report_no=row.report_no or "",
+                raw_ingredients=row.raw_ingredients or "",
+                allergen_notice=row.allergen_notice or "",
+                cross_contamination=row.cross_contamination or "",
+                source=IngredientSource.CACHE,
+            )
+
+    def save_product(
+        self, info: ProductInfo, status: str = "verified", ingredients: list[str] | None = None
+    ) -> None:
+        """제품 정보를 캐시에 넣거나 덮어쓴다.
+
+        status: verified(API 에서 옴 / OCR 결과가 다시 일치) · pending(OCR 첫 저장)
+        바코드가 없는 OCR 결과는 저장하지 않는다. 다음에 찾을 열쇠가 없다.
+        """
+        if not info.barcode:
+            return
+        with self.session() as db:
+            row = db.get(Product, info.barcode)
+            if row is None:
+                row = Product(barcode=info.barcode)
+                db.add(row)
+            row.product_name = info.product_name
+            row.report_no = info.report_no
+            row.raw_ingredients = info.raw_ingredients
+            row.allergen_notice = info.allergen_notice or None
+            row.cross_contamination = info.cross_contamination or None
+            if ingredients is not None:
+                row.ingredients = ingredients
+            row.status = status
 
     # -- 세션 --------------------------------------------------------------
 

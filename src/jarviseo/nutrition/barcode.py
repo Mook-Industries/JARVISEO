@@ -1,6 +1,6 @@
 """바코드 → 제품 정보 조회.  (Barcode Lookup Agent)
 
-흐름: 크롭 이미지 → 바코드 번호 읽기 → (다음 커밋) product 캐시 → 식품안전나라 API
+흐름: 크롭 이미지 → 바코드 번호 읽기 → product 캐시 → 식품안전나라 API → 캐시 저장
       여기서 원재료명을 못 얻으면 호출한 쪽이 성분표 OCR 로 넘어간다.
 
 바코드 읽기에 pyzbar 대신 OpenCV 내장 검출기를 쓰는 이유
@@ -14,15 +14,27 @@ LLM 을 쓰지 않는다. 바코드 번호는 체크섬으로 검증하고, 제�
 
 from __future__ import annotations
 
+import logging
+import time
+from dataclasses import dataclass
+
 import cv2
+import httpx
 import numpy as np
 
-from jarviseo.types import BarcodeRead, BBox
+from jarviseo import config
+from jarviseo.types import BarcodeRead, BBox, IngredientSource, ProductInfo
 
 __all__ = [
+    "BarcodeLookup",
+    "MfdsClient",
+    "MfdsError",
     "is_valid_gtin",
+    "lookup_product",
     "read_barcodes",
 ]
+
+log = logging.getLogger(__name__)
 
 # 식품 포장에 쓰이는 소매용 바코드만 받는다. QR·Code128 등은 제품 번호가 아니다.
 _RETAIL_TYPES = {"EAN_13", "EAN_8", "UPC_A", "UPC_E"}
@@ -113,3 +125,154 @@ def read_barcodes(image: np.ndarray) -> list[BarcodeRead]:
         if found:
             break  # 한 크기에서 읽혔으면 나머지는 볼 필요 없다
     return list(found.values())
+
+
+# --------------------------------------------------------------------------
+# 2. 식품안전나라 OpenAPI
+# --------------------------------------------------------------------------
+
+
+class MfdsError(Exception):
+    """API 가 에러 코드를 돌려줬다 (인증키 오류, 호출 한도 초과 등)."""
+
+
+class MfdsClient:
+    """식품안전나라 OpenAPI.  C005(바코드 → 품목제조보고번호) → C002/C006(원재료명).
+
+    URL 형식: {base}/{key}/{서비스}/json/{시작}/{끝}/{조건=값}
+    데이터가 없으면 RESULT.CODE 가 INFO-200 이고 row 가 없다. 에러가 아니다.
+    """
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        timeout: float | None = None,
+        transport: httpx.BaseTransport | None = None,  # 테스트에서 가짜 응답을 끼운다
+    ) -> None:
+        self.api_key = api_key or config.MFDS_API_KEY
+        self.base_url = (base_url or config.MFDS_BASE_URL).rstrip("/")
+        self._http = httpx.Client(timeout=timeout or config.MFDS_TIMEOUT_SEC, transport=transport)
+
+    def close(self) -> None:
+        self._http.close()
+
+    def __enter__(self) -> MfdsClient:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def _call(self, service: str, params: dict[str, str], end: int = 5) -> list[dict]:
+        cond = "&".join(f"{k}={v}" for k, v in params.items())
+        url = f"{self.base_url}/{self.api_key}/{service}/json/1/{end}/{cond}"
+        resp = self._http.get(url)
+        resp.raise_for_status()
+        body = resp.json().get(service) or {}
+        result = body.get("RESULT") or {}
+        if str(result.get("CODE", "")).startswith("ERROR"):
+            raise MfdsError(f"{service}: {result.get('CODE')} {result.get('MSG', '')}")
+        return body.get("row") or []
+
+    def _raw_materials(self, report_no: str) -> str:
+        # C002 = 식품(첨가물) 원재료, C006 = 축산물 원재료. 앞에서 찾으면 멈춘다.
+        for service in ("C002", "C006"):
+            rows = self._call(service, {"PRDLST_REPORT_NO": report_no}, end=100)
+            names = [r.get("RAWMTRL_NM", "").strip() for r in rows]
+            names = [n for n in names if n]
+            if names:
+                return ", ".join(names)
+        return ""
+
+    def lookup(self, barcode: str) -> ProductInfo | None:
+        """바코드로 제품을 찾는다. 등록이 없으면 None.
+
+        제품은 있는데 원재료가 비어 있을 수 있다(raw_ingredients == "").
+        그 판단은 ``lookup_product`` 가 한다.
+        """
+        rows = self._call("C005", {"BAR_CD": barcode})
+        if not rows:
+            return None
+        row = rows[0]
+        report_no = str(row.get("PRDLST_REPORT_NO", "")).strip()
+        return ProductInfo(
+            barcode=barcode,
+            product_name=str(row.get("PRDLST_NM", "")).strip(),
+            report_no=report_no,
+            raw_ingredients=self._raw_materials(report_no) if report_no else "",
+            source=IngredientSource.API,
+        )
+
+
+# --------------------------------------------------------------------------
+# 3. 캐시 우선 조회 (Barcode Lookup Agent 본체)
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class BarcodeLookup:
+    """조회 결과. ``hit`` 이 False 면 성분표 OCR 로 넘어간다.
+
+    바코드는 읽었는데 제품을 못 찾은 경우에도 ``barcode`` 는 채워 둔다.
+    OCR 로 읽은 성분을 그 바코드로 캐시에 남기기 위해서다.
+    """
+
+    barcode: BarcodeRead | None
+    product: ProductInfo | None
+    elapsed_ms: int = 0
+    reason: str = ""  # 미스 사유: no_barcode / not_found / no_ingredients / api_error
+
+    @property
+    def hit(self) -> bool:
+        return self.product is not None and bool(self.product.raw_ingredients)
+
+
+def lookup_product(
+    image: np.ndarray, store=None, client: MfdsClient | None = None
+) -> BarcodeLookup:
+    """크롭 이미지 → 제품 정보. 캐시 → API 순서로 찾는다.
+
+    Args:
+        image: 타깃 크롭 (BGR).
+        store: ``MemoryStore``. 없으면 캐시를 건너뛴다(테스트·오프라인).
+        client: ``MfdsClient``. 없으면 API 를 건너뛴다.
+
+    외부 API 장애는 예외로 올리지 않는다. 사용자는 OCR 로 답을 받을 수 있어야 한다.
+    """
+    t0 = time.perf_counter()
+
+    def done(
+        read: BarcodeRead | None, product: ProductInfo | None, reason: str = ""
+    ) -> BarcodeLookup:
+        ms = int((time.perf_counter() - t0) * 1000)
+        return BarcodeLookup(barcode=read, product=product, elapsed_ms=ms, reason=reason)
+
+    reads = read_barcodes(image)
+    if not reads:
+        return done(None, None, "no_barcode")
+
+    reason = "not_found"
+    for read in reads:
+        if store is not None:
+            cached = store.get_product(read.code)
+            if cached is not None and cached.raw_ingredients:
+                return done(read, cached)
+
+        if client is None:
+            continue
+        try:
+            product = client.lookup(read.code)
+        except (httpx.HTTPError, MfdsError, ValueError) as e:  # ValueError: JSON 깨짐
+            log.warning("식품안전나라 조회 실패 (%s): %s", read.code, e)
+            reason = "api_error"
+            continue
+        if product is None:
+            continue
+        if not product.raw_ingredients:
+            reason = "no_ingredients"
+            continue
+        if store is not None:
+            store.save_product(product, status="verified")
+        return done(read, product)
+
+    return done(reads[0], None, reason)
