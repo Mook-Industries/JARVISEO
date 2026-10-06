@@ -1,16 +1,20 @@
 """음성 입출력 — 담당: 문태현.
 
-흐름: 웨이크워드 감지 -> VAD 로 발화 구간 파악 -> STT -> (처리) -> TTS
+흐름: 호출어 감지 -> 마이크·VAD 로 발화 구간과 시작 시각 -> STT -> (처리) -> TTS
 
-되먹임 루프 주의
-----------------
-스피커로 내보낸 TTS 음성을 마이크가 다시 듣고 시스템이 자기 응답에
-반응하면 무한 루프가 된다. TTS 재생 중에는 마이크 입력을 무시하는
-게이트를 반드시 둔다(재생 종료 후 0.3초 여유 포함).
-이어폰을 쓰면 자연히 해소되지만, 발표장에서 스피커를 쓸 수 있으므로
-코드로 막아둬야 한다.
+그래프는 ``SpeechToText.listen()`` 과 ``TextToSpeech.speak()`` 만 부른다.
+실제 구현이 끝나기 전이나 CI 에서는 모양이 같은 Fake 를 끼운다.
 """
 
+from jarviseo.voice.fake import FakeSpeechToText, FakeTextToSpeech
+from jarviseo.voice.stt import SpeechToText
+from jarviseo.voice.tts import TextToSpeech
 from jarviseo.voice.wakeword import WakeWordDetector
 
-__all__ = ["WakeWordDetector"]
+__all__ = [
+    "FakeSpeechToText",
+    "FakeTextToSpeech",
+    "SpeechToText",
+    "TextToSpeech",
+    "WakeWordDetector",
+]
