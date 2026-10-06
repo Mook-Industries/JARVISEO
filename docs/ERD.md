@@ -339,6 +339,9 @@ HACCP 공공데이터 / OCR 결과 캐시.
 | `product` | `raw_ingredients` · `ingredients` | 기본값이 `now()` — 텍스트·JSONB 에 타임스탬프 |
 | `turn_inference` | `resolved_by` | 코멘트를 위 표의 `MODEL` / `USER` / `NULL` 정의로 바꿀 것 |
 | `turn_candidate` | `cue_scores` | 코멘트 맨 앞에 "키 = ablation 단서. center(v1)·point(v2)·gaze(v3)·lang(v4)·ctx(v5)" 추가 |
+| `turn_ingredient` | `barcode` | NOT NULL → NULL 허용. 바코드를 못 읽고 OCR 로만 판정한 턴도 기록해야 한다 (2026-10-06) |
+| `turn_ingredient` | `verdict` | `VARCHAR(10)` 위험/주의/안전 → `VARCHAR(15)` `contains`/`may_contain`/`not_detected`/`undetermined` (함유/혼입 가능/미검출/확인 불가). '안전' 값은 두지 않는다 (2026-10-06) |
+| `turn_ingredient` | `may_contain` | 새 컬럼 `JSONB`. 혼입 가능 문구로만 걸린 성분 표기. `matched`(함유)와 섞지 않는다 (2026-10-06) |
 
 **관계선이 빠진 곳** — 컬럼은 있는데 내보낸 DDL 에 FK 가 없다. 코드에는 전부 FK 로 걸려 있다.
 

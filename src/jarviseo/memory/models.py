@@ -456,10 +456,18 @@ class TurnIngredient(Base):
     turn_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("session_turn.turn_id", ondelete="CASCADE"), primary_key=True
     )
-    barcode: Mapped[str] = mapped_column(String(20), ForeignKey("product.barcode"), index=True)
+    # NULL 허용: 바코드를 못 읽고 성분표 OCR 로만 판정한 턴도 기록해야 한다.
+    # (ERD 원본은 NOT NULL — docs/ERD.md "ERD 쪽에서 고쳐야 할 것" 참고)
+    barcode: Mapped[str | None] = mapped_column(
+        String(20), ForeignKey("product.barcode"), index=True, nullable=True
+    )
     source: Mapped[str | None] = mapped_column(String(10))  # 출처: CACHE / API / OCR
-    verdict: Mapped[str | None] = mapped_column(String(10), index=True)  # 위험 / 주의 / 안전
-    matched: Mapped[list] = mapped_column(JSON, default=list)  # 걸린 이유(성분 표기)
+    # types.AllergenVerdict 값: contains(함유) / may_contain(혼입 가능)
+    #                          / not_detected(미검출) / undetermined(확인 불가)
+    verdict: Mapped[str | None] = mapped_column(String(15), index=True)
+    matched: Mapped[list] = mapped_column(JSON, default=list)  # 함유로 걸린 성분 표기
+    # 혼입 가능 문구("같은 제조시설 ~")로만 걸린 성분 표기. 함유와 섞지 않는다.
+    may_contain: Mapped[list] = mapped_column(JSON, default=list)
     normalized: Mapped[list] = mapped_column(JSON, default=list)  # 정규화된 성분 목록
     ocr_conf: Mapped[Decimal | None] = mapped_column(Score)
     retry_count: Mapped[int] = mapped_column(SmallInteger, default=0)  # 최대 시도 한계 설정용
@@ -469,7 +477,7 @@ class TurnIngredient(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     turn: Mapped[SessionTurn] = relationship(back_populates="ingredient")
-    product: Mapped[Product] = relationship(back_populates="judgements")
+    product: Mapped[Product | None] = relationship(back_populates="judgements")
 
 
 # ==========================================================================

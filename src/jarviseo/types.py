@@ -44,6 +44,9 @@ __all__ = [
     "OCRLine",
     "IngredientPanel",
     "AllergenVerdict",
+    "IngredientSource",
+    "BarcodeRead",
+    "ProductInfo",
     "AllergenJudgement",
     "MemoryHit",
     "AssistantResponse",
@@ -242,16 +245,66 @@ class IngredientPanel:
 
 
 class AllergenVerdict(StrEnum):
-    """알레르기 판정 결과.
+    """알레르기 판정 결과.  (2026-10-06 팀 합의: 함유 / 혼입 가능 / 미검출 / 확인 불가)
 
-    UNCERTAIN 이 핵심이다. 확정된 설계 결정에 따라 정밀도보다 재현율을
-    우선하고, 애매하면 SAFE 라고 하지 않고 UNCERTAIN 을 반환한다.
-    놓친 알레르겐의 피해가 과잉 경고보다 훨씬 크기 때문이다.
+    '안전'이라는 값은 일부러 두지 않는다. 확인한 표시에서 못 찾은 것(미검출)과
+    먹어도 된다는 것은 다르다. 놓친 알레르겐의 피해가 과잉 경고보다 훨씬 크므로
+    애매하면 UNDETERMINED 를 낸다. 재현율 우선 원칙.
+
+    우선순위: CONTAINS > MAY_CONTAIN > UNDETERMINED > NOT_DETECTED
+    (함유가 하나라도 있으면, 다른 영역이 흐려도 결과는 CONTAINS 다.)
     """
 
-    SAFE = "safe"  # 등록된 알레르겐이 안 보임
-    WARN = "warn"  # 알레르겐으로 보이는 성분을 찾음
-    UNCERTAIN = "uncertain"  # 글자를 제대로 못 읽었거나 판단 불가
+    CONTAINS = "contains"  # 함유 — 원재료·알레르기 표시에 등록 알레르겐이 있음
+    MAY_CONTAIN = "may_contain"  # 혼입 가능 — "같은 제조시설에서 ~ 사용" 표시에만 있음
+    NOT_DETECTED = "not_detected"  # 미검출 — 확인한 표시 범위에서 못 찾음 (안전 아님)
+    UNDETERMINED = "undetermined"  # 확인 불가 — 판독 실패·원재료명 없음·근거 부족
+
+    @property
+    def label(self) -> str:
+        """화면·음성에 쓰는 한국어 이름."""
+        return _VERDICT_LABELS[self]
+
+
+_VERDICT_LABELS = {
+    AllergenVerdict.CONTAINS: "함유",
+    AllergenVerdict.MAY_CONTAIN: "혼입 가능",
+    AllergenVerdict.NOT_DETECTED: "미검출",
+    AllergenVerdict.UNDETERMINED: "확인 불가",
+}
+
+
+class IngredientSource(StrEnum):
+    """성분 정보를 어디서 가져왔나. ERD ``turn_ingredient.source`` 값과 같다."""
+
+    CACHE = "CACHE"  # product 테이블 캐시
+    API = "API"  # 식품안전나라 (C005 → C002/C006)
+    OCR = "OCR"  # 성분표 직접 판독
+
+
+@dataclass
+class BarcodeRead:
+    """크롭 이미지에서 읽어낸 바코드 하나."""
+
+    code: str  # "8801234567890"
+    symbology: str  # "EAN13", "EAN8", "UPCA" ...
+    bbox: BBox | None = None
+
+
+@dataclass
+class ProductInfo:
+    """바코드 조회 결과. 캐시·API·OCR 어디서 왔든 같은 모양으로 담는다.
+
+    ``memory.models.Product`` 행과 1:1 로 옮겨진다.
+    """
+
+    barcode: str | None  # OCR 경로에서 바코드를 못 읽었으면 None
+    product_name: str = ""
+    report_no: str = ""  # 품목제조보고번호
+    raw_ingredients: str = ""  # 원재료명 원문
+    allergen_notice: str = ""  # "알레르기 유발물질: 우유, 대두 함유"
+    cross_contamination: str = ""  # "같은 제조시설에서 땅콩을 사용한 제품과 ..."
+    source: IngredientSource = IngredientSource.API
 
 
 @dataclass
@@ -261,13 +314,21 @@ class AllergenJudgement:
     matched_terms 는 '성분표에 실제로 적혀 있던 말'을 그대로 담는다.
     사용자에게는 "탈지분유가 들어 있어 우유 알레르기에 해당합니다"처럼
     원문과 매핑 결과를 같이 보여줘야 납득이 된다.
+
+    함유(matched_*)와 혼입 가능(may_contain_*)을 따로 담는 이유: 같은 '우유'라도
+    원재료에 있는 것과 제조시설 문구에만 있는 것은 사용자에게 전할 말이 다르다.
     """
 
     verdict: AllergenVerdict
     matched_terms: list[str] = field(default_factory=list)  # ["탈지분유", "카제인"]
     matched_allergens: list[str] = field(default_factory=list)  # ["우유"]
-    reason: str = ""
+    may_contain_terms: list[str] = field(default_factory=list)  # ["땅콩"]
+    may_contain_allergens: list[str] = field(default_factory=list)  # ["땅콩"]
+    reason: str = ""  # UNDETERMINED 사유 등. 예: "low_ocr_conf"
     panel: IngredientPanel | None = None
+    product: ProductInfo | None = None
+    source: IngredientSource | None = None
+    response_text: str = ""  # TTS 로 넘길 안내 문장 (규칙 기반, LLM 미사용)
 
 
 # --------------------------------------------------------------------------

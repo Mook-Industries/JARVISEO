@@ -30,6 +30,13 @@ onnxruntime>=1.17
 easyocr>=1.7
 # paddleocr>=2.7
 
+# --- 식품 성분 판정 -----------------------------------------------------
+# pyzbar: 크롭 이미지에서 바코드 번호를 읽는다. 윈도우 wheel 에 zbar DLL 이 들어 있다.
+#   (맥은 brew install zbar 가 따로 필요하다)
+pyzbar>=0.1.9
+# httpx: 식품안전나라 OpenAPI 호출. timeout 을 짧게 걸고 실패하면 OCR 로 넘어간다.
+httpx>=0.27
+
 # --- 오케스트레이션 · LLM -----------------------------------------------
 langgraph>=0.2
 langchain-core>=0.3
