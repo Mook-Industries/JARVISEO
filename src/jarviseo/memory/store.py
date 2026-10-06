@@ -221,6 +221,7 @@ class MemoryStore:
         trigger_type: str = "WAKEWORD",
         pointing_variant: str | None = None,
         detector_version: str | None = None,
+        stt_raw_text: str | None = None,
     ) -> int:
         """대화 한 번을 기록하고 turn_id 를 반환한다.
 
@@ -229,6 +230,9 @@ class MemoryStore:
         ``turn_inference`` (판정·지연) / ``turn_candidate`` (후보 목록).
         한 트랜잭션 안에서 같이 써야 "턴은 있는데 추론 결과가 없는"
         반쪽 기록이 남지 않는다.
+
+        stt_raw_text 는 호출어·필러를 빼기 전 받아쓴 원문(``SpeechToText.last_raw_text``)이다.
+        안 넘기면 utterance.text 를 그대로 적는다.
         """
         with self.session() as db:
             turn = SessionTurn(
@@ -241,7 +245,7 @@ class MemoryStore:
             db.add(turn)
             db.flush()
 
-            voice = TurnVoice(turn_id=turn.turn_id, stt_raw_text=utterance.text)
+            voice = TurnVoice(turn_id=turn.turn_id, stt_raw_text=stt_raw_text or utterance.text)
             inference = TurnInference(
                 turn_id=turn.turn_id,
                 is_reask=response.needs_clarify,
