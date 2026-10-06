@@ -15,16 +15,26 @@ name: CI
 on:
   pull_request:
     branches: [main]
+    # 기본값(opened, synchronize, reopened)에 edited 를 더한다.
+    # 다른 PR 브랜치 위에 쌓은 PR 은, 아래 PR 이 머지되면 GitHub 이 base 를
+    # main 으로 바꿔준다. 이때 나는 이벤트가 edited 라서 기본값만으로는 CI 가
+    # 안 돌고, 필수 체크가 "Waiting for status" 에 멈춰 머지 버튼이 잠겼다.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
 # 같은 PR 에 새 커밋을 올리면 이전 실행을 취소한다. Actions 시간을 아낀다.
+# 제목·본문만 고친 edited 는 그룹을 따로 둔다. 같은 그룹이면 돌던 CI 를
+# 취소해 놓고 자기는 아래 if 로 건너뛰어서, 체크가 취소 상태로 남는다.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.action == 'edited' && !github.event.changes.base && github.run_id || 'ci' }}
   cancel-in-progress: true
 
 jobs:
   check:
+    # edited 는 제목·본문 수정(체크박스 클릭 포함)에도 난다.
+    # 그중 base 가 바뀐 경우만 돌린다.
+    if: github.event.action != 'edited' || github.event.changes.base
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
