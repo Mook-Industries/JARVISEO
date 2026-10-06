@@ -17,11 +17,13 @@
 
 from __future__ import annotations
 
+import json
+import unicodedata
 from pathlib import Path
 
 from jarviseo.types import AllergenJudgement, IngredientPanel
 
-__all__ = ["load_synonyms", "judge_allergens"]
+__all__ = ["load_synonyms", "judge_allergens", "KNOWN_ALLERGENS", "normalize_term"]
 
 # 식약처 표시 대상 알레르기 유발물질을 출발점으로 삼는다.
 # 실제 사전은 JSON 파일로 관리하고, 이 목록은 키 이름의 기준일 뿐이다.
@@ -48,15 +50,64 @@ KNOWN_ALLERGENS = [
 ]
 
 
+def normalize_term(text: str) -> str:
+    """성분 표기를 비교 가능한 모양으로 맞춘다. 사전과 성분표 양쪽에 같은 함수를 쓴다.
+
+    - NFC 정규화: 맥에서 만든 파일은 한글이 자모 단위(NFD)로 저장될 수 있다.
+      눈으로는 같은 "우유"인데 문자열 비교는 틀리게 나온다.
+    - 공백 제거: 성분표는 "탈지 분유", "탈지분유"를 섞어 쓴다.
+    """
+    return "".join(unicodedata.normalize("NFC", text).split())
+
+
 def load_synonyms(path: Path) -> dict[str, list[str]]:
     """동의어 사전을 읽는다.
 
-    형태: {"우유": ["탈지분유", "전지분유", "카제인", "유청", "유청단백", ...]}
+    형태: {"우유": ["우유", "탈지분유", "전지분유", "카제인", "유청", ...]}
+    ``_`` 로 시작하는 키(``_meta`` 등)는 메모용이라 건너뛴다.
 
     파일을 열 때 encoding="utf-8" 을 반드시 명시한다.
     윈도우 기본값은 cp949 라서 생략하면 팀원 노트북에서만 깨진다.
+
+    Returns:
+        표준명 → 표기 목록. 표기는 ``normalize_term`` 을 거친 값이고,
+        각 목록의 첫 항목은 표준명 자신이다(사전에 빠뜨려도 넣어 준다).
+
+    Raises:
+        ValueError: 사전이 잘못됐을 때. 판정 근거가 되는 데이터라 조용히 넘기지 않는다.
+            - KNOWN_ALLERGENS 에 없는 키 (오타 방지)
+            - 표기 목록이 문자열 배열이 아님
+            - 한 표기가 두 알레르겐에 동시에 들어 있음 (판정 결과가 모호해짐)
     """
-    raise NotImplementedError
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: 최상위가 객체(dict)가 아닙니다")
+
+    known = {normalize_term(a) for a in KNOWN_ALLERGENS}
+    owner: dict[str, str] = {}  # 표기 → 처음 등록한 알레르겐 (중복 검사용)
+    result: dict[str, list[str]] = {}
+
+    for key, aliases in raw.items():
+        if key.startswith("_"):
+            continue
+        name = normalize_term(key)
+        if name not in known:
+            raise ValueError(f"{path}: 알 수 없는 알레르겐 '{key}' (KNOWN_ALLERGENS 확인)")
+        if not isinstance(aliases, list) or not all(isinstance(a, str) for a in aliases):
+            raise ValueError(f"{path}: '{key}' 의 값은 문자열 배열이어야 합니다")
+
+        terms: list[str] = []
+        for term in (name, *aliases):
+            term = normalize_term(term)
+            if not term or term in terms:
+                continue
+            if term in owner and owner[term] != name:
+                raise ValueError(f"{path}: '{term}' 이 '{owner[term]}' 와 '{name}' 에 중복됩니다")
+            owner[term] = name
+            terms.append(term)
+        result[name] = terms
+
+    return result
 
 
 def judge_allergens(
