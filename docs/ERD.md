@@ -69,7 +69,7 @@ erDiagram
 |---|---|---|---|
 | 사용자 ID | `user_id` | BIGINT **PK/FK → users** | |
 | 음성 크기 | `tts_volume` | SMALLINT | 기본 70 |
-| 말하기 속도 | `tts_speed` | VARCHAR(10) | `SLOW` / `NORMAL` / `FAST` (기본 `NORMAL`). gpt-4o-mini-tts 는 speed 파라미터 미지원 → 코드에서 instructions 문구 또는 재생 속도(time-stretch)로 변환 |
+| 말하기 속도 | `tts_speed` | VARCHAR(10) | `SLOW` / `NORMAL` / `FAST` (기본 `NORMAL`). `voice/tts.py` 가 OpenAI speed 값(0.85 / 1.0 / 1.2)으로 변환 |
 | 보이스 | `tts_voice` | VARCHAR(50) | 기본 `ko-KR-SunHiNeural` |
 | 세션 초기화 시간(분) | `session_timeout_min` | SMALLINT | 무응답 N분 경과 시 종료 (기본 10) |
 | 대상 검출 표시 | `show_detection_box` | BOOLEAN | 기본 true |

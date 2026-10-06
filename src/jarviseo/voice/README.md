@@ -7,7 +7,8 @@
 | `wakeword.py` | "자비서" 호출어 감지 | 로컬 (상시) | FAR / FRR |
 | `stt.py` | 호출어 뒤 발화 받아쓰기 (`listen()` 이 녹음·VAD·받아쓰기·정리를 묶는다) | OpenAI STT | — |
 | `transcript.py` | 받아쓴 원문에서 호출어·필러를 빼고, 비었거나 너무 짧은 발화를 거른다 | 로컬 | — |
-| `tts.py` | 응답 음성 합성 · 재생 | OpenAI TTS | — |
+| `tts.py` | 응답 음성 합성 (`synthesize()` 가 PCM 조각을 받는 대로 낸다. 재생은 다음 이슈) | OpenAI TTS | — |
+| `tts_text.py` | TTS 에 넣기 전에 단위·쉼표·물결표를 읽는 말로 바꾸고 마크다운 기호를 뺀다. 문장 분할 함수도 있다 | 로컬 | — |
 | `mic.py` | 마이크를 30ms 블록으로 읽고 블록마다 들어온 시각을 붙인다 | 로컬 | — |
 | `vad.py` | webrtcvad 로 발화 하나를 잘라 낸다 (무음 700ms 면 끝) | 로컬 | — |
 | `fake.py` | 키 없이 쓰는 가짜 STT · TTS (그래프 개발 · CI 용) | 로컬 | — |
@@ -18,6 +19,10 @@
 `listen()` 은 정리한 질문을 돌려주고, 원문은 `last_raw_text`, 받아쓰기 왕복 시간(ms)은
 `last_latency_ms` 에 남긴다. 그래프는 원문을 `log_turn(..., stt_raw_text=...)` 로,
 왕복 시간을 응답의 `latency_ms["stt"]` 로 넘긴다.
+
+TTS 는 `user_setting.tts_speed` 를 OpenAI speed 값으로 바꿔 보낸다(SLOW 0.85, FAST 1.2, NORMAL 은 안 보냄).
+첫 조각을 받기까지 걸린 시간은 `last_latency_ms` 에 남고, 그래프가 `latency_ms["tts"]` 로 넘기면
+`turn_voice.tts_ms` 에 적힌다.
 
 모델 이름은 `config.py` 에서만 정한다. 지금은 STT `gpt-transcribe`, TTS `gpt-4o-mini-tts`
 (`.env` 의 `JARVISEO_STT_MODEL`, `JARVISEO_TTS_MODEL`).

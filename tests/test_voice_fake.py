@@ -20,13 +20,15 @@ def test_fake_의_공개_메서드가_실제와_같다(real, fake):
             assert inspect.signature(getattr(fake, name)) == inspect.signature(method), name
 
 
-def test_fake_stt_도_실제와_같은_결과_속성을_가진다():
+@pytest.mark.parametrize(
+    ("real", "fake"), [(SpeechToText, FakeSpeechToText), (TextToSpeech, FakeTextToSpeech)]
+)
+def test_fake_도_실제와_같은_결과_속성을_가진다(real, fake):
     def last_attrs(obj):
         return {name for name in vars(obj) if name.startswith("last_")}
 
-    real = SpeechToText(client=object())  # 키 없이 만들려고 가짜 client 를 넘긴다
-
-    assert last_attrs(FakeSpeechToText()) == last_attrs(real)
+    # 실제 쪽은 키 없이 만들려고 가짜 client 를 넘긴다
+    assert last_attrs(fake()) == last_attrs(real(client=object()))
 
 
 def test_fake_stt_는_돌려주기_전에_시작_콜백을_부른다():
