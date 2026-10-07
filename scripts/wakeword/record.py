@@ -37,7 +37,7 @@ import numpy as np
 
 from jarviseo import config
 from jarviseo.voice.mic import BLOCK, SAMPLE_RATE, Microphone
-from jarviseo.voice.vad import record_speech
+from jarviseo.voice.vad import record_speech, voiced_seconds
 
 ROOT = config.DATASETS_DIR / "wakeword"
 TEXTS = {
@@ -62,6 +62,18 @@ STYLES = [
     "짜증 난 목소리로",
 ]
 FIELDS = ["file", "label", "text", "speaker", "distance", "env", "source", "mic", "seconds", "at"]
+# 학습·평가에 쓰면 안 되는 클립의 기준. TTS 가 가끔 거의 무음이거나 말이 아닌 긴 잡음을 돌려줬다.
+MIN_VOICED_SEC = 0.25  # 실제 녹음은 짧게 불러도 0.39초 이상, 망가진 합성은 0.21초 이하였다
+MAX_TTS_SEC = 6.0  # 한 단어 합성은 길어도 5초 안쪽. 8~9초짜리는 받아써도 빈 글자인 잡음이었다
+
+
+def problem(audio: np.ndarray, source: str) -> str | None:
+    """학습·평가에 쓰면 안 되는 클립이면 그 이유를, 괜찮으면 None 을 돌려준다."""
+    if voiced_seconds(audio) < MIN_VOICED_SEC:
+        return "말소리 없음"
+    if source == "tts" and len(audio) / SAMPLE_RATE > MAX_TTS_SEC:
+        return "합성이 너무 김"
+    return None
 
 
 def sync(f) -> None:
@@ -160,9 +172,12 @@ def synth_clips(label: str, count: int, texts: list[str], folder: Path) -> None:
             # 받는 도중에 끊기면(ReadTimeout) 반쪽 소리라 버리고 다음 조합으로 넘어간다.
             print(f"  합성 실패, 건너뛴다: {text!r} {voice} {speed} ({e})")
             continue
-        n += 1
         audio = resample_poly(pcm.astype(np.float32), SAMPLE_RATE, TTS_RATE)
         audio = np.clip(audio, -32768, 32767).astype(np.int16)
+        if why := problem(audio, "tts"):
+            print(f"  {why}, 버리고 다음 조합으로: {text!r} {voice} {speed} {style or '기본'}")
+            continue
+        n += 1
         path = folder / label / f"{stamp}-tts-{n:03d}.wav"
         seconds = len(audio) / SAMPLE_RATE
         save(path, audio)
