@@ -27,6 +27,7 @@ label
 import argparse
 import csv
 import itertools
+import os
 import random
 import wave
 from datetime import datetime
@@ -63,17 +64,26 @@ STYLES = [
 FIELDS = ["file", "label", "text", "speaker", "distance", "env", "source", "mic", "seconds", "at"]
 
 
+def sync(f) -> None:
+    """파일을 디스크에 바로 쓴다. 안 하면 전원이 꺼질 때 wav 소리가 0 으로 남거나,
+    metadata.csv 끝이 NUL 바이트로 채워졌다(10/7 노트북이 꺼졌을 때 실제로 생김)."""
+    f.flush()
+    os.fsync(f.fileno())
+
+
 def save(path: Path, audio: np.ndarray) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(path), "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(SAMPLE_RATE)
-        w.writeframes(audio.astype("<i2").tobytes())
+    with path.open("wb") as f:
+        with wave.open(f, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(SAMPLE_RATE)
+            w.writeframes(audio.astype("<i2").tobytes())
+        sync(f)
 
 
 def write_meta(folder: Path, path: Path, seconds: float, **row: str) -> None:
-    """folder/metadata.csv 에 파일 한 개의 정보를 한 줄 더한다."""
+    """folder/metadata.csv 에 파일 한 개의 정보를 한 줄 더한다. wav 를 다 쓴 뒤에 부른다."""
     meta = folder / "metadata.csv"
     new = not meta.exists()
     with meta.open("a", newline="", encoding="utf-8") as f:
@@ -88,6 +98,7 @@ def write_meta(folder: Path, path: Path, seconds: float, **row: str) -> None:
                 **row,
             }
         )
+        sync(f)
 
 
 def record_clips(
