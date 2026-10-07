@@ -27,6 +27,9 @@ services:
   db:
     # pgvector 확장이 들어 있는 Postgres 16. 임베딩 검색도 이 DB 하나로 한다.
     image: pgvector/pgvector:pg16
+    # 이름을 고정해 둔다. 기본값(jarviseo-db-1)은 폴더 이름에서 만들어져서
+    # 사람마다 달라질 수 있고, DB 도구·docker ps 에서 어느 프로젝트 DB 인지 알아보기 어렵다.
+    container_name: JARVISEO-postgres
     environment:
       POSTGRES_USER: jarviseo
       POSTGRES_PASSWORD: jarviseo
