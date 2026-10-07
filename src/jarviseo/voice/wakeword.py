@@ -4,6 +4,10 @@
 ``on_detect(시각, 점수)`` 를 부른다. 별도 스레드에서 돈다.
 상시 듣는 것은 이것뿐이고 로컬에서만 돈다. 클라우드로 나가는 것은 호출어 뒤의 발화 한 번이다.
 
+재생 중 게이트는 두 단이다(gate.py). TTS 가 재생 중이거나 끝나고 0.3초 안이면
+STT 는 그 소리를 아예 못 듣고(1단), 호출어는 계속 듣되 임계값을 0.8 로 올린다(2단).
+자기 목소리에 깨지 않으면서도 재생 중에 "자비서"로 끼어들 수 있게 하려는 것이다.
+
 모델은 ``config.WAKEWORD_MODEL`` 로 바꿔 끼운다. 기성 모델 이름(hey_jarvis)이나 .onnx 경로를 받는다.
 기성 hey_jarvis 는 "자비서"를 못 잡는다(docs/experiments.md baseline, FRR 100%).
 커스텀 모델이 나오기 전까지는 "Hey Jarvis" 로 감지기가 도는지만 확인한다.
@@ -21,6 +25,7 @@ from collections.abc import Callable
 import numpy as np
 
 from jarviseo import config
+from jarviseo.voice.gate import MIC_GATE, MicGate
 from jarviseo.voice.mic import SAMPLE_RATE, MicStream
 
 __all__ = ["FRAME", "WakeWordDetector", "load_scorer"]
@@ -55,9 +60,13 @@ class WakeWordDetector:
         on_detect: Callable[[float, float], None] | None = None,
         model: str = config.WAKEWORD_MODEL,
         threshold: float = config.WAKEWORD_THRESHOLD,
+        playback_threshold: float = config.WAKEWORD_PLAYBACK_THRESHOLD,
+        gate: MicGate | None = None,
         scorer: Callable[[np.ndarray], float] | None = None,
     ) -> None:
-        """mic 는 STT 와 같이 쓰는 ``MicStream``. scorer 는 테스트에서 가짜 점수를 낼 때 넘긴다.
+        """mic 는 STT 와 같이 쓰는 ``MicStream``. gate·scorer 는 테스트에서만 넘긴다.
+
+        gate 가 닫혀 있던 동안(재생 중과 끝난 뒤 유예) 들어온 소리에는 playback_threshold 를 댄다.
 
         on_detect(t, score) 의 t 는 호출어를 잡은 프레임이 끝난 시각(monotonic)이다.
         ``listen(since=t)`` 로 넘기면 호출어 바로 뒤에 이어 말한 질문부터 받아쓴다.
@@ -66,6 +75,8 @@ class WakeWordDetector:
         self.mic = mic
         self.on_detect = on_detect
         self.threshold = threshold
+        self.playback_threshold = playback_threshold
+        self.gate = gate or MIC_GATE
         self._score = scorer or load_scorer(model)
         self._quiet_until = float("-inf")
         self._stop = threading.Event()
@@ -83,9 +94,13 @@ class WakeWordDetector:
         self._pending = np.concatenate([self._pending, block])
         while len(self._pending) >= FRAME:
             frame, self._pending = self._pending[:FRAME], self._pending[FRAME:]
+            # 게이트에는 소리가 마이크에 들어온 시각으로 묻는다. 감지가 밀려 돌아도 구간이 맞고,
+            # 재생 시작·끝 콜백(on_playback)으로 바꿀 때처럼 끝난 뒤 유예를 따로 셀 필요가 없다.
+            playing = not self.gate.is_open(self._pending_t)
+            threshold = self.playback_threshold if playing else self.threshold
             self._pending_t += FRAME / SAMPLE_RATE  # 이 프레임이 끝난 시각 = 다음 샘플의 시각
             self.last_score = self._score(frame)
-            if self.last_score >= self.threshold and self._pending_t >= self._quiet_until:
+            if self.last_score >= threshold and self._pending_t >= self._quiet_until:
                 self._quiet_until = self._pending_t + REFRACTORY_SEC
                 self._detected(self._pending_t, self.last_score)
 
