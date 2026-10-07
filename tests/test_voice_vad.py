@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from jarviseo.voice.mic import BLOCK, SAMPLE_RATE
-from jarviseo.voice.vad import record_speech
+from jarviseo.voice.vad import record_speech, voiced_seconds
 
 T0 = 100.0  # 첫 블록의 monotonic 시각. 값 자체는 상관없다
 BLOCK_SEC = BLOCK / SAMPLE_RATE
@@ -59,3 +59,14 @@ def test_녹음_파일로_started_at_을_검증한다():
     assert starts == [speech.started_at]  # 시작 콜백은 한 번, 같은 시각으로
     assert speech.started_at == pytest.approx(T0 + lead / SAMPLE_RATE, abs=0.06)
     assert speech.ended_at == pytest.approx(T0 + (lead + len(voice)) / SAMPLE_RATE, abs=0.15)
+
+
+def test_voiced_seconds_는_무음은_0_녹음_음성은_말한_만큼_센다():
+    with wave.open(str(DATA / "jarviseo_question.wav"), "rb") as f:
+        voice = np.frombuffer(f.readframes(f.getnframes()), dtype="<i2")
+    # 망가진 합성 클립은 소리 크기(RMS)가 이 정도였다
+    hum = np.random.default_rng(0).normal(0, 30, SAMPLE_RATE).astype(np.int16)
+
+    assert voiced_seconds(np.zeros(SAMPLE_RATE, np.int16)) == 0
+    assert voiced_seconds(hum) < 0.25
+    assert 0.5 < voiced_seconds(voice) <= len(voice) / SAMPLE_RATE

@@ -21,7 +21,7 @@ import webrtcvad
 
 from jarviseo.voice.mic import BLOCK, SAMPLE_RATE
 
-__all__ = ["Speech", "record_speech"]
+__all__ = ["Speech", "record_speech", "voiced_seconds"]
 
 BLOCK_SEC = BLOCK / SAMPLE_RATE
 WINDOW, TRIGGER = 10, 8  # 최근 10블록 중 8블록 이상이 말이면 시작
@@ -36,9 +36,21 @@ class Speech:
     ended_at: float  # 마지막으로 말한 블록이 끝난 시각 (monotonic)
 
 
-def _webrtcvad() -> Callable[[np.ndarray], bool]:
-    vad = webrtcvad.Vad(3)  # 0~3. 3 이 말로 판정하는 기준이 가장 엄격하다
+def _webrtcvad(mode: int = 3) -> Callable[[np.ndarray], bool]:
+    vad = webrtcvad.Vad(mode)  # 0~3. 3 이 말로 판정하는 기준이 가장 엄격하다
     return lambda block: vad.is_speech(block.tobytes(), SAMPLE_RATE)
+
+
+def voiced_seconds(audio: np.ndarray) -> float:
+    """audio(int16, 16kHz 모노) 안에서 사람 말로 판정된 길이(초). 클립에 말이 들었는지 볼 때 쓴다.
+
+    발화를 자를 때(모드 3)보다 너그러운 모드 2 로 센다. 모드 3 은 짧게 부른 "자비서" 실제 녹음도
+    0.24초 남짓으로 쳐서, 소리가 거의 없는 합성 클립(0.21초 이하)과 구분이 안 됐다.
+    모드 2 로는 실제 녹음이 가장 짧아도 0.39초였다.
+    """
+    is_speech = _webrtcvad(mode=2)
+    blocks = (audio[i : i + BLOCK] for i in range(0, len(audio) - BLOCK + 1, BLOCK))
+    return sum(is_speech(block) for block in blocks) * BLOCK_SEC
 
 
 def record_speech(
