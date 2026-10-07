@@ -34,3 +34,5 @@ datasets/wakeword/
 - 화자는 실명 대신 번호(`s01`, `s02` …)로 적는다.
 - Drive 에 올릴 때도 이 폴더 구조와 `metadata.csv` 를 그대로 올린다. 메타데이터가 없으면 평가 스크립트가 읽지 못한다.
 - 잘못 녹음한 파일은 wav 만 지우면 된다. `metadata.csv` 에 줄이 남아 있어도 평가할 때 건너뛴다.
+- 팀원 녹음은 `train` 폴더를 `train_s0X.zip` 으로 받아 `scripts/wakeword/merge.py` 로 합치고,
+  합친 뒤와 TTS 로 합성한 뒤에는 `scripts/wakeword/check.py <split> --fix` 로 한 번 거른다.
