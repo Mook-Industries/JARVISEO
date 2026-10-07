@@ -29,15 +29,19 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from typing import Protocol
 
+import cv2
 import numpy as np
 
 from jarviseo.types import BBox, OCRLine
 
 __all__ = [
+    "OcrReader",
     "PanelSections",
     "crop_and_upscale",
     "join_lines",
+    "mean_confidence",
     "parse_ingredient_text",
     "parse_ingredients",
     "read_panel",
@@ -50,7 +54,8 @@ _INGREDIENT_HEADER = re.compile(r"원\s*재\s*료\s*명?(?:\s*및\s*(?:그\s*)?�
 # "알레르기 유발물질", "알레르기유발물질 표시"
 _ALLERGEN_HEADER = re.compile(r"알\s*레\s*르\s*기\s*(?:유\s*발\s*물\s*질)?(?:\s*표\s*시)?\s*[:：]?")
 # "같은 제조시설", "동일한 제조시설", "같은 시설" … "혼입"
-_CROSS = re.compile(r"(?:같은|동일한?)\s*(?:제\s*조\s*)?시\s*설|혼\s*입")
+# EasyOCR 이 "같은"을 "끝은"처럼 잘못 읽는 일이 있어서 "제조시설"만 있어도 혼입 문장으로 본다.
+_CROSS = re.compile(r"(?:같은|동일한?)\s*시\s*설|제\s*조\s*시\s*설|혼\s*입")
 # "우유, 대두 함유" — 뒤에 량/될/할 이 붙으면 함유량·함유될 수 있음 등 다른 뜻이다
 _CONTAINS = re.compile(r"([가-힣A-Za-z0-9,\s·/]+?)\s*함\s*유(?![량될할])")
 # 원재료 구간이 끝나는 다른 항목들
@@ -245,9 +250,15 @@ def parse_ingredient_text(text: str) -> list[str]:
 
 
 def split_terms(text: str) -> list[str]:
-    """알레르기 표시처럼 짧은 나열을 자른다. "우유, 대두·밀/땅콩" → 4개."""
-    terms = (_clean(t) for t in re.split(r"[,·/]", _normalize(text)))
-    return [t for t in terms if t]
+    """알레르기 표시처럼 짧은 나열을 자른다. "우유, 대두·밀/땅콩" → 4개.
+
+    EasyOCR 은 쉼표를 자주 빼먹어서 "우유 대두 밀"처럼 나온다. 알레르기 표시는
+    한 단어짜리 이름의 나열이라 공백으로도 자른다. (원재료명은 "탈지 분유"처럼
+    한 성분이 띄어 쓰이기도 해서 공백으로 자르지 않는다.)
+    """
+    text = re.sub(r"\s*(?:등\s*)?함\s*유\s*$", "", _normalize(text))
+    terms = (_clean(t) for t in re.split(r"[,·/\s]+", text))
+    return [t for t in terms if t and t != "등"]
 
 
 def parse_ingredients(lines: list[OCRLine]) -> list[str]:
@@ -260,8 +271,28 @@ def parse_ingredients(lines: list[OCRLine]) -> list[str]:
 
 
 # --------------------------------------------------------------------------
-# 2. 이미지 → 글자  (다음 커밋)
+# 2. 이미지 → 글자
 # --------------------------------------------------------------------------
+
+# 확대 후 긴 변 상한. 3배로 키우면 1080p 크롭이 5000px 을 넘어 CPU OCR 이 수십 초 걸린다.
+_MAX_SIDE = 2560
+
+_reader = None  # easyocr.Reader. 모델 로드가 수 초 걸려 프로세스당 한 번만 만든다.
+
+
+class OcrReader(Protocol):
+    """easyocr.Reader 중 우리가 쓰는 부분. 테스트에서 가짜를 끼우려고 둔다."""
+
+    def readtext(self, image: np.ndarray, **kwargs) -> list: ...
+
+
+def _get_reader() -> OcrReader:
+    global _reader
+    if _reader is None:
+        import easyocr  # torch 를 끌고 와서 무겁다. 쓸 때만 불러온다(CI 에는 설치하지 않음)
+
+        _reader = easyocr.Reader(["ko", "en"], gpu=False, verbose=False)
+    return _reader
 
 
 def crop_and_upscale(image: np.ndarray, bbox: BBox, scale: float = 3.0) -> np.ndarray:
@@ -269,10 +300,84 @@ def crop_and_upscale(image: np.ndarray, bbox: BBox, scale: float = 3.0) -> np.nd
 
     보간 방식은 cv2.INTER_CUBIC 을 쓴다. 기본값인 INTER_LINEAR 는
     글자 경계가 뭉개져서 OCR 에 불리하다.
+    좌표가 이미지 밖으로 나가면 안쪽으로 자른다. 긴 변은 _MAX_SIDE 를 넘지 않게 배율을 줄인다.
+
+    Raises:
+        ValueError: 잘라낸 영역이 비었을 때.
     """
-    raise NotImplementedError
+    h, w = image.shape[:2]
+    x1, y1 = max(0, int(bbox.x1)), max(0, int(bbox.y1))
+    x2, y2 = min(w, int(round(bbox.x2))), min(h, int(round(bbox.y2)))
+    if x2 <= x1 or y2 <= y1:
+        raise ValueError(f"빈 영역입니다: {bbox} (이미지 {w}x{h})")
+    crop = image[y1:y2, x1:x2]
+    scale = min(scale, _MAX_SIDE / max(crop.shape[:2]))
+    if scale <= 1.0:
+        return crop.copy()
+    return cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
 
 
-def read_panel(panel_image: np.ndarray) -> list[OCRLine]:
-    """확대한 성분표 이미지에서 글자를 줄 단위로 읽는다."""
-    raise NotImplementedError
+def _to_bbox(points) -> BBox:
+    pts = np.asarray(points, dtype=float)
+    return BBox(
+        float(pts[:, 0].min()),
+        float(pts[:, 1].min()),
+        float(pts[:, 0].max()),
+        float(pts[:, 1].max()),
+    )
+
+
+def _group_lines(boxes: list[tuple[BBox, str, float]]) -> list[OCRLine]:
+    """EasyOCR 은 글자 덩어리 단위로 준다. 세로 중심이 가까운 덩어리를 한 줄로 묶는다.
+
+    같은 줄 판단: 덩어리의 세로 중심이 줄의 세로 중심에서 글자 높이의 절반 이내.
+    줄 안에서는 왼쪽→오른쪽, 줄끼리는 위→아래로 정렬한다.
+    """
+    rows: list[list[tuple[BBox, str, float]]] = []
+    for item in sorted(boxes, key=lambda b: b[0].center[1]):
+        box = item[0]
+        if rows:
+            last = rows[-1]
+            cy = sum(b.center[1] for b, _, _ in last) / len(last)
+            height = sum(b.height for b, _, _ in last) / len(last)
+            if abs(box.center[1] - cy) <= max(height, box.height) / 2:
+                last.append(item)
+                continue
+        rows.append([item])
+
+    lines = []
+    for row in rows:
+        row.sort(key=lambda b: b[0].x1)
+        text = " ".join(t for _, t, _ in row)
+        # 긴 덩어리의 신뢰도가 더 많이 반영되게 글자 수로 가중 평균한다
+        n = sum(max(1, len(t)) for _, t, _ in row)
+        conf = sum(c * max(1, len(t)) for _, t, c in row) / n
+        box = BBox(
+            min(b.x1 for b, _, _ in row), min(b.y1 for b, _, _ in row),
+            max(b.x2 for b, _, _ in row), max(b.y2 for b, _, _ in row),
+        )  # fmt: skip
+        lines.append(OCRLine(text=text, confidence=float(conf), bbox=box))
+    return lines
+
+
+def read_panel(panel_image: np.ndarray, reader: OcrReader | None = None) -> list[OCRLine]:
+    """확대한 성분표 이미지에서 글자를 줄 단위로 읽는다. 위→아래 순서.
+
+    Args:
+        panel_image: ``crop_and_upscale`` 결과 (BGR).
+        reader: 없으면 EasyOCR 한국어+영어 모델을 쓴다. 첫 호출 때 모델을 내려받는다.
+    """
+    results = (reader or _get_reader()).readtext(panel_image, detail=1, paragraph=False)
+    boxes = [(_to_bbox(pts), str(text).strip(), float(conf)) for pts, text, conf in results]
+    return _group_lines([b for b in boxes if b[1]])
+
+
+def mean_confidence(lines: list[OCRLine]) -> float:
+    """글자 수로 가중한 평균 신뢰도. 줄이 없으면 0.0 (= 검증 실패).
+
+    ``config.OCR_CONF_THRESHOLD`` 와 비교해 재처리·재촬영 여부를 정한다.
+    """
+    n = sum(len(line.text) for line in lines)
+    if n == 0:
+        return 0.0
+    return sum(line.confidence * len(line.text) for line in lines) / n

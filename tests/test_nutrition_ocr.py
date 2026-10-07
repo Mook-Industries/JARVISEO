@@ -5,12 +5,16 @@ OCR 엔진 없이 돈다. OCR 이 읽어 냈다고 가정한 글자를 넣는다
 실행: pytest tests/test_nutrition_ocr.py
 """
 
+import numpy as np
 import pytest
 
 from jarviseo.nutrition.ocr import (
+    crop_and_upscale,
     join_lines,
+    mean_confidence,
     parse_ingredient_text,
     parse_ingredients,
+    read_panel,
     split_sections,
     split_terms,
 )
@@ -120,6 +124,35 @@ def test_알레르기_표시_나열():
     assert split_terms("우유, 대두·밀/땅콩 등 함유") == ["우유", "대두", "밀", "땅콩"]
 
 
+# --- 실제 EasyOCR 출력 (맑은 고딕 14px 합성 성분표, 2배 확대) ---------------------
+# 쉼표 누락, "같은"→"끝은", "호두를"→"호두록" 같은 실제 오인식이 들어 있다.
+
+EASYOCR_SCALE2 = (
+    "원재료명: 밀가루(밀:미국산) , 설탕 초홀릿(설탕 "
+    "코코아매스 전지분유 대두레시터) 소트님(판유) , "
+    "탈지분유 계란  정제소금 (우유 대두 밀 알류 함유) "
+    "이 제품은 땅콩 호두록 사용한 제품과 끝은 제조시설에서 제조하고 있습니다."
+)
+
+
+def test_실제_ocr_쉼표가_빠진_알레르기_표시도_자른다():
+    sec = split_sections(EASYOCR_SCALE2)
+    assert split_terms(sec.allergen_notice) == ["우유", "대두", "밀", "알류"]
+
+
+def test_실제_ocr_같은을_잘못_읽어도_혼입_문장을_찾는다():
+    sec = split_sections(EASYOCR_SCALE2)
+    assert "땅콩" in sec.cross_contamination
+    assert "땅콩" not in sec.ingredients
+
+
+def test_실제_ocr_성분이_붙어도_알레르겐_표기는_남는다():
+    got = parse_ingredient_text(split_sections(EASYOCR_SCALE2).ingredients)
+    # 쉼표가 빠져 붙은 덩어리 안에도 '전지분유', '탈지분유' 가 들어 있어야 판정에서 잡힌다
+    joined = " | ".join(got)
+    assert "전지분유" in joined and "탈지분유" in joined
+
+
 # --- 줄 단위 입력 ------------------------------------------------------------
 
 
@@ -131,3 +164,66 @@ def test_줄을_이어_붙여_파싱한다():
 
 def test_join_lines_는_공백_하나로_잇는다():
     assert join_lines(lines("밀가루,  ", "  설탕")) == "밀가루, 설탕"
+
+
+# --- 이미지 → 글자 (EasyOCR 은 가짜로) ---------------------------------------
+
+
+class FakeReader:
+    """easyocr.Reader.readtext 와 같은 모양으로 돌려준다: [(꼭짓점 4개, 글자, 신뢰도), ...]"""
+
+    def __init__(self, results):
+        self.results = results
+        self.calls = 0
+
+    def readtext(self, image, **kwargs):
+        self.calls += 1
+        return self.results
+
+
+def box(x1, y1, x2, y2):
+    return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+
+
+def test_crop_and_upscale_은_자르고_키운다():
+    image = np.zeros((100, 200, 3), np.uint8)
+    out = crop_and_upscale(image, BBox(10, 20, 60, 40), scale=3.0)
+    assert out.shape[:2] == (60, 150)
+
+
+def test_crop_and_upscale_은_이미지_밖_좌표를_안쪽으로_자른다():
+    image = np.zeros((100, 200, 3), np.uint8)
+    out = crop_and_upscale(image, BBox(-50, -50, 50, 30), scale=1.0)
+    assert out.shape[:2] == (30, 50)
+
+
+def test_crop_and_upscale_은_너무_크게_키우지_않는다():
+    image = np.zeros((1080, 1920, 3), np.uint8)
+    out = crop_and_upscale(image, BBox(0, 0, 1920, 1080), scale=3.0)
+    assert max(out.shape[:2]) <= 2560
+
+
+def test_crop_and_upscale_빈_영역은_예외():
+    with pytest.raises(ValueError):
+        crop_and_upscale(np.zeros((100, 100, 3), np.uint8), BBox(150, 150, 200, 200))
+
+
+def test_read_panel_은_덩어리를_줄로_묶고_위에서_아래로_정렬한다():
+    reader = FakeReader([
+        (box(120, 52, 200, 70), "설탕", 0.8),       # 둘째 줄 오른쪽
+        (box(10, 10, 110, 30), "원재료명:", 0.9),   # 첫째 줄 왼쪽
+        (box(10, 50, 110, 68), "밀가루,", 0.6),      # 둘째 줄 왼쪽 (살짝 높이 다름)
+        (box(120, 12, 220, 31), "밀가루", 0.9),      # 첫째 줄 오른쪽
+        (box(10, 90, 50, 105), "  ", 0.1),           # 빈 글자는 버린다
+    ])  # fmt: skip
+    lines = read_panel(np.zeros((10, 10, 3), np.uint8), reader=reader)
+    assert [ln.text for ln in lines] == ["원재료명: 밀가루", "밀가루, 설탕"]
+    # 신뢰도는 글자 수 가중 평균: (0.6*4 + 0.8*2) / 6
+    assert lines[1].confidence == pytest.approx((0.6 * 4 + 0.8 * 2) / 6)
+    assert lines[0].bbox == BBox(10, 10, 220, 31)
+
+
+def test_mean_confidence():
+    assert mean_confidence([]) == 0.0
+    ls = [OCRLine("가나다라", 0.9, BBox(0, 0, 1, 1)), OCRLine("마바", 0.3, BBox(0, 0, 1, 1))]
+    assert mean_confidence(ls) == pytest.approx((0.9 * 4 + 0.3 * 2) / 6)
