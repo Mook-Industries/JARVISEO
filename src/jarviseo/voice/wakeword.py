@@ -1,57 +1,67 @@
-"""웨이크워드 "자비서" 감지.  담당: 문태현
+"""호출어 감지.  담당: 문태현
 
-책임 지표: FAR / FRR
+마이크(``MicStream``)를 계속 읽어 openWakeWord 모델에 80ms 씩 넣고, 프레임마다 0~1 점수를 낸다.
+상시 듣는 것은 이것뿐이고 로컬에서만 돈다. 클라우드로 나가는 것은 호출어 뒤의 발화 한 번이다.
 
-- FAR (False Acceptance Rate) : 안 불렀는데 깨어난 비율
-- FRR (False Rejection Rate)  : 불렀는데 안 깨어난 비율
+모델은 ``config.WAKEWORD_MODEL`` 로 바꿔 끼운다. 기성 모델 이름(hey_jarvis)이나 .onnx 경로를 받는다.
+기성 hey_jarvis 는 "자비서"를 못 잡는다(docs/experiments.md baseline, FRR 100%).
+커스텀 모델이 나오기 전까지는 "Hey Jarvis" 로 감지기가 도는지만 확인한다.
 
-둘은 맞바꿈 관계다. 민감하게 만들면 잘 깨어나지만 아무 말에나 반응하고,
-둔감하게 만들면 조용하지만 불러도 안 깨어난다.
-발표 데모에서는 FRR 이 낮은 쪽이 중요하다. 불렀는데 반응이 없으면
-시연이 그 자리에서 멈추기 때문이다. 임계값을 데모용으로 따로 둘 것.
-
-측정 방법: 조용한 환경/시끄러운 환경에서 각각 "자비서" 100회,
-그리고 비슷한 발음("자비스", "아비서")과 일반 대화 100회를 흘려보내
-깨어난 횟수를 센다.
+책임 지표는 FAR(안 불렀는데 깨어남)와 FRR(불렀는데 안 깨어남)이다.
+``scripts/wakeword/evaluate.py`` 로 잰다.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 
-__all__ = ["WakeWordDetector"]
+import numpy as np
+
+from jarviseo import config
+from jarviseo.voice.mic import SAMPLE_RATE, MicStream
+
+__all__ = ["FRAME", "WakeWordDetector", "load_scorer"]
+
+FRAME = 1280  # openWakeWord 는 80ms(16kHz 1280샘플)씩 받는다. 마이크 블록은 30ms 라 모아서 넣는다
+
+
+def load_scorer(model: str) -> Callable[[np.ndarray], float]:
+    """openWakeWord 모델을 열어, 80ms 프레임 하나를 받아 0~1 점수를 내는 함수를 돌려준다."""
+    # 리눅스(CI·Docker)에는 openwakeword 가 설치되지 않는다(requirements.txt). 쓸 때만 읽는다.
+    from openwakeword.model import Model
+    from openwakeword.utils import download_models
+
+    if not model.endswith(".onnx"):
+        download_models([model])  # 기성 모델은 처음 한 번만 받는다(약 1MB)
+    oww = Model(wakeword_models=[model], inference_framework="onnx")
+    (name,) = oww.models
+    return lambda frame: float(oww.predict(frame)[name])
 
 
 class WakeWordDetector:
-    """마이크를 계속 듣고 있다가 "자비서"가 들리면 콜백을 부른다.
-
-    이 부분은 로컬에서만 돈다. 상시 동작하는 것을 전부 로컬에 두는 것이
-    이 프로젝트의 프라이버시 근거다. 클라우드로 올리면 그 근거가 사라진다.
-    """
+    """마이크를 계속 듣고 80ms 마다 호출어 점수를 낸다."""
 
     def __init__(
         self,
-        model_path: Path,
-        threshold: float = 0.5,
-        on_detect: Callable[[float], None] | None = None,
+        mic: MicStream,
+        model: str = config.WAKEWORD_MODEL,
+        scorer: Callable[[np.ndarray], float] | None = None,
     ) -> None:
-        self.model_path = model_path
-        self.threshold = threshold
-        self.on_detect = on_detect
-        raise NotImplementedError
+        """mic 는 STT 와 같이 쓰는 ``MicStream``. scorer 는 테스트에서 가짜 점수를 낼 때 넘긴다."""
+        self.mic = mic
+        self._score = scorer or load_scorer(model)
+        # 아직 80ms 가 안 돼 모아 두는 샘플과, 그 첫 샘플의 시각
+        self._pending = np.empty(0, np.int16)
+        self._pending_t = 0.0
+        # 마지막 프레임의 점수. 화면에 띄우거나 임계값을 고를 때 본다.
+        self.last_score = 0.0
 
-    def start(self) -> None:
-        """감지를 시작한다. 별도 스레드에서 돈다."""
-        raise NotImplementedError
-
-    def stop(self) -> None:
-        raise NotImplementedError
-
-    def on_playback(self, playing: bool) -> None:
-        """소프트 게이트 훅. ``MIC_GATE.on_playback(detector.on_playback)`` 으로 건다.
-
-        STT 와 달리 재생 중에도 감지를 쉬지 않는다. 재생 중에 "자비서"로 끼어들 수 있어야 해서,
-        임계값을 0.8 로 올리고 감지되면 재생음과 비교해 자기 목소리면 무시한다.
-        """
-        raise NotImplementedError
+    def feed(self, block: np.ndarray, t: float) -> None:
+        """마이크 블록 하나(30ms)와 그 첫 샘플의 시각을 넣는다. 80ms 가 모일 때마다 점수를 낸다."""
+        if not len(self._pending):
+            self._pending_t = t
+        self._pending = np.concatenate([self._pending, block])
+        while len(self._pending) >= FRAME:
+            frame, self._pending = self._pending[:FRAME], self._pending[FRAME:]
+            self._pending_t += FRAME / SAMPLE_RATE  # 이 프레임이 끝난 시각 = 다음 샘플의 시각
+            self.last_score = self._score(frame)
