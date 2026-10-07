@@ -146,6 +146,17 @@ def test_실제_ocr_같은을_잘못_읽어도_혼입_문장을_찾는다():
     assert "땅콩" not in sec.ingredients
 
 
+def test_실제_ocr_알레르기를_잘못_읽어도_머리말을_찾는다():
+    # scripts/check_ingredient_ocr.py 로 돌린 실제 출력 ("르"→"로")
+    text = (
+        "원재료 및 함량: 감자(국산) 85%, 해바라기유 양파분말 새우분말(새우:베트님산) "
+        "알레로기 유발물질: 새우 대두 함유"
+    )
+    sec = split_sections(text)
+    assert split_terms(sec.allergen_notice) == ["새우", "대두"]
+    assert "유발물질" not in sec.ingredients
+
+
 def test_실제_ocr_성분이_붙어도_알레르겐_표기는_남는다():
     got = parse_ingredient_text(split_sections(EASYOCR_SCALE2).ingredients)
     # 쉼표가 빠져 붙은 덩어리 안에도 '전지분유', '탈지분유' 가 들어 있어야 판정에서 잡힌다
