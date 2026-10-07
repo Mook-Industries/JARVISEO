@@ -4,6 +4,7 @@
 
 그래프는 ``SpeechToText.listen()`` 과 ``TextToSpeech.speak()`` 만 부른다.
 재생 중에 STT 쪽 마이크를 막는 게이트(``gate.py``)는 둘이 알아서 같이 쓴다.
+호출어 감지(``WakeWordDetector``)와 STT 는 ``MicStream`` 하나를 같이 읽는다.
 실제 구현이 끝나기 전이나 CI 에서는 모양이 같은 Fake 를 끼운다.
 """
 
