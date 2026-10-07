@@ -62,16 +62,22 @@ STYLES = [
     "짜증 난 목소리로",
 ]
 FIELDS = ["file", "label", "text", "speaker", "distance", "env", "source", "mic", "seconds", "at"]
-# 학습·평가에 쓰면 안 되는 클립의 기준. TTS 가 가끔 거의 무음이거나 말이 아닌 긴 잡음을 돌려줬다.
-MIN_VOICED_SEC = 0.25  # 실제 녹음은 짧게 불러도 0.39초 이상, 망가진 합성은 0.21초 이하였다
+# 합성 클립을 버리는 기준. TTS 가 가끔 거의 무음이거나 말이 아닌 긴 잡음을 돌려줬다.
+MIN_VOICED_SEC = 0.25  # 망가진 합성은 0.21초 이하, 정상 합성은 0.5초 이상이었다
 MAX_TTS_SEC = 6.0  # 한 단어 합성은 길어도 5초 안쪽. 8~9초짜리는 받아써도 빈 글자인 잡음이었다
 
 
 def problem(audio: np.ndarray, source: str) -> str | None:
-    """학습·평가에 쓰면 안 되는 클립이면 그 이유를, 괜찮으면 None 을 돌려준다."""
+    """학습·평가에 쓰면 안 되는 클립이면 그 이유를, 괜찮으면 None 을 돌려준다.
+
+    합성 클립만 본다. 실제 녹음은 VAD 가 말 시작을 잡아야 저장되므로 무음이 들어갈 일이 없고,
+    마이크가 조용하면 말소리 길이를 짧게 재서(1.5m 에서 0.09초) 멀쩡한 녹음을 버리게 된다.
+    """
+    if source != "tts":
+        return None
     if voiced_seconds(audio) < MIN_VOICED_SEC:
         return "말소리 없음"
-    if source == "tts" and len(audio) / SAMPLE_RATE > MAX_TTS_SEC:
+    if len(audio) / SAMPLE_RATE > MAX_TTS_SEC:
         return "합성이 너무 김"
     return None
 
