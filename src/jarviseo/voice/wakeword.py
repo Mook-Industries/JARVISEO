@@ -89,8 +89,9 @@ class WakeWordDetector:
 
     def feed(self, block: np.ndarray, t: float) -> None:
         """마이크 블록 하나(30ms)와 그 첫 샘플의 시각을 넣는다. 80ms 가 모일 때마다 점수를 낸다."""
-        if not len(self._pending):
-            self._pending_t = t
+        # 모아 둔 샘플의 첫 시각을 이 블록 시각에서 거꾸로 잡는다. 앞 블록 시각에 길이를 더해 가면
+        # 마이크가 샘플을 놓쳐 시각을 다시 맞췄을 때(mic.py) 그만큼 밀린다.
+        self._pending_t = t - len(self._pending) / SAMPLE_RATE
         self._pending = np.concatenate([self._pending, block])
         while len(self._pending) >= FRAME:
             frame, self._pending = self._pending[:FRAME], self._pending[FRAME:]
