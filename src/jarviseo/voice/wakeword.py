@@ -1,6 +1,7 @@
 """호출어 감지.  담당: 문태현
 
-마이크(``MicStream``)를 계속 읽어 openWakeWord 모델에 80ms 씩 넣고, 프레임마다 0~1 점수를 낸다.
+마이크(``MicStream``)를 계속 읽어 openWakeWord 모델에 80ms 씩 넣고, 점수가 임계값을 넘으면
+``on_detect(시각, 점수)`` 를 부른다. 별도 스레드에서 돈다.
 상시 듣는 것은 이것뿐이고 로컬에서만 돈다. 클라우드로 나가는 것은 호출어 뒤의 발화 한 번이다.
 
 모델은 ``config.WAKEWORD_MODEL`` 로 바꿔 끼운다. 기성 모델 이름(hey_jarvis)이나 .onnx 경로를 받는다.
@@ -13,6 +14,8 @@
 
 from __future__ import annotations
 
+import logging
+import threading
 from collections.abc import Callable
 
 import numpy as np
@@ -22,7 +25,12 @@ from jarviseo.voice.mic import SAMPLE_RATE, MicStream
 
 __all__ = ["FRAME", "WakeWordDetector", "load_scorer"]
 
+log = logging.getLogger(__name__)
+
 FRAME = 1280  # openWakeWord 는 80ms(16kHz 1280샘플)씩 받는다. 마이크 블록은 30ms 라 모아서 넣는다
+# 한 번 깨어나면 이만큼은 다시 깨지 않는다. 점수는 호출어가 끝난 뒤에도 몇 프레임 높게 남는다.
+# evaluate.py 가 시간당 오탐을 셀 때도 같은 값을 쓴다.
+REFRACTORY_SEC = 2.0
 
 
 def load_scorer(model: str) -> Callable[[np.ndarray], float]:
@@ -39,17 +47,29 @@ def load_scorer(model: str) -> Callable[[np.ndarray], float]:
 
 
 class WakeWordDetector:
-    """마이크를 계속 듣고 80ms 마다 호출어 점수를 낸다."""
+    """``detector.start()`` 하면 마이크를 계속 듣다가 호출어가 들릴 때마다 on_detect 를 부른다."""
 
     def __init__(
         self,
         mic: MicStream,
+        on_detect: Callable[[float, float], None] | None = None,
         model: str = config.WAKEWORD_MODEL,
+        threshold: float = config.WAKEWORD_THRESHOLD,
         scorer: Callable[[np.ndarray], float] | None = None,
     ) -> None:
-        """mic 는 STT 와 같이 쓰는 ``MicStream``. scorer 는 테스트에서 가짜 점수를 낼 때 넘긴다."""
+        """mic 는 STT 와 같이 쓰는 ``MicStream``. scorer 는 테스트에서 가짜 점수를 낼 때 넘긴다.
+
+        on_detect(t, score) 의 t 는 호출어를 잡은 프레임이 끝난 시각(monotonic)이다.
+        ``listen(since=t)`` 로 넘기면 호출어 바로 뒤에 이어 말한 질문부터 받아쓴다.
+        감지 스레드에서 불리므로, 오래 걸리는 일은 다른 스레드로 넘긴다.
+        """
         self.mic = mic
+        self.on_detect = on_detect
+        self.threshold = threshold
         self._score = scorer or load_scorer(model)
+        self._quiet_until = float("-inf")
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
         # 아직 80ms 가 안 돼 모아 두는 샘플과, 그 첫 샘플의 시각
         self._pending = np.empty(0, np.int16)
         self._pending_t = 0.0
@@ -65,3 +85,34 @@ class WakeWordDetector:
             frame, self._pending = self._pending[:FRAME], self._pending[FRAME:]
             self._pending_t += FRAME / SAMPLE_RATE  # 이 프레임이 끝난 시각 = 다음 샘플의 시각
             self.last_score = self._score(frame)
+            if self.last_score >= self.threshold and self._pending_t >= self._quiet_until:
+                self._quiet_until = self._pending_t + REFRACTORY_SEC
+                self._detected(self._pending_t, self.last_score)
+
+    def _detected(self, t: float, score: float) -> None:
+        log.info("호출어 감지 %.2f (점수 %.3f)", t, score)
+        if self.on_detect is None:
+            return
+        try:
+            self.on_detect(t, score)
+        except Exception:
+            # 콜백이 터져도 감지는 계속한다. 상시 듣는 스레드가 죽으면 다시 부를 방법이 없다.
+            log.exception("on_detect 에서 오류")
+
+    def start(self) -> None:
+        """감지 스레드를 띄운다. mic 가 열려 있어야 한다."""
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, name="wakeword", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        """감지를 멈추고 스레드가 끝날 때까지 기다린다(마이크 블록 하나, 30ms 안쪽)."""
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+
+    def _run(self) -> None:
+        for block, t in self.mic.blocks():
+            if self._stop.is_set():
+                return
+            self.feed(block, t)
