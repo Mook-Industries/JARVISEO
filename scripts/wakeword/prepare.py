@@ -10,8 +10,9 @@ _test 는 학습 중에 가장 좋은 모델을 고르는 검증용이다. 라�
 다른 소리를 둔다. 합성 클립은 "자비서" 뒤에 무음이 0.6초쯤 붙어 있어서, 그대로 넣으면
 "자비서 뒤의 무음"까지 배운다. 그러면 호출어 뒤에 바로 질문을 이어 말할 때 늦게 깨거나 못 깬다.
 
-자르고 나서도 2초(학습 창)가 넘는 클립은 버린다. 소음 속 실제 녹음은 VAD 가 소음을 말로 보고
-녹음을 10초까지 끌어서, "자비서"가 여러 번 들어 있거나 어디 있는지 알 수 없었다.
+자르고 나서도 2초(학습 창)가 넘는 "자비서" 클립은 버린다. 소음 속 실제 녹음은 VAD 가 소음을
+말로 보고 녹음을 10초까지 끌어서, "자비서"가 여러 번 들어 있거나 어디 있는지 알 수 없었다.
+negative 는 어디를 잘라도 negative 라서 2초씩 나눠 모두 쓴다(일상 문장 합성은 2초를 자주 넘는다).
 
 실행:
     python scripts/wakeword/prepare.py
@@ -36,6 +37,7 @@ from record import ROOT, SAMPLE_RATE, save
 FRAME = 480  # 30ms 씩 소리 크기를 잰다
 PAD_SEC = 0.1  # 말소리 앞뒤로 이만큼은 남긴다. 첫 자음·끝 모음이 잘리지 않게
 MAX_SEC = 2.0  # openWakeWord 학습 창. 이보다 길면 앞부분만 남기고 잘린다
+MIN_PIECE_SEC = 0.5  # 긴 negative 를 나누고 남은 끝 조각이 이보다 짧으면 버린다
 SPLIT_FIELDS = ["file", "out", "label", "source", "speaker", "split", "seconds"]
 
 
@@ -101,25 +103,34 @@ def main() -> None:
         if cut is None:
             dropped["말소리 못 찾음"] += 1
             continue
-        if len(cut) > MAX_SEC * SAMPLE_RATE:
+        kind = "positive" if r["label"] == "wake" else "negative"
+        limit = int(MAX_SEC * SAMPLE_RATE)
+        if len(cut) <= limit:
+            pieces = [cut]
+        elif kind == "negative":
+            pieces = [cut[i : i + limit] for i in range(0, len(cut), limit)]
+            pieces = [p for p in pieces if len(p) >= MIN_PIECE_SEC * SAMPLE_RATE]
+        else:
             dropped[f"잘라도 {MAX_SEC:.0f}초 넘음"] += 1
             continue
-        kind = "positive" if r["label"] == "wake" else "negative"
-        path = out / f"{kind}_{split[r['file']]}" / f"{r['label']}-{r['file'].split('/')[-1]}"
-        save(path, cut)
-        sec = len(cut) / SAMPLE_RATE
-        seconds.append(sec)
-        kept.append(
-            {
-                "file": r["file"],
-                "out": path.relative_to(out).as_posix(),
-                "label": r["label"],
-                "source": r["source"],
-                "speaker": r["speaker"],
-                "split": split[r["file"]],
-                "seconds": f"{sec:.2f}",
-            }
-        )
+        base = r["file"].split("/")[-1].removesuffix(".wav")
+        for k, piece in enumerate(pieces, start=1):
+            suffix = f"-{k}" if len(pieces) > 1 else ""
+            path = out / f"{kind}_{split[r['file']]}" / f"{r['label']}-{base}{suffix}.wav"
+            save(path, piece)
+            sec = len(piece) / SAMPLE_RATE
+            seconds.append(sec)
+            kept.append(
+                {
+                    "file": r["file"],
+                    "out": path.relative_to(out).as_posix(),
+                    "label": r["label"],
+                    "source": r["source"],
+                    "speaker": r["speaker"],
+                    "split": split[r["file"]],
+                    "seconds": f"{sec:.2f}",
+                }
+            )
 
     with (out / "split.csv").open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, SPLIT_FIELDS)
@@ -133,7 +144,7 @@ def main() -> None:
                 z.write(path, path.relative_to(out.parent).as_posix())
 
     counts = Counter(row["out"].split("/")[0] for row in kept)
-    print(f"원본 {len(rows)}개 → {len(kept)}개 ({out})")
+    print(f"원본 {len(rows)}개 → wav {len(kept)}개 ({out})")
     for folder in ("positive_train", "positive_test", "negative_train", "negative_test"):
         print(f"  {folder:15s} {counts[folder]}")
     for why, n in dropped.most_common():
