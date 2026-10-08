@@ -23,7 +23,7 @@ datasets/wakeword/
 ├── eval/       평가용. 학습에 절대 쓰지 않는다
 │   ├── metadata.csv
 │   ├── wake/  similar/  background/
-├── train/      학습용. 구조는 eval 과 같다
+├── train/      학습용. 구조는 eval 과 같고, 일상 문장 합성(speech/)이 더 있다
 ├── oww/        prepare.py 가 train 을 openWakeWord 학습 폴더로 나눈 것과 그 zip. 다시 만들 수 있다
 └── results/    evaluate.py 결과 CSV
 ```
