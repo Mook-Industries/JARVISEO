@@ -4,14 +4,14 @@
 
 | 파일 | 하는 일 | 어디서 도나 | 책임 지표 |
 |---|---|---|---|
-| `wakeword.py` | "자비서" 호출어 감지 | 로컬 (상시) | FAR / FRR |
+| `wakeword.py` | 호출어 감지. 80ms 마다 openWakeWord 점수를 내고 임계값을 넘으면 `on_detect(t, score)` | 로컬 (상시) | FAR / FRR |
 | `stt.py` | 호출어 뒤 발화 받아쓰기 (`listen()` 이 녹음·VAD·받아쓰기·정리를 묶는다) | OpenAI STT | — |
 | `transcript.py` | 받아쓴 원문에서 호출어·필러를 빼고, 비었거나 너무 짧은 발화를 거른다 | 로컬 | — |
 | `tts.py` | 응답 음성 합성과 재생 (`speak()` 이 `synthesize()` 의 PCM 조각을 받는 대로 재생한다) | OpenAI TTS | — |
 | `tts_text.py` | TTS 에 넣기 전에 단위·쉼표·물결표를 읽는 말로 바꾸고 마크다운 기호를 뺀다. 문장 분할 함수도 있다 | 로컬 | — |
 | `speaker.py` | PCM 조각을 받는 순서대로 스피커로 낸다. 재생하는 동안 마이크 게이트를 닫는다 | 로컬 | — |
-| `gate.py` | 재생 중과 끝난 뒤 0.3초 동안 STT 쪽 마이크를 막고, 호출어 쪽에는 재생 시작·끝을 알린다 | 로컬 | — |
-| `mic.py` | 마이크를 30ms 블록으로 읽고 블록마다 들어온 시각을 붙인다 | 로컬 | — |
+| `gate.py` | 재생 중과 끝난 뒤 0.3초 동안 STT 쪽 마이크를 막고, 호출어 쪽에는 그 구간을 알려 임계값을 올리게 한다 | 로컬 | — |
+| `mic.py` | 마이크를 30ms 블록으로 읽고 블록마다 들어온 시각을 붙인다. `MicStream` 은 마이크 하나를 여럿이 같이 읽게 한다 | 로컬 | — |
 | `vad.py` | webrtcvad 로 발화 하나를 잘라 낸다 (무음 700ms 면 끝) | 로컬 | — |
 | `fake.py` | 키 없이 쓰는 가짜 STT · TTS (그래프 개발 · CI 용) | 로컬 | — |
 
@@ -30,6 +30,22 @@ TTS 는 `user_setting.tts_speed` 를 OpenAI speed 값으로 바꿔 보낸다(SLO
 모델 이름은 `config.py` 에서만 정한다. 지금은 STT `gpt-transcribe`, TTS `gpt-4o-mini-tts`
 (`.env` 의 `JARVISEO_STT_MODEL`, `JARVISEO_TTS_MODEL`).
 
+호출어는 `MicStream` 하나를 열어 `WakeWordDetector` 와 `SpeechToText(mic=...)` 가 같이 읽는다.
+
+```python
+with MicStream() as mic:
+    stt = SpeechToText(mic=mic)
+    detector = WakeWordDetector(mic, on_detect=lambda t, score: woke.put(t))
+    detector.start()
+    t = woke.get()  # 감지 스레드에서 받은 감지 시각
+    utterance = stt.listen(since=t)  # 호출어에 이어 말한 질문부터 받아쓴다
+```
+
+`MicStream` 은 최근 3초를 들고 있어서, 감지하고 `listen()` 을 부르기까지 지나간 말도 놓치지 않는다.
+모델·임계값은 `.env` 의 `JARVISEO_WAKEWORD_MODEL`(기본 `hey_jarvis`), `JARVISEO_WAKEWORD_THRESHOLD`(0.5),
+`JARVISEO_WAKEWORD_PLAYBACK_THRESHOLD`(0.8)로 바꾼다. 기성 `hey_jarvis` 는 "자비서"를 못 잡으므로
+커스텀 모델이 나오기 전까지는 "Hey Jarvis" 로 시험한다.
+
 ## 알아둘 것
 
 - **상시 동작하는 것은 호출어 감지뿐이고, 로컬에서 돈다.** 클라우드로 나가는 것은 호출어 뒤의 발화 한 번이다.
@@ -38,5 +54,6 @@ TTS 는 `user_setting.tts_speed` 를 OpenAI speed 값으로 바꿔 보낸다(SLO
 - **되먹임 루프 주의.** 스피커 소리를 마이크가 다시 듣는다. 그래서 `gate.py` 의 `MIC_GATE` 가
   재생하는 동안과 끝난 뒤 `TTS_MIC_GATE_SEC`(0.3초) 동안 들어온 소리를 무음으로 바꿔 STT 에 넘긴다.
   STT·TTS 가 같은 게이트를 자동으로 쓰므로 그래프에서 따로 연결할 것은 없다.
-- 호출어는 재생 중에도 막지 않는다(소프트 게이트). 재생 중에 끼어들 수 있어야 해서,
-  `MIC_GATE.on_playback(hook)` 으로 재생 시작(`True`)·끝(`False`)만 알린다.
+- 호출어는 재생 중에도 막지 않는다(소프트 게이트, 2단). 같은 구간에 들어온 소리에는 임계값만
+  0.8 로 올려, 자기 목소리에는 안 깨고 재생 중에 "자비서"로 끼어들 수는 있게 한다.
+  재생 시작·끝을 알리는 `MIC_GATE.on_playback(hook)` 은 재생음과 비교하는 끼어들기 이슈에서 쓴다.
