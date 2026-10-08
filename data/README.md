@@ -24,6 +24,7 @@ datasets/wakeword/
 │   ├── metadata.csv
 │   ├── wake/  similar/  background/
 ├── train/      학습용. 구조는 eval 과 같다
+├── oww/        prepare.py 가 train 을 openWakeWord 학습 폴더로 나눈 것과 그 zip. 다시 만들 수 있다
 └── results/    evaluate.py 결과 CSV
 ```
 
