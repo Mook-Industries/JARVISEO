@@ -103,6 +103,15 @@ def test_판독_불가면_확인_불가(syn):
     assert j.verdict is V.UNDETERMINED and j.reason == "low_ocr_conf"
 
 
+def test_판독_불가면_혼입_문장을_찾았어도_확인_불가(syn):
+    # '혼입 가능'으로 끝내면 "원재료에는 없어요"라고 말하게 되는데 원재료를 못 읽었다
+    j = judge_allergens(
+        ["땅콩"], syn, ingredients="밀가루", cross="같은 제조시설에서 땅콩 사용", readable=False
+    )
+    assert j.verdict is V.UNDETERMINED
+    assert j.may_contain_allergens == ["땅콩"]  # 정보는 남긴다
+
+
 def test_판독_불가여도_함유를_찾았으면_함유(syn):
     # 경고는 확실하므로 판독 품질과 상관없이 낸다
     j = judge_allergens(["우유"], syn, ingredients="탈지분유", readable=False)

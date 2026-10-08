@@ -186,8 +186,9 @@ def judge_allergens(
         matched_terms 에는 성분표에 적혀 있던 표기("탈지분유"), matched_allergens 에는
         그것이 해당하는 알레르겐("우유")을 담는다. 혼입 가능은 may_contain_* 에 따로 담는다.
 
-    판정 우선순위: 함유 > 혼입 가능 > 확인 불가 > 미검출
+    판정 우선순위: 함유 > 판독 불가 > 혼입 가능 > 그 밖의 확인 불가 > 미검출
     - 함유가 하나라도 있으면 글자를 다 못 읽었어도 함유다(경고는 확실하므로).
+    - 판독 불가면 혼입 문장을 찾았어도 확인 불가다. 원재료에 없다고 말할 근거가 없다.
     - 확인 불가: 등록 알레르기 없음 / 판독 불가 / 원재료 글자 없음 / 내용 모를 원료 표기
     - 미검출은 '안전'이 아니다. 확인한 표시 범위에서 못 찾았다는 뜻이다.
     """
@@ -225,10 +226,12 @@ def judge_allergens(
 
     if hit:
         result.verdict = AllergenVerdict.CONTAINS
+    elif not readable:
+        # 혼입 문장만 읽혔어도 '혼입 가능'으로 끝내지 않는다. 그러면 "원재료에는 없어요"라고
+        # 말하게 되는데, 원재료를 제대로 못 읽었으니 근거가 없다. 혼입 정보는 결과에 남긴다.
+        result.verdict, result.reason = AllergenVerdict.UNDETERMINED, reason or "unreadable"
     elif may:
         result.verdict = AllergenVerdict.MAY_CONTAIN
-    elif not readable:
-        result.verdict, result.reason = AllergenVerdict.UNDETERMINED, reason or "unreadable"
     elif not normalize_term(ingredients + notice):
         result.verdict, result.reason = AllergenVerdict.UNDETERMINED, "no_ingredients"
     elif _OPAQUE.search(ingredients):
