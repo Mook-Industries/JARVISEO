@@ -9,9 +9,8 @@ OpenAI 키가 필요하다.
     python scripts/voice_loop.py 1 4          # 1번 마이크, 4번 스피커
     python scripts/voice_loop.py --wake       # 호출어를 부르고 이어서 말한다. Ctrl+C 로 끝
 
---wake 는 config.WAKEWORD_MODEL 로 호출어를 기다린다. 기성 hey_jarvis 는 "자비서"를 못 잡으므로
-커스텀 모델이 나오기 전까지는 "Hey Jarvis, 저거 뭐야?" 처럼 부른다. 호출어만 부르고 멈추면
-"네, 말씀하세요."라고 되묻고 다시 듣는다.
+--wake 는 config.WAKEWORD_MODEL(기본 data/models/jarviseo.onnx)로 호출어를 기다린다.
+"자비서, 저거 뭐야?" 처럼 부른다. 호출어만 부르고 멈추면 "네, 말씀하세요."라고 되묻고 다시 듣는다.
 
 찍는 값 (ms)
     말끝 대기    말이 끝나고 VAD 가 끝으로 판정해 녹음을 멈추기까지 (무음 700ms 가 대부분)
