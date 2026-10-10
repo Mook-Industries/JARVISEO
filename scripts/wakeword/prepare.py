@@ -14,6 +14,10 @@ _test 는 학습 중에 가장 좋은 모델을 고르는 검증용이다. 라�
 말로 보고 녹음을 10초까지 끌어서, "자비서"가 여러 번 들어 있거나 어디 있는지 알 수 없었다.
 negative 는 어디를 잘라도 negative 라서 2초씩 나눠 모두 쓴다(일상 문장 합성은 2초를 자주 넘는다).
 
+background(같은 마이크로 길게 녹음한 방송 소리)도 negative 로 쓴다. 5회차 모델이 TV 스피커에서 멀리
+작게 들리는 방송 말소리에 자주 깨서 넣는다. 무음을 자르지 않고 2초씩 나누고, 이웃한 조각은 소리가
+이어지므로 검증용은 녹음 끝쪽 10% 를 통째로 뗀다. 평가용 TV 녹음과는 다른 방송을 녹음한다.
+
 실행:
     python scripts/wakeword/prepare.py
 
@@ -78,12 +82,10 @@ def main() -> None:
     src = ROOT / "train"
     with (src / "metadata.csv").open(encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f))
-    # background(길게 녹음한 TV 소리)는 클립이 아니라서 여기서 쓰지 않는다
-    rows = [r for r in rows if r["label"] != "background"]
-
     groups = defaultdict(list)
     for r in rows:
-        groups[group(r)].append(r)
+        if r["label"] != "background":  # 긴 녹음은 아래에서 조각 단위로 나눈다
+            groups[group(r)].append(r)
     split = {}
     for members in groups.values():
         members = sorted(members, key=lambda r: r["file"])
@@ -99,24 +101,30 @@ def main() -> None:
     for r in rows:
         with wave.open(str(src / r["file"]), "rb") as w:
             audio = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2")
-        cut = trim(audio)
-        if cut is None:
-            dropped["말소리 못 찾음"] += 1
-            continue
         kind = "positive" if r["label"] == "wake" else "negative"
         limit = int(MAX_SEC * SAMPLE_RATE)
-        if len(cut) <= limit:
-            pieces = [cut]
-        elif kind == "negative":
-            pieces = [cut[i : i + limit] for i in range(0, len(cut), limit)]
-            pieces = [p for p in pieces if len(p) >= MIN_PIECE_SEC * SAMPLE_RATE]
+        if r["label"] == "background":
+            pieces = [audio[i : i + limit] for i in range(0, len(audio) - limit + 1, limit)]
+            n_test = round(len(pieces) * args.test)
+            splits = ["train"] * (len(pieces) - n_test) + ["test"] * n_test
         else:
-            dropped[f"잘라도 {MAX_SEC:.0f}초 넘음"] += 1
-            continue
+            cut = trim(audio)
+            if cut is None:
+                dropped["말소리 못 찾음"] += 1
+                continue
+            if len(cut) <= limit:
+                pieces = [cut]
+            elif kind == "negative":
+                pieces = [cut[i : i + limit] for i in range(0, len(cut), limit)]
+                pieces = [p for p in pieces if len(p) >= MIN_PIECE_SEC * SAMPLE_RATE]
+            else:
+                dropped[f"잘라도 {MAX_SEC:.0f}초 넘음"] += 1
+                continue
+            splits = [split[r["file"]]] * len(pieces)
         base = r["file"].split("/")[-1].removesuffix(".wav")
-        for k, piece in enumerate(pieces, start=1):
+        for k, (piece, part) in enumerate(zip(pieces, splits, strict=True), start=1):
             suffix = f"-{k}" if len(pieces) > 1 else ""
-            path = out / f"{kind}_{split[r['file']]}" / f"{r['label']}-{base}{suffix}.wav"
+            path = out / f"{kind}_{part}" / f"{r['label']}-{base}{suffix}.wav"
             save(path, piece)
             sec = len(piece) / SAMPLE_RATE
             seconds.append(sec)
@@ -128,7 +136,7 @@ def main() -> None:
                     "text": r["text"],
                     "source": r["source"],
                     "speaker": r["speaker"],
-                    "split": split[r["file"]],
+                    "split": part,
                     "seconds": f"{sec:.2f}",
                 }
             )
