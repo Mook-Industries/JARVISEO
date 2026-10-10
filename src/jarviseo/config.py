@@ -93,6 +93,8 @@ STT_MODEL = _get("JARVISEO_STT_MODEL", "gpt-transcribe")
 TTS_MODEL = _get("JARVISEO_TTS_MODEL", "gpt-4o-mini-tts")
 # 기억 검색용 문장 임베딩. 차원(1536)이 observation.embedding 의 VECTOR(1536) 과 같아야 한다.
 EMBED_MODEL = _get("JARVISEO_EMBED_MODEL", "text-embedding-3-small")
+# 기억 검색 점수(코사인 유사도)가 이보다 낮으면 근거로 넘기지 않는다.
+MEMORY_MIN_SCORE = _get_float("JARVISEO_MEMORY_MIN_SCORE", 0.3)
 
 # --- 식품 성분 판정 ------------------------------------------
 # 식품안전나라 OpenAPI. C005(바코드 → 품목제조보고번호) → C002/C006(원재료명).

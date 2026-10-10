@@ -54,6 +54,7 @@ class FakeEmbedder:
     """
 
     def __init__(self) -> None:
+        self.model = "fake-bigram"  # observation.embed_model 에 남는 이름
         self.last_latency_ms: float | None = None
 
     def embed(self, text: str) -> list[float]:
