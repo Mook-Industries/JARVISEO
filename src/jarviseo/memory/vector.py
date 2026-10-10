@@ -27,7 +27,11 @@ from pathlib import Path
 
 import numpy as np
 from openai import OpenAIError
-from sqlalchemy import select
+from pgvector.psycopg import register_vector
+from sqlalchemy import BindParameter, bindparam, select
+from sqlalchemy.orm import Session as OrmSession
+from sqlalchemy.orm import defer
+from sqlalchemy.types import UserDefinedType
 
 from jarviseo import config
 from jarviseo.memory.embed import FakeEmbedder, TextEmbedder
@@ -88,7 +92,7 @@ class VectorMemory:
         기억 검색이 안 돼도 답은 나가야 하기 때문이다.
         """
         self.last_latency_ms = None
-        started = time.monotonic()
+        started = time.perf_counter()  # monotonic 은 윈도우에서 15.6ms 단위라 못 쓴다
         vector = self._embed(query)
         if vector is None:
             return []
@@ -100,14 +104,15 @@ class VectorMemory:
         )
         with self.store.session() as db:
             if self.store.engine.dialect.name == "postgresql":
-                distance = Observation.embedding.cosine_distance(vector)
+                distance = Observation.embedding.cosine_distance(_binary_vector(db, vector))
+                found = found.options(defer(Observation.embedding))  # 결과에는 벡터가 필요 없다
                 rows = db.execute(found.add_columns(distance).order_by(distance).limit(top_k))
                 scored = [(obs, image, 1.0 - dist) for obs, image, dist in rows]
             else:
                 # SQLite 에는 pgvector 연산자가 없다. 테스트·데모용이라 행을 다 읽어 잰다.
                 rows = [(o, img, _cosine(vector, o.embedding)) for o, img in db.execute(found)]
                 scored = sorted(rows, key=lambda row: row[2], reverse=True)[:top_k]
-        self.last_latency_ms = (time.monotonic() - started) * 1000
+        self.last_latency_ms = (time.perf_counter() - started) * 1000
         return [_hit(obs, image, score) for obs, image, score in scored if score >= self.min_score]
 
     def _embed(self, text: str) -> list[float] | None:
@@ -118,6 +123,32 @@ class VectorMemory:
         except OpenAIError as e:
             log.warning("임베딩 실패: %s", e)
             return None
+
+
+def _binary_vector(db: OrmSession, vector: list[float]) -> BindParameter:
+    """질문 벡터를 이진(float32 1536개, 약 6KB)으로 보내는 바인드 값.
+
+    VECTOR 열 타입은 값을 '[0.0123…, …]' 글자(약 30KB)로 바꿔 보낸다. 윈도우 Docker Desktop
+    포트로 8KB 넘게 보내면 왕복마다 약 44ms 가 붙어서(1,000행 검색 60ms 중 대부분),
+    psycopg 에 pgvector 어댑터를 붙이고 타입 변환 없이 numpy 배열을 그대로 넘긴다.
+    """
+    pooled = db.connection().connection  # 풀의 DBAPI 연결. info 는 연결이 살아 있는 동안 남는다
+    if not pooled.info.get("pgvector"):
+        register_vector(pooled.dbapi_connection)
+        pooled.info["pgvector"] = True
+    return bindparam("query_vector", np.asarray(vector, dtype=np.float32), type_=_AsIs())
+
+
+class _AsIs(UserDefinedType):
+    """값을 바꾸지 않고 드라이버에 넘기는 타입.
+
+    NullType 으로 두면 SQLAlchemy 가 비교 상대(VECTOR 열)의 타입을 덮어써서 다시 글자가 된다.
+    """
+
+    cache_ok = True
+
+    def get_col_spec(self, **kw: object) -> str:
+        return "VECTOR"
 
 
 def _cosine(a: list[float], b: np.ndarray) -> float:

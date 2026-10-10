@@ -40,9 +40,10 @@ class TextEmbedder:
     def embed(self, text: str) -> list[float]:
         """text 의 임베딩(길이 1, DIM 차원)을 돌려준다. 실패하면 OpenAIError 가 그대로 올라간다."""
         self.last_latency_ms = None
-        asked_at = time.monotonic()
+        # monotonic 은 윈도우에서 15.6ms 단위로만 움직여서, 짧은 왕복은 perf_counter 로 잰다.
+        asked_at = time.perf_counter()
         response = self.client.embeddings.create(model=self.model, input=text)
-        self.last_latency_ms = (time.monotonic() - asked_at) * 1000
+        self.last_latency_ms = (time.perf_counter() - asked_at) * 1000
         return response.data[0].embedding
 
 
