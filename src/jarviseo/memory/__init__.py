@@ -1,4 +1,4 @@
-"""③④ 소지품 재인식 · 개인 기억 검색 — 담당: 문태현.
+"""④ 개인 기억 검색 — 담당: 문태현.
 
 "만능 비서"의 근거가 되는 부분이다. 사용자의 정보를 기억해뒀다가
 답변에 반영한다. 알레르기 정보도 여기 저장된 프로필에서 나온다.
@@ -20,8 +20,6 @@
 from jarviseo.memory.models import (
     Allergen,
     Base,
-    Belonging,
-    BelongingImage,
     ChatSession,
     EvalRun,
     EvalSample,
@@ -56,8 +54,6 @@ __all__ = [
     "TurnCandidate",
     "Product",
     "TurnIngredient",
-    "Belonging",
-    "BelongingImage",
     "Observation",
     "EvalRun",
     "EvalSample",

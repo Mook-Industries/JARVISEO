@@ -1,4 +1,4 @@
-# memory — ③④ 소지품·개인 기억 + DB 저장소 · 담당 문태현
+# memory — ④ 개인 기억 + DB 저장소 · 담당 문태현
 
 관계형 기록과 벡터 검색을 Postgres 하나(pgvector 확장)로 다룬다.
 **모든 팀원이 결과를 적재하는 곳**이라 스키마 변경은 팀 합의 후에 한다.
@@ -7,7 +7,7 @@
 |---|---|
 | `models.py` | 테이블 정의 — ERD 를 코드로 옮긴 것 |
 | `store.py` | Postgres 접근 (대화 기록 · 지연시간 · 판정 결과) |
-| `vector.py` | pgvector 검색 — `belonging_image` · `observation` 테이블 |
+| `vector.py` | pgvector 검색 — `observation` 테이블 |
 
 ## 알아둘 것
 

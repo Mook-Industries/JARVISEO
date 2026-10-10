@@ -13,8 +13,6 @@ Postgres 에서만 터지는 문제(타입 불일치 등)는 여기서 안 잡�
 import pytest
 
 from jarviseo.memory.models import (
-    Belonging,
-    BelongingImage,
     ChatSession,
     Observation,
     SessionTurn,
@@ -51,7 +49,7 @@ def test_테이블이_전부_만들어진다(store: MemoryStore):
     from sqlalchemy import inspect
 
     tables = set(inspect(store.engine).get_table_names())
-    # 팀 ERD(ERDCloud JARVISEO)의 17개 테이블
+    # 팀 ERD(ERDCloud JARVISEO)의 15개 테이블
     expected = {
         "users",
         "user_setting",
@@ -67,8 +65,6 @@ def test_테이블이_전부_만들어진다(store: MemoryStore):
         "turn_ingredient",
         "eval_run",
         "eval_sample",
-        "belonging",
-        "belonging_image",
         "observation",
     }
     assert tables == expected, f"빠진 것: {expected - tables} / ERD 에 없는 것: {tables - expected}"
@@ -263,38 +259,29 @@ def test_사용자를_지우면_딸린_기록도_지워진다(store: MemoryStore
         assert db.query(ChatSession).count() == 0
 
 
-def test_소지품과_관찰_기록에_임베딩이_남는다(store: MemoryStore):
-    """③④ 기능의 테이블. 임베딩은 같은 행의 VECTOR 열에 둔다."""
+def test_관찰_기록에_임베딩이_남는다(store: MemoryStore):
+    """④ 기능의 테이블. 임베딩은 같은 행의 VECTOR 열에 둔다."""
     user_id = store.ensure_user()
     session_id = store.start_session(user_id)
     utterance, response = _sample_response()
     turn_id = store.log_turn(session_id, utterance, response)
 
     with store.session() as db:
-        bag = Belonging(user_id=user_id, name="검은 백팩")
-        db.add(bag)
-        db.flush()
-        db.add(BelongingImage(belonging_id=bag.belonging_id, embedding=[0.1] * 512))
         db.add(
             Observation(
                 user_id=user_id,
                 turn_id=turn_id,
-                belonging_id=bag.belonging_id,
                 description="책상 위 검은 백팩",
                 embedding=[0.2] * 1536,
             )
         )
 
     with store.session() as db:
-        image = db.query(BelongingImage).one()
-        assert len(image.embedding) == 512
         obs = db.query(Observation).one()
         assert len(obs.embedding) == 1536
-        assert obs.belonging.name == "검은 백팩"
 
-    # 사용자를 지우면 소지품·관찰 기록도 같이 지워진다
+    # 사용자를 지우면 관찰 기록도 같이 지워진다
     with store.session() as db:
         db.delete(db.get(User, user_id))
     with store.session() as db:
-        assert db.query(Belonging).count() == 0
         assert db.query(Observation).count() == 0

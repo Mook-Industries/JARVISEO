@@ -5,9 +5,7 @@
 벡터 DB 를 따로 두지 않고 Postgres 의 pgvector 확장을 쓴다.
 임베딩을 기록과 같은 행에 두면, 벡터와 기록이 어긋날 일이 없고 백업도 하나로 끝난다.
 
-ERD 의 두 테이블을 검색한다.
-- belonging_image : 등록한 개인 물품의 이미지 임베딩. "내 가방 어디 있어?"
-- observation     : 과거에 본 장면의 설명 임베딩. "아까 본 그거"
+ERD 의 observation 테이블(과거에 본 장면의 설명 임베딩)을 검색한다. "아까 본 그거"
 
 '근거율'이 무엇인가
 -------------------
@@ -32,22 +30,13 @@ class VectorMemory:
         self.database_url = database_url
         raise NotImplementedError
 
-    def register_belonging(self, name: str, image_path: Path, note: str = "") -> str:
-        """개인 물품을 등록한다. 반환값은 memory_id.
-
-        같은 물건을 여러 각도에서 여러 장 등록해야 재인식이 된다.
-        한 장만 등록하면 조명이나 각도가 바뀌는 순간 못 찾는다.
-        """
-        raise NotImplementedError
-
     def remember_observation(self, text: str, image_path: Path | None = None) -> str:
         """지금 본 장면을 기록해둔다. 나중에 "아까 본 그거"로 찾을 수 있게."""
         raise NotImplementedError
 
-    def search(self, query: str, kind: str | None = None, top_k: int = 5) -> list[MemoryHit]:
+    def search(self, query: str, top_k: int = 5) -> list[MemoryHit]:
         """질의와 비슷한 기록을 찾는다.
 
-        kind 로 테이블을 좁힐 수 있다("belonging" / "observation").
         점수가 낮은 결과는 걸러서 반환한다. 억지로 top_k 개를 채우면
         LLM 이 엉뚱한 기록을 근거로 삼는다.
         """
