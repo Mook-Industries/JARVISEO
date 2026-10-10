@@ -10,6 +10,7 @@
 | `wakeword/evaluate.py` | 웨이크워드 평가 — 평가용 녹음으로 임계값별 FRR·FAR·시간당 오탐 계산, CSV 저장 |
 | `wakeword/check.py` | 웨이크워드 녹음 검사 — 무음·잡음 합성 클립, 형식이 틀린 wav, metadata 와 안 맞는 파일을 찾아 `--fix` 로 지움 |
 | `wakeword/merge.py` | 팀원 녹음 zip 합치기 — 화자 번호를 붙여 train·eval 에 넣고, 다른 split 에 있는 화자면 멈춤 |
+| `wakeword/prepare.py` | 웨이크워드 학습 데이터 준비 — train 녹음의 앞뒤 무음을 잘라 openWakeWord 학습 폴더(positive·negative × train·test)로 나누고 zip 으로 묶음 |
 
 ## spike 란
 

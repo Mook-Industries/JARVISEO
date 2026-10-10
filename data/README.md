@@ -22,8 +22,10 @@
 datasets/wakeword/
 ├── eval/       평가용. 학습에 절대 쓰지 않는다
 │   ├── metadata.csv
+│   ├── speech.csv   실제 "자비서" 녹음을 들어 보고 적은 말투(정상·끊음·늘임·잘림)
 │   ├── wake/  similar/  background/
-├── train/      학습용. 구조는 eval 과 같다
+├── train/      학습용. 구조는 eval 과 같고, 일상 문장 합성(speech/)이 더 있다
+├── oww/        prepare.py 가 train 을 openWakeWord 학습 폴더로 나눈 것과 그 zip. 다시 만들 수 있다
 └── results/    evaluate.py 결과 CSV
 ```
 
@@ -34,5 +36,16 @@ datasets/wakeword/
 - 화자는 실명 대신 번호(`s01`, `s02` …)로 적는다.
 - Drive 에 올릴 때도 이 폴더 구조와 `metadata.csv` 를 그대로 올린다. 메타데이터가 없으면 평가 스크립트가 읽지 못한다.
 - 잘못 녹음한 파일은 wav 만 지우면 된다. `metadata.csv` 에 줄이 남아 있어도 평가할 때 건너뛴다.
+  지우기 아까우면 `speech.csv` 에 `잘림` 으로 적는다. `evaluate.py` 가 평가에서 빼고 뺀 개수를 출력한다.
 - 팀원 녹음은 `train` 폴더를 `train_s0X.zip` 으로 받아 `scripts/wakeword/merge.py` 로 합치고,
   합친 뒤와 TTS 로 합성한 뒤에는 `scripts/wakeword/check.py <split> --fix` 로 한 번 거른다.
+
+## 호출어 모델 (`models/jarviseo.onnx`)
+
+"자비서"로 학습한 openWakeWord 분류기다. `config.WAKEWORD_MODEL` 의 기본값이라 없으면 호출어 감지기가 시작하지 않는다.
+
+- 공용 Drive 의 `jarviseo/jarviseo-r6.onnx`(학습 6회차, 205,069 바이트)를 받아 `models/jarviseo.onnx` 로 저장한다.
+- 받은 파일이 맞는지는 SHA-256 앞자리로 확인한다: `4686db10ae2febb8`
+  (`python -c "import hashlib;print(hashlib.sha256(open('data/models/jarviseo.onnx','rb').read()).hexdigest()[:16])"`)
+- 학습 노트북은 `notebooks/wakeword_train.ipynb`, 평가 결과와 한계는 `docs/experiments.md` 학습 기록에 있다.
+- 다시 학습해서 바꾸면 이 절의 파일 이름과 SHA-256 을 같이 고친다.

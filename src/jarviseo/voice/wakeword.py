@@ -5,12 +5,12 @@
 상시 듣는 것은 이것뿐이고 로컬에서만 돈다. 클라우드로 나가는 것은 호출어 뒤의 발화 한 번이다.
 
 재생 중 게이트는 두 단이다(gate.py). TTS 가 재생 중이거나 끝나고 0.3초 안이면
-STT 는 그 소리를 아예 못 듣고(1단), 호출어는 계속 듣되 임계값을 0.8 로 올린다(2단).
+STT 는 그 소리를 아예 못 듣고(1단), 호출어는 계속 듣되 임계값을 더 높인다(2단, 기본 0.99).
 자기 목소리에 깨지 않으면서도 재생 중에 "자비서"로 끼어들 수 있게 하려는 것이다.
 
-모델은 ``config.WAKEWORD_MODEL`` 로 바꿔 끼운다. 기성 모델 이름(hey_jarvis)이나 .onnx 경로를 받는다.
-기성 hey_jarvis 는 "자비서"를 못 잡는다(docs/experiments.md baseline, FRR 100%).
-커스텀 모델이 나오기 전까지는 "Hey Jarvis" 로 감지기가 도는지만 확인한다.
+모델은 ``config.WAKEWORD_MODEL`` 로 바꿔 끼운다. .onnx 경로나 기성 모델 이름(hey_jarvis)을 받는다.
+기본은 "자비서"로 학습한 커스텀 모델(data/models/jarviseo.onnx)이다. 기성 hey_jarvis 는
+"자비서"를 못 잡았다(docs/experiments.md baseline, FRR 100%).
 
 책임 지표는 FAR(안 불렀는데 깨어남)와 FRR(불렀는데 안 깨어남)이다.
 ``scripts/wakeword/evaluate.py`` 로 잰다.
@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
+from pathlib import Path
 
 import numpy as np
 
@@ -40,6 +41,9 @@ REFRACTORY_SEC = 2.0
 
 def load_scorer(model: str) -> Callable[[np.ndarray], float]:
     """openWakeWord 모델을 열어, 80ms 프레임 하나를 받아 0~1 점수를 내는 함수를 돌려준다."""
+    if model.endswith(".onnx") and not Path(model).is_file():
+        # 커스텀 모델은 Git 에 없다. 그냥 두면 onnxruntime 이 알아보기 힘든 오류를 낸다.
+        raise FileNotFoundError(f"호출어 모델이 없다: {model} (받는 법은 data/README.md)")
     # 리눅스(CI·Docker)에는 openwakeword 가 설치되지 않는다(requirements.txt). 쓸 때만 읽는다.
     from openwakeword.model import Model
     from openwakeword.utils import download_models

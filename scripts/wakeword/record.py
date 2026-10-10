@@ -14,6 +14,9 @@ Git 에는 올라가지 않는다(.gitignore).
     python scripts/wakeword/record.py background --minutes 30 --env tv # TV 소리를 30분 그대로
     python scripts/wakeword/record.py wake 30 --split train --speaker s02 --distance 2m
     python scripts/wakeword/record.py wake 100 --tts                   # TTS 로 합성 (키 필요)
+    python scripts/wakeword/record.py speech 1000 --split train --tts  # 일상 문장 합성
+    python scripts/wakeword/record.py wake 600 --split train --tts --variant pause  # "자, 비서"
+    python scripts/wakeword/record.py similar 600 --split train --tts --variant hard  # "음, 비서"
 
 --tts 는 마이크 대신 OpenAI TTS 로 목소리 11종 × 속도 3종 × 문장부호(억양) 3종 × 말투 9종을
 바꿔 가며 합성한다. 실제 녹음과 섞지 않도록 metadata.csv 의 source 가 tts 로 남는다.
@@ -21,6 +24,7 @@ Git 에는 올라가지 않는다(.gitignore).
 label
     wake        호출어 "자비서". 놓치면 FRR 에 잡힌다
     similar     비슷한 발음. 깨어나면 FAR 에 잡힌다
+    speech      "자비서"가 없는 일상 문장. 학습용 negative 로만 쓴다 (--split train --tts)
     background  TV·영상 대화를 길게. 깨어난 횟수로 시간당 오탐(FA/h)을 잰다
 """
 
@@ -44,6 +48,86 @@ TEXTS = {
     "wake": [config.WAKE_WORD],
     # wakeword.py 의 측정 방법에 적힌 유사어. "자비스"는 STT 가 "자비서"를 잘못 받아쓰던 말이다.
     "similar": ["자비스", "아비서", "자비", "비서"],
+    # "자비서"가 없는 일상 말. 학습용 negative 가 비슷한 발음과 영어 위주 배경 특징뿐이라
+    # 한국어 대화에 깨는 것을 막으려고 합성한다. 평가용 TV 녹음은 학습에 쓸 수 없어서 따로 만든다.
+    "speech": [
+        # 호출어 뒤에 이어 할 만한 말. 질문만 듣고 깨면 안 된다
+        "이거 뭐야",
+        "이거 유통기한 언제까지야",
+        "이 과자에 땅콩 들어 있어",
+        "이거 먹어도 괜찮아",
+        "알레르기 성분 있는지 봐 줘",
+        "내 안경 어디 뒀더라",
+        "아까 내가 뭐 먹었지",
+        "오늘 날씨 어때",
+        "지금 몇 시야",
+        "이거 얼마였지",
+        "저기 있는 거 뭐야",
+        "이 약 언제 먹어야 돼",
+        "다시 한 번 말해 줘",
+        "됐어 고마워",
+        # 집에서 하는 말
+        "밥 먹었어",
+        "텔레비전 소리 좀 줄여 줘",
+        "엄마 어디 갔어",
+        "내일 몇 시에 일어날 거야",
+        "택배 왔나 봐",
+        "창문 좀 닫아 줄래",
+        "물 좀 갖다줘",
+        "오늘 저녁 뭐 먹을까",
+        "불 좀 꺼 줘",
+        "빨래 다 됐대",
+        "강아지 산책 갔다 올게",
+        "숙제 다 했어",
+        "냉장고에 우유 있어",
+        "전화 좀 받아 봐",
+        # 비슷한 소리가 문장 안에 섞인 말
+        "자비를 베풀어 주세요",
+        "비서실에 전화해 봐",
+        "사비로 산 거야",
+        "사장님 비서한테 물어봐",
+        "차비 좀 줄 수 있어",
+        "자리 비었어",
+        "비싸서 못 샀어",
+        "서비스 센터에 맡겼어",
+        "자세히 좀 봐 봐",
+        "아버지 오셨어",
+        "자비심이라고는 없네",
+        "비서관 회의가 있대",
+        "잡지 어디다 뒀어",
+        "가방 사 줘",
+        "자비 출판으로 냈대",
+        "아이 비싸",
+        # TV 에서 나올 만한 말
+        "다음 소식입니다",
+        "오늘 서울 낮 기온은 이십삼 도로 어제보다 조금 높겠습니다",
+        "그게 지금 무슨 말이야",
+        "정말 그렇게 생각해",
+        "잠시 후에 다시 찾아뵙겠습니다",
+        "이번 경기에서 결승골을 넣었습니다",
+        "나 너 좋아한다고",
+        "시청자 여러분 안녕하세요",
+        "지금부터 요리를 시작해 보겠습니다",
+        "그 사람 다시는 만나지 마",
+    ],
+}
+# --variant 로 고르는 문구 묶음. {이름: (라벨, 문구들)}
+# pause·stretch: 끊거나 늘여 부르는 "자비서". 평가용 실제 녹음 60개 중 20개가 이렇게 불렀다.
+#   한 번에 이어 말한 "자비서"로만 학습한 모델은 이걸 대부분 놓쳤다(docs/experiments.md 학습 기록).
+#   TTS 는 문장부호를 넣으면 0.4~0.75초 쉬고, 모음을 겹쳐 쓰면 늘인다(실제 끊음은 0.33초쯤 쉰다).
+# hard: 끊어 부른 "자비서"를 배운 3회차 모델이 "비서"만 듣고도 깼다. "비서"가 들어간 다른 말,
+#   "자,"로 시작하는 다른 말, 발음이 가까운 단어를 negative 로 넣는다.
+#   평가용 TV 에서 오탐이 난 말("사천")은 일부러 넣지 않는다. 넣으면 평가셋에 맞춘 학습이 된다.
+#   "아, 비서"도 뺀다. 소음 속 실제 "자, 비서"가 "아, 비서"처럼 들려서 그걸 놓치게 된다.
+VARIANTS = {
+    "pause": ("wake", ["자, 비서", "자... 비서", "자비, 서", "자, 비, 서"]),
+    "stretch": ("wake", ["자~비~서", "자아비서", "자비이서", "자아비이서어"]),
+    "hard": (
+        "similar",
+        ["음, 비서", "그, 비서", "어, 비서", "네, 비서", "내 비서", "우리 비서", "새 비서"]
+        + ["비서님", "비서야", "자, 이제 가자", "자, 여기 봐", "자, 빨리 와", "자, 시작하자"]
+        + ["사서", "피서", "자석", "자세", "차비", "사비", "자비심", "자서전", "비싸서"],
+    ),
 }
 # gpt-4o-mini-tts 목소리. 속도는 TextToSpeech 의 SLOW 0.85 / NORMAL 1.0 / FAST 1.2 를 쓴다.
 VOICES = "alloy ash ballad coral echo fable nova onyx sage shimmer verse".split()
@@ -226,7 +310,7 @@ def mic_name(device: int | None) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="웨이크워드 녹음")
-    parser.add_argument("label", choices=["wake", "similar", "background"])
+    parser.add_argument("label", choices=["wake", "similar", "speech", "background"])
     parser.add_argument("count", type=int, nargs="?", default=30, help="녹음할 횟수")
     parser.add_argument("--split", choices=["eval", "train"], default="eval")
     parser.add_argument("--text", action="append", help="띄울 문구. 여러 번 주면 돌아가며 띄운다")
@@ -236,12 +320,15 @@ def main() -> None:
     parser.add_argument("--env", default="quiet", help="quiet / noisy / tv 등")
     parser.add_argument("--device", type=int, help="sounddevice 입력 장치 번호")
     parser.add_argument("--tts", action="store_true", help="마이크 대신 TTS 로 합성한다")
+    parser.add_argument("--variant", choices=VARIANTS, help="문구 묶음 (VARIANTS)")
     args = parser.parse_args()
     if args.tts and args.label == "background":
         parser.error("background 는 실제 소리를 녹음해야 한다. --tts 와 같이 쓸 수 없다")
+    if args.variant and args.label != VARIANTS[args.variant][0]:
+        parser.error(f"--variant {args.variant} 는 {VARIANTS[args.variant][0]} 에만 쓴다")
 
     folder = ROOT / args.split
-    texts = args.text or TEXTS.get(args.label, [])
+    texts = args.text or (VARIANTS[args.variant][1] if args.variant else TEXTS.get(args.label, []))
     try:
         if args.tts:
             synth_clips(args.label, args.count, texts, folder)

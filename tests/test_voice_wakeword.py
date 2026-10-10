@@ -156,3 +156,11 @@ def test_listen_은_공유_마이크에서_since_뒤에_말한_것만_받아쓴�
     assert before.text == "저거 뭐야?"
     assert before.started_at == pytest.approx(1.0, abs=0.06)
     assert after is None and len(client.requests) == 1
+
+
+def test_커스텀_모델_파일이_없으면_받는_법을_알려_준다(tmp_path):
+    # 모델은 Git 에 없다. openwakeword 가 없는 CI 에서도 먼저 걸러야 한다.
+    from jarviseo.voice.wakeword import load_scorer
+
+    with pytest.raises(FileNotFoundError, match="data/README.md"):
+        load_scorer(str(tmp_path / "jarviseo.onnx"))

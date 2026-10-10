@@ -42,9 +42,9 @@ with MicStream() as mic:
 ```
 
 `MicStream` 은 최근 3초를 들고 있어서, 감지하고 `listen()` 을 부르기까지 지나간 말도 놓치지 않는다.
-모델·임계값은 `.env` 의 `JARVISEO_WAKEWORD_MODEL`(기본 `hey_jarvis`), `JARVISEO_WAKEWORD_THRESHOLD`(0.5),
-`JARVISEO_WAKEWORD_PLAYBACK_THRESHOLD`(0.8)로 바꾼다. 기성 `hey_jarvis` 는 "자비서"를 못 잡으므로
-커스텀 모델이 나오기 전까지는 "Hey Jarvis" 로 시험한다.
+모델·임계값은 `.env` 의 `JARVISEO_WAKEWORD_MODEL`(기본 `data/models/jarviseo.onnx`), `JARVISEO_WAKEWORD_THRESHOLD`(0.97),
+`JARVISEO_WAKEWORD_PLAYBACK_THRESHOLD`(0.99)로 바꾼다. 기본 모델은 "자비서"로 학습한 커스텀 모델이고
+Git 에 없어서 따로 받아야 한다(`data/README.md`). 평가 결과와 한계는 `docs/experiments.md` 학습 기록 6회차에 있다.
 
 ## 알아둘 것
 
