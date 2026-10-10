@@ -38,7 +38,7 @@ FRAME = 480  # 30ms 씩 소리 크기를 잰다
 PAD_SEC = 0.1  # 말소리 앞뒤로 이만큼은 남긴다. 첫 자음·끝 모음이 잘리지 않게
 MAX_SEC = 2.0  # openWakeWord 학습 창. 이보다 길면 앞부분만 남기고 잘린다
 MIN_PIECE_SEC = 0.5  # 긴 negative 를 나누고 남은 끝 조각이 이보다 짧으면 버린다
-SPLIT_FIELDS = ["file", "out", "label", "source", "speaker", "split", "seconds"]
+SPLIT_FIELDS = ["file", "out", "label", "text", "source", "speaker", "split", "seconds"]
 
 
 def trim(audio: np.ndarray) -> np.ndarray | None:
@@ -125,6 +125,7 @@ def main() -> None:
                     "file": r["file"],
                     "out": path.relative_to(out).as_posix(),
                     "label": r["label"],
+                    "text": r["text"],
                     "source": r["source"],
                     "speaker": r["speaker"],
                     "split": split[r["file"]],
