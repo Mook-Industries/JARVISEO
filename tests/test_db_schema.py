@@ -1,11 +1,8 @@
 """DB 스키마가 실제로 만들어지고 돌아가는지 확인한다.
 
-Postgres 를 띄우지 않고 SQLite 인메모리로 돌린다.
-테이블·관계·외래키가 맞는지 보는 데는 그걸로 충분하고,
-CI 에서 컨테이너를 띄우지 않아도 되기 때문이다.
-
-Postgres 에서만 터지는 문제(타입 불일치 등)는 여기서 안 잡힌다.
-그건 실제로 붙여보고 확인해야 한다.
+SQLite 인메모리와 실제 Postgres 에서 한 번씩 돈다(``store`` fixture, tests/conftest.py).
+Postgres 쪽은 테스트용 DB 주소가 있을 때만 돌고, CI 에서는 db job 이 맡는다.
+Postgres 에서만 터지는 문제(타입 불일치, pgvector 열 등)는 그쪽에서 잡힌다.
 
 실행: pytest tests/test_db_schema.py
 """
@@ -35,14 +32,6 @@ from jarviseo.types import (
     TargetResolution,
     Utterance,
 )
-
-
-@pytest.fixture
-def store() -> MemoryStore:
-    """매 테스트마다 빈 인메모리 DB 를 준다."""
-    s = MemoryStore(database_url="sqlite://")
-    s.init_schema()
-    return s
 
 
 def test_테이블이_전부_만들어진다(store: MemoryStore):
