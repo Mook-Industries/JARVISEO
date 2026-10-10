@@ -12,7 +12,7 @@
 
 ## 알아둘 것
 
-- **원본은 팀 ERD(`docs/ERD.md`, ERDCloud `JARVISEO-v5`)다.** 어긋나면 ERD 가 맞다.
+- **원본은 팀 ERD(`docs/ERD.md`, ERDCloud `JARVISEO-v9`)다.** 어긋나면 ERD 가 맞다.
   세 사람이 같은 그림을 보고 작업해야 하므로 다이어그램을 기준으로 삼는다.
 - 이미지 파일은 DB 에 넣지 않고 경로(`image_path`)만 둔다. 임베딩은 같은 행의 `embedding` 열(pgvector)에 둔다.
 - Enum 은 문자열로 저장한다. Postgres ENUM 은 값 추가마다 마이그레이션이 필요하다.
