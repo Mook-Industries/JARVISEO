@@ -79,11 +79,10 @@ CLARIFY_MARGIN_THRESHOLD = _get_float("JARVISEO_CLARIFY_MARGIN", 0.15)
 # 다 만든 기능의 플래그를 남겨두면 경우의 수만 늘어나고 아무도 안 지운다.
 ENABLE_GAZE_CUE = _get_bool("JARVISEO_ENABLE_GAZE_CUE", False)
 ENABLE_LANGUAGE_CUE = _get_bool("JARVISEO_ENABLE_LANGUAGE_CUE", False)
-ENABLE_BELONGING = _get_bool("JARVISEO_ENABLE_BELONGING", False)
 ENABLE_RECALL = _get_bool("JARVISEO_ENABLE_RECALL", False)
 
 # --- 외부 API -------------------------------------------------------------
-# 팀 공용 OpenAI 키 1개를 STT · VLM · TTS 가 함께 쓴다. 월 사용 한도 설정 필수.
+# 팀 공용 OpenAI 키 1개를 STT · VLM · TTS · 임베딩이 함께 쓴다. 월 사용 한도 설정 필수.
 # 이 키만 JARVISEO_ 를 붙이지 않는다. OpenAI SDK 가 찾는 이름 그대로 쓴다.
 # 시스템 환경변수에 OPENAI_API_KEY 가 이미 있으면 .env 보다 그쪽이 이긴다.
 OPENAI_API_KEY = _get("OPENAI_API_KEY")
@@ -92,6 +91,13 @@ OPENAI_API_KEY = _get("OPENAI_API_KEY")
 VLM_MODEL = _get("JARVISEO_VLM_MODEL", "gpt-6-sol")
 STT_MODEL = _get("JARVISEO_STT_MODEL", "gpt-transcribe")
 TTS_MODEL = _get("JARVISEO_TTS_MODEL", "gpt-4o-mini-tts")
+# 기억 검색용 문장 임베딩. 차원(1536)이 observation.embedding 의 VECTOR(1536) 과 같아야 한다.
+EMBED_MODEL = _get("JARVISEO_EMBED_MODEL", "text-embedding-3-small")
+# 기억 검색 점수(코사인 유사도)가 이보다 낮으면 근거로 넘기지 않는다.
+# 장면 8개·질문 12개 측정(scripts/check_memory.py, 10/11): 1등은 8개 다 맞았지만 점수가 겹친다.
+# 맞는 장면 0.193~0.425, 틀린 장면 최고 0.276, 상관없는 질문("날씨 어때") 1등 0.127~0.266.
+# 맞는 것을 버리지 않게 낮게 둔다. 상관없는 질문은 라우터가 RECALL 로 안 보내는 것으로 막는다.
+MEMORY_MIN_SCORE = _get_float("JARVISEO_MEMORY_MIN_SCORE", 0.15)
 
 # --- 식품 성분 판정 ------------------------------------------
 # 식품안전나라 OpenAPI. C005(바코드 → 품목제조보고번호) → C002/C006(원재료명).

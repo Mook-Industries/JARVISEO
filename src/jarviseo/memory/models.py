@@ -74,7 +74,7 @@ class Base(DeclarativeBase):
 
 
 class User(Base):
-    """사용자. 로그인 계정이자 알레르기·설정·소지품의 주인."""
+    """사용자. 로그인 계정이자 알레르기·설정·기억의 주인."""
 
     __tablename__ = "users"
 
@@ -94,9 +94,6 @@ class User(Base):
         back_populates="user", cascade="all, delete-orphan"
     )
     sessions: Mapped[list[ChatSession]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
-    )
-    belongings: Mapped[list[Belonging]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
     observations: Mapped[list[Observation]] = relationship(
@@ -480,57 +477,9 @@ class TurnIngredient(Base):
 
 
 # ==========================================================================
-# ③④ 소지품 재인식 · 개인 기억  (담당: 문태현)
+# ④ 개인 기억  (담당: 문태현)
 # ==========================================================================
-
-
-class Belonging(Base):
-    """사용자가 등록한 내 물건 하나. "내 가방 어디 있어?"의 대상."""
-
-    __tablename__ = "belonging"
-
-    belonging_id: Mapped[int] = mapped_column(BigPK, primary_key=True)
-    user_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), index=True
-    )
-    name: Mapped[str | None] = mapped_column(String(100))
-    description: Mapped[str | None] = mapped_column(Text)  # 특징 설명
-    created_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    user: Mapped[User] = relationship(back_populates="belongings")
-    images: Mapped[list[BelongingImage]] = relationship(
-        back_populates="belonging", cascade="all, delete-orphan"
-    )
-    observations: Mapped[list[Observation]] = relationship(back_populates="belonging")
-
-
-class BelongingImage(Base):
-    """내 물건의 등록 사진 한 장과 그 이미지 임베딩.
-
-    같은 물건을 여러 각도에서 여러 장 등록해야 재인식이 된다.
-    한 장만 있으면 조명이나 각도가 바뀌는 순간 못 찾는다.
-    """
-
-    __tablename__ = "belonging_image"
-
-    belonging_image_id: Mapped[int] = mapped_column(BigPK, primary_key=True)
-    belonging_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("belonging.belonging_id", ondelete="CASCADE"), index=True
-    )
-    image_path: Mapped[str | None] = mapped_column(String(500))
-    # CLIP 이미지 임베딩(512차원).
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(512))
-    embed_model: Mapped[str | None] = mapped_column(String(50))
-    created_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-
-    belonging: Mapped[Belonging] = relationship(back_populates="images")
+# ③ 소지품 재인식(belonging · belonging_image)은 10/7 팀 결정으로 범위에서 뺐다.
 
 
 class Observation(Base):
@@ -545,10 +494,6 @@ class Observation(Base):
     turn_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("session_turn.turn_id", ondelete="CASCADE"), index=True
     )
-    # CLIP 임베딩으로 내 물건을 알아봤을 때만 연결한다. 못 알아보면 NULL.
-    belonging_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("belonging.belonging_id", ondelete="SET NULL"), index=True
-    )
     description: Mapped[str | None] = mapped_column(Text)  # 장면 설명
     place: Mapped[str | None] = mapped_column(String(100))
     # 장면 설명의 텍스트 임베딩(text-embedding-3-small, 1536차원).
@@ -560,7 +505,6 @@ class Observation(Base):
 
     user: Mapped[User] = relationship(back_populates="observations")
     turn: Mapped[SessionTurn] = relationship(back_populates="observations")
-    belonging: Mapped[Belonging | None] = relationship(back_populates="observations")
 
 
 # ==========================================================================
@@ -628,8 +572,6 @@ __all__ = [
     "TurnCandidate",
     "Product",
     "TurnIngredient",
-    "Belonging",
-    "BelongingImage",
     "Observation",
     "EvalRun",
     "EvalSample",

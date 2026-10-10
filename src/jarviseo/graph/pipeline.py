@@ -22,7 +22,7 @@ def build_graph():  # -> CompiledGraph
         route     : 의도를 판단한다 (POINTING / INGREDIENT / ... / GENERAL)
         detect    : 객체·손끝 검출          (POINTING 일 때)
         ocr       : 성분표 검출 + OCR       (INGREDIENT 일 때)
-        recall    : 벡터 검색               (BELONGING / RECALL 일 때)
+        recall    : 벡터 검색               (RECALL 일 때)
         resolve   : 지시 대상 특정
         generate  : VLM 응답 생성
         speak     : TTS
