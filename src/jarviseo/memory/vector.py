@@ -27,7 +27,6 @@ from pathlib import Path
 
 import numpy as np
 from openai import OpenAIError
-from pgvector.psycopg import register_vector
 from sqlalchemy import BindParameter, bindparam, select
 from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import defer
@@ -132,6 +131,10 @@ def _binary_vector(db: OrmSession, vector: list[float]) -> BindParameter:
     포트로 8KB 넘게 보내면 왕복마다 약 44ms 가 붙어서(1,000행 검색 60ms 중 대부분),
     psycopg 에 pgvector 어댑터를 붙이고 타입 변환 없이 numpy 배열을 그대로 넘긴다.
     """
+    # psycopg 는 Postgres 에 붙을 때만 있으면 된다.
+    # SQLite 로만 쓰는 환경에서도 이 파일이 import 되게 여기서 불러온다.
+    from pgvector.psycopg import register_vector
+
     pooled = db.connection().connection  # 풀의 DBAPI 연결. info 는 연결이 살아 있는 동안 남는다
     if not pooled.info.get("pgvector"):
         register_vector(pooled.dbapi_connection)
