@@ -17,6 +17,7 @@
 어느 쪽이 맞는지 알 수 없다.
 """
 
+from jarviseo.memory.embed import FakeEmbedder, TextEmbedder
 from jarviseo.memory.models import (
     Allergen,
     Base,
@@ -41,6 +42,8 @@ from jarviseo.memory.vector import VectorMemory
 __all__ = [
     "MemoryStore",
     "VectorMemory",
+    "TextEmbedder",
+    "FakeEmbedder",
     "Base",
     "User",
     "UserSetting",

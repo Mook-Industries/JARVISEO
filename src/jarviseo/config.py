@@ -82,7 +82,7 @@ ENABLE_LANGUAGE_CUE = _get_bool("JARVISEO_ENABLE_LANGUAGE_CUE", False)
 ENABLE_RECALL = _get_bool("JARVISEO_ENABLE_RECALL", False)
 
 # --- 외부 API -------------------------------------------------------------
-# 팀 공용 OpenAI 키 1개를 STT · VLM · TTS 가 함께 쓴다. 월 사용 한도 설정 필수.
+# 팀 공용 OpenAI 키 1개를 STT · VLM · TTS · 임베딩이 함께 쓴다. 월 사용 한도 설정 필수.
 # 이 키만 JARVISEO_ 를 붙이지 않는다. OpenAI SDK 가 찾는 이름 그대로 쓴다.
 # 시스템 환경변수에 OPENAI_API_KEY 가 이미 있으면 .env 보다 그쪽이 이긴다.
 OPENAI_API_KEY = _get("OPENAI_API_KEY")
@@ -91,6 +91,8 @@ OPENAI_API_KEY = _get("OPENAI_API_KEY")
 VLM_MODEL = _get("JARVISEO_VLM_MODEL", "gpt-6-sol")
 STT_MODEL = _get("JARVISEO_STT_MODEL", "gpt-transcribe")
 TTS_MODEL = _get("JARVISEO_TTS_MODEL", "gpt-4o-mini-tts")
+# 기억 검색용 문장 임베딩. 차원(1536)이 observation.embedding 의 VECTOR(1536) 과 같아야 한다.
+EMBED_MODEL = _get("JARVISEO_EMBED_MODEL", "text-embedding-3-small")
 
 # --- 식품 성분 판정 ------------------------------------------
 # 식품안전나라 OpenAPI. C005(바코드 → 품목제조보고번호) → C002/C006(원재료명).

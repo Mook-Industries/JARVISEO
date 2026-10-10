@@ -8,6 +8,7 @@
 | `models.py` | 테이블 정의 — ERD 를 코드로 옮긴 것 |
 | `store.py` | Postgres 접근 (대화 기록 · 지연시간 · 판정 결과) |
 | `vector.py` | pgvector 검색 — `observation` 테이블 |
+| `embed.py` | 문장 임베딩 (OpenAI `text-embedding-3-small`) + 키 없이 쓰는 `FakeEmbedder` |
 
 ## 알아둘 것
 
