@@ -15,6 +15,7 @@ Git 에는 올라가지 않는다(.gitignore).
     python scripts/wakeword/record.py wake 30 --split train --speaker s02 --distance 2m
     python scripts/wakeword/record.py wake 100 --tts                   # TTS 로 합성 (키 필요)
     python scripts/wakeword/record.py speech 1000 --split train --tts  # 일상 문장 합성
+    python scripts/wakeword/record.py wake 600 --split train --tts --variant pause  # "자, 비서"
 
 --tts 는 마이크 대신 OpenAI TTS 로 목소리 11종 × 속도 3종 × 문장부호(억양) 3종 × 말투 9종을
 바꿔 가며 합성한다. 실제 녹음과 섞지 않도록 metadata.csv 의 source 가 tts 로 남는다.
@@ -108,6 +109,13 @@ TEXTS = {
         "지금부터 요리를 시작해 보겠습니다",
         "그 사람 다시는 만나지 마",
     ],
+}
+# 끊거나 늘여 부르는 "자비서". 평가용 실제 녹음 60개 중 20개가 이렇게 불렀다(끊음 13, 늘임 7).
+# 한 번에 이어 말한 "자비서"로만 학습한 모델은 이걸 대부분 놓쳤다(docs/experiments.md 학습 기록).
+# TTS 는 문장부호를 넣으면 0.4~0.75초 쉬고, 모음을 겹쳐 쓰면 늘인다(실제 끊음은 0.33초쯤 쉰다).
+VARIANTS = {
+    "pause": ["자, 비서", "자... 비서", "자비, 서", "자, 비, 서"],
+    "stretch": ["자~비~서", "자아비서", "자비이서", "자아비이서어"],
 }
 # gpt-4o-mini-tts 목소리. 속도는 TextToSpeech 의 SLOW 0.85 / NORMAL 1.0 / FAST 1.2 를 쓴다.
 VOICES = "alloy ash ballad coral echo fable nova onyx sage shimmer verse".split()
@@ -300,12 +308,15 @@ def main() -> None:
     parser.add_argument("--env", default="quiet", help="quiet / noisy / tv 등")
     parser.add_argument("--device", type=int, help="sounddevice 입력 장치 번호")
     parser.add_argument("--tts", action="store_true", help="마이크 대신 TTS 로 합성한다")
+    parser.add_argument("--variant", choices=VARIANTS, help="wake 를 끊어·늘여 부르기")
     args = parser.parse_args()
     if args.tts and args.label == "background":
         parser.error("background 는 실제 소리를 녹음해야 한다. --tts 와 같이 쓸 수 없다")
+    if args.variant and args.label != "wake":
+        parser.error("--variant 는 wake 에만 쓴다")
 
     folder = ROOT / args.split
-    texts = args.text or TEXTS.get(args.label, [])
+    texts = args.text or (VARIANTS[args.variant] if args.variant else TEXTS.get(args.label, []))
     try:
         if args.tts:
             synth_clips(args.label, args.count, texts, folder)
