@@ -39,3 +39,13 @@ datasets/wakeword/
   지우기 아까우면 `speech.csv` 에 `잘림` 으로 적는다. `evaluate.py` 가 평가에서 빼고 뺀 개수를 출력한다.
 - 팀원 녹음은 `train` 폴더를 `train_s0X.zip` 으로 받아 `scripts/wakeword/merge.py` 로 합치고,
   합친 뒤와 TTS 로 합성한 뒤에는 `scripts/wakeword/check.py <split> --fix` 로 한 번 거른다.
+
+## 호출어 모델 (`models/jarviseo.onnx`)
+
+"자비서"로 학습한 openWakeWord 분류기다. `config.WAKEWORD_MODEL` 의 기본값이라 없으면 호출어 감지기가 시작하지 않는다.
+
+- 공용 Drive 의 `jarviseo/jarviseo-r6.onnx`(학습 6회차, 205,069 바이트)를 받아 `models/jarviseo.onnx` 로 저장한다.
+- 받은 파일이 맞는지는 SHA-256 앞자리로 확인한다: `4686db10ae2febb8`
+  (`python -c "import hashlib;print(hashlib.sha256(open('data/models/jarviseo.onnx','rb').read()).hexdigest()[:16])"`)
+- 학습 노트북은 `notebooks/wakeword_train.ipynb`, 평가 결과와 한계는 `docs/experiments.md` 학습 기록에 있다.
+- 다시 학습해서 바꾸면 이 절의 파일 이름과 SHA-256 을 같이 고친다.
