@@ -144,3 +144,9 @@ WAKE_WORD = _get("JARVISEO_WAKE_WORD", "자비서")
 # TTS 재생이 끝난 뒤 이만큼 더 마이크를 막는다.
 # 스피커 소리를 마이크가 다시 듣고 자기 응답에 반응하는 되먹임 루프를 막는 장치다.
 TTS_MIC_GATE_SEC = _get_float("JARVISEO_TTS_MIC_GATE_SEC", 0.3)
+# 호출어 모델. openWakeWord 기성 모델 이름이나 .onnx 경로. 기성 hey_jarvis 는 "자비서"를 못 잡아서
+# (docs/experiments.md baseline) 커스텀 모델이 나오기 전까지는 "Hey Jarvis" 로 개발한다.
+WAKEWORD_MODEL = _get("JARVISEO_WAKEWORD_MODEL", "hey_jarvis")
+# 호출어 점수(0~1)가 이 값을 넘으면 깨어난다. 재생 중에는 자기 목소리에 깨지 않게 더 높인다.
+WAKEWORD_THRESHOLD = _get_float("JARVISEO_WAKEWORD_THRESHOLD", 0.5)
+WAKEWORD_PLAYBACK_THRESHOLD = _get_float("JARVISEO_WAKEWORD_PLAYBACK_THRESHOLD", 0.8)
