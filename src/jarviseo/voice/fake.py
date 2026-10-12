@@ -38,7 +38,10 @@ class FakeSpeechToText:
         self.last_raw_text: str | None = None
 
     def listen(
-        self, on_speech_start: Callable[[float], None] | None = None, timeout: float = 5.0
+        self,
+        on_speech_start: Callable[[float], None] | None = None,
+        timeout: float = 5.0,
+        since: float | None = None,
     ) -> Utterance | None:
         self.last_raw_text = self.last_latency_ms = None
         if not self._texts:
