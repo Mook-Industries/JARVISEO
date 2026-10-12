@@ -144,9 +144,11 @@ WAKE_WORD = _get("JARVISEO_WAKE_WORD", "자비서")
 # TTS 재생이 끝난 뒤 이만큼 더 마이크를 막는다.
 # 스피커 소리를 마이크가 다시 듣고 자기 응답에 반응하는 되먹임 루프를 막는 장치다.
 TTS_MIC_GATE_SEC = _get_float("JARVISEO_TTS_MIC_GATE_SEC", 0.3)
-# 호출어 모델. openWakeWord 기성 모델 이름이나 .onnx 경로. 기성 hey_jarvis 는 "자비서"를 못 잡아서
-# (docs/experiments.md baseline) 커스텀 모델이 나오기 전까지는 "Hey Jarvis" 로 개발한다.
-WAKEWORD_MODEL = _get("JARVISEO_WAKEWORD_MODEL", "hey_jarvis")
-# 호출어 점수(0~1)가 이 값을 넘으면 깨어난다. 재생 중에는 자기 목소리에 깨지 않게 더 높인다.
-WAKEWORD_THRESHOLD = _get_float("JARVISEO_WAKEWORD_THRESHOLD", 0.5)
-WAKEWORD_PLAYBACK_THRESHOLD = _get_float("JARVISEO_WAKEWORD_PLAYBACK_THRESHOLD", 0.8)
+# 호출어 모델. .onnx 경로나 openWakeWord 기성 모델 이름(hey_jarvis 등).
+# 기본은 "자비서"로 학습한 커스텀 모델이다(6회차, data/README.md 에서 받는 법). Git 에는 없다.
+WAKEWORD_MODEL = _get("JARVISEO_WAKEWORD_MODEL") or str(MODELS_DIR / "jarviseo.onnx")
+# 호출어 점수(0~1)가 이 값을 넘으면 깨어난다. 0.97 은 평가셋에서 FRR 조용 3.8%·소음 16.7%,
+# 비슷한 발음 FAR 5% 였다(TV 30분 3회는 기준 미달, docs/experiments.md 학습 기록 6회차).
+# 재생 중에는 자기 목소리에 깨지 않게 더 높인다. 0.99 는 아직 재생 소리로 재지 않은 값이다.
+WAKEWORD_THRESHOLD = _get_float("JARVISEO_WAKEWORD_THRESHOLD", 0.97)
+WAKEWORD_PLAYBACK_THRESHOLD = _get_float("JARVISEO_WAKEWORD_PLAYBACK_THRESHOLD", 0.99)
