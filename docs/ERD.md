@@ -7,7 +7,8 @@ DBMS는 **PostgreSQL 16 + pgvector**. 원본은 팀 ERDCloud 다이어그램 **J
 `src/jarviseo/memory/models.py` 가 이 ERD 를 코드로 옮긴 것이다(2026-10-02 동기화).
 일부러 다르게 둔 곳은 맨 아래 "코드 반영 상태" 에 적었다.
 
-테이블 17개, 여섯 덩어리다.
+테이블 15개, 여섯 덩어리다.
+③ 소지품 재인식은 10/7 팀 결정으로 빼서 `belonging` · `belonging_image` 와 `observation.belonging_id` 를 지웠다.
 
 | 덩어리 | 테이블 | 담당 |
 |---|---|---|
@@ -15,7 +16,7 @@ DBMS는 **PostgreSQL 16 + pgvector**. 원본은 팀 ERDCloud 다이어그램 **J
 | 대화 | `chat_session` `session_turn` `turn_voice` | 공통 · 음성은 문태현 |
 | ① 가리킴 | `turn_inference` `turn_candidate` | 최홍묵 |
 | ② 성분 | `turn_ingredient` `product` `allergen` `ingredient_synonym` | 권용현 |
-| ③④ 소지품·기억 | `belonging` `belonging_image` `observation` | 문태현 |
+| ④ 기억 | `observation` | 문태현 |
 | 평가 | `eval_run` `eval_sample` | 최홍묵 |
 
 ---
@@ -35,11 +36,8 @@ erDiagram
     session_turn ||--o{ turn_candidate : "후보 목록"
     session_turn ||--o| turn_ingredient : "성분 판정"
     product ||--o{ turn_ingredient : "조회된다"
-    users ||--o{ belonging : "소지품을 등록한다"
-    belonging ||--o{ belonging_image : "등록 사진"
     users ||--o{ observation : "관찰 기록"
     session_turn ||--o{ observation : "그 턴에서 본 것"
-    belonging |o--o{ observation : "알아본 소지품"
     eval_run ||--o{ eval_sample : "샘플을 가진다"
     session_turn |o--o{ eval_sample : "실패 케이스로 참조"
 ```
@@ -236,33 +234,10 @@ HACCP 공공데이터 / OCR 결과 캐시.
 
 ---
 
-## ③④ 소지품·기억 (담당 문태현)
+## ④ 기억 (담당 문태현)
 
 임베딩은 그 기록과 같은 행의 `VECTOR(n)` 열(pgvector)에 둔다.
 벡터 DB 를 따로 두면 두 곳이 어긋났을 때 어느 쪽이 맞는지 알 수 없다.
-
-### 내 소지품 · `belonging`
-
-| 논리명 | 물리명 | 타입 | 설명 |
-|---|---|---|---|
-| 소지품 ID | `belonging_id` | BIGSERIAL **PK** | |
-| 사용자 ID | `user_id` | BIGINT **FK → users** | |
-| 이름 | `name` | VARCHAR(100) NULL | |
-| 특징 설명 | `description` | TEXT NULL | |
-| 등록·수정일시 | `created_at` `updated_at` | TIMESTAMPTZ NULL | |
-
-### 소지품 등록 사진 · `belonging_image`
-
-같은 물건을 여러 각도에서 여러 장 등록해야 재인식이 된다.
-
-| 논리명 | 물리명 | 타입 | 설명 |
-|---|---|---|---|
-| 사진 ID | `belonging_image_id` | BIGSERIAL **PK** | |
-| 소지품 ID | `belonging_id` | BIGINT **FK → belonging** | |
-| 이미지 경로 | `image_path` | VARCHAR(500) NULL | |
-| 이미지 임베딩 | `embedding` | VECTOR(512) NULL | CLIP |
-| 임베딩 모델 | `embed_model` | VARCHAR(50) NULL | |
-| 등록일시 | `created_at` | TIMESTAMPTZ NULL | |
 
 ### 관찰 기록 · `observation`
 
@@ -273,7 +248,6 @@ HACCP 공공데이터 / OCR 결과 캐시.
 | 관찰 ID | `observation_id` | BIGSERIAL **PK** | |
 | 사용자 ID | `user_id` | BIGINT **FK → users** | |
 | 턴 ID | `turn_id` | BIGINT **FK → session_turn** | |
-| 소지품 ID | `belonging_id` | BIGINT NULL **FK → belonging** | CLIP 임베딩으로 내 물건을 알아봤을 때만 연결. 못 알아보면 NULL |
 | 장면 설명 | `description` | TEXT NULL | |
 | 장소 | `place` | VARCHAR(100) NULL | |
 | 텍스트 임베딩 | `embedding` | VECTOR(1536) NULL | text-embedding-3-small |
@@ -310,8 +284,8 @@ HACCP 공공데이터 / OCR 결과 캐시.
 
 ## 코드 반영 상태
 
-`models.py` 는 위 17개 테이블을 옮긴 상태다(2026-10-02). `pytest tests/test_db_schema.py` 가
-테이블 목록이 정확히 이 17개인지 확인한다. `init_schema()` 는 Postgres 면 pgvector 확장부터 켠다.
+`models.py` 는 위 15개 테이블을 옮긴 상태다(2026-10-02, ③ 삭제는 10/11). `pytest tests/test_db_schema.py` 가
+테이블 목록이 정확히 이 15개인지 확인한다. `init_schema()` 는 Postgres 면 pgvector 확장부터 켠다.
 
 **코드에서 일부러 다르게 둔 곳** — ERDCloud 내보내기 그대로 옮기면 깨지는 자리다.
 
@@ -350,5 +324,4 @@ HACCP 공공데이터 / OCR 결과 캐시.
 - `user_allergen.user_id` → `users`, `user_allergen.allergen_id2` → `allergen`
 - `ingredient_synonym.allergen_id` → `allergen`
 - `turn_ingredient.barcode` → `product`
-- `belonging.user_id` → `users`, `belonging_image.belonging_id` → `belonging`
-- `observation.user_id` → `users`, `observation.turn_id` → `session_turn`, `observation.belonging_id` → `belonging`
+- `observation.user_id` → `users`, `observation.turn_id` → `session_turn`

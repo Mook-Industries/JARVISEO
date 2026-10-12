@@ -28,7 +28,7 @@ flowchart TD
     S --> R{의도 분류<br/>graph/pipeline.py}
     R -->|POINTING| D[물체·손끝 검출<br/>pointing/detector.py]
     R -->|INGREDIENT| O[성분표 검출·OCR·판정<br/>nutrition/]
-    R -->|BELONGING / RECALL| M[기억 검색<br/>memory/vector.py]
+    R -->|RECALL| M[기억 검색<br/>memory/vector.py]
     R -->|GENERAL| G
     D --> X[대상 결정<br/>pointing/resolver.py]
     X -->|margin 작음 & 2회 미만| Q[되묻기<br/>'왼쪽 컵이요, 오른쪽 컵이요?']
@@ -64,17 +64,18 @@ flowchart TD
 
 ### ④ 의도 분류 — `graph/pipeline.py` (최홍묵)
 
-"무슨 종류의 질문인가"를 5가지 중 하나로 정한다. `types.py`의 `Intent`다.
+"무슨 종류의 질문인가"를 4가지 중 하나로 정한다. `types.py`의 `Intent`다.
 
 | Intent | 예시 발화 | 다음에 갈 곳 |
 |---|---|---|
 | `POINTING` | "저거 뭐야?" | ① 지시 대상 특정 |
 | `INGREDIENT` | "이거 뭐 들어갔어?" | ② 식품 성분 판정 |
-| `BELONGING` | "내 가방 어디 있어?" | ③ 소지품 재인식 |
 | `RECALL` | "아까 본 그거 뭐였지?" | ④ 개인 기억 검색 |
 | `GENERAL` | 그 외 전부 | 특화 없이 바로 VLM |
 
 `GENERAL`이 **안전망**이다. 특화 모듈이 "내 일 아님"이라고 판단하면 여기로 떨어지고, 범용 VLM이 그냥 답한다. 그래서 질문 주제에 제한이 없다.
+
+③ 소지품 재인식(`BELONGING`)은 10/7 팀 결정으로 뺐다. "내 가방 어디 있어?" 같은 질문은 `RECALL`이 아니라 `GENERAL`로 보내, 지금 보이는 사진으로 VLM이 답한다.
 
 ### ⑤-A 지시 대상 특정 — `pointing/` (최홍묵)
 
@@ -110,10 +111,10 @@ flowchart TD
 여기서 지키는 원칙은 **애매하면 SAFE라고 하지 않는 것**이다. 땅콩을 놓치는 피해가 경고를 한 번 더 하는 피해보다 훨씬 크기 때문이다.
 그리고 판정의 정확도를 정하는 것은 모델이 아니라 **동의어 사전**이다. 성분표에는 "우유"가 아니라 "탈지분유", "카제인", "유청"이라고 적혀 있다. 사전에 이 짝이 없으면 아무것도 못 잡는다.
 
-### ⑤-C 소지품 · 기억 — `memory/vector.py` (문태현)
+### ⑤-C 개인 기억 — `memory/vector.py` (문태현)
 
 "아까 본 그거"처럼 정확한 이름을 모르는 질문에 답하려고, 과거 기록을 **뜻이 비슷한 것끼리** 찾는다. pgvector(Postgres에 붙이는 벡터 검색 확장. 문장이나 이미지를 숫자 목록으로 바꿔 저장해 두고 비슷한 것을 찾아준다)를 쓴다.
-두 테이블을 검색한다. `belonging_image`에는 등록한 내 물건 사진을, `observation`에는 과거에 본 장면 설명을 넣는다.
+`observation` 테이블 하나를 검색한다. 과거에 본 장면 설명과 그 설명의 텍스트 임베딩을 같은 행에 넣는다.
 
 ### ⑥ 답 문장 만들기 — `vlm/client.py` (공용)
 
@@ -147,8 +148,8 @@ src/jarviseo/
 ├── capture/          카메라 입력·선명도                  공용   ✅ 구현됨
 ├── pointing/         ① 지시 대상 특정                    최홍묵
 ├── nutrition/        ② 식품 성분 판정                    권용현
-├── memory/           DB + ③④ 소지품·기억
-│   ├── models.py       테이블 17개 정의                  ✅ 구현됨
+├── memory/           DB + ④ 개인 기억
+│   ├── models.py       테이블 15개 정의                  ✅ 구현됨
 │   ├── store.py        DB 읽고 쓰기                      ✅ 구현됨
 │   └── vector.py       pgvector 벡터 검색                문태현
 ├── voice/            웨이크워드·STT·TTS                  문태현
@@ -192,7 +193,7 @@ tests/                자동 테스트 (계약 6개 + DB 7개)
 | | `TargetResolution` | 최종 결과: 후보 순위, 고른 것, margin, 되물을지 |
 | ② | `OCRLine`, `IngredientPanel` | 읽은 글자 한 줄 / 성분표 전체 |
 | | `AllergenVerdict`, `AllergenJudgement` | SAFE/WARN/UNCERTAIN 판정과 근거 |
-| ③④ | `MemoryHit` | 검색해 온 과거 기록 1개 |
+| ④ | `MemoryHit` | 검색해 온 과거 기록 1개 |
 | 출력 | `AssistantResponse` | 최종 답 + 단계별 걸린 시간 |
 
 공통 약속 네 가지도 여기서 정한다.
@@ -262,7 +263,7 @@ python scripts/spike/spike_01_capture.py
 
 ---
 
-## 5. DB — 테이블 17개
+## 5. DB — 테이블 15개
 
 원본은 ERDCloud `JARVISEO`이고, 사람이 읽는 사본은 `docs/ERD.md`다. **셋(ERDCloud·ERD.md·코드)이 어긋나면 ERDCloud가 맞다.**
 
@@ -276,7 +277,7 @@ python scripts/spike/spike_01_capture.py
 | 대화 | `chat_session`, `session_turn`, `turn_voice` | 공용 / 음성은 문태현 |
 | ① 가리킴 | `turn_inference`, `turn_candidate` | 최홍묵 |
 | ② 성분 | `product`, `turn_ingredient` | 권용현 |
-| ③④ 소지품·기억 | `belonging`, `belonging_image`, `observation` | 문태현 |
+| ④ 기억 | `observation` | 문태현 |
 | 평가 | `eval_run`, `eval_sample` | 최홍묵 |
 
 ### 가장 중요한 건 `session_turn`
@@ -380,7 +381,7 @@ ruff check . && ruff format --check . && pytest -q
 4. ~~`docs/README.md`의 "코드가 먼저" 규칙~~ → 정리됨.
 5. ~~**`store.log_turn()`의 `resolved_by` 판정**~~ → **고침**(10/2). 되물은 턴은 `NULL`, 되묻기에 대한 대답 턴(`CLARIFY_REPLY`)은 `USER`, 나머지는 `MODEL`로 적는다.
 6. ~~**되묻기 기준값이 두 군데 있다.**~~ → **고침**(10/2). `resolve_target()`의 기본값이 `config.CLARIFY_MARGIN_THRESHOLD`를 그대로 쓴다.
-7. ~~**ERD에 새로 생긴 테이블이 코드에 없다.**~~ → **반영함**(10/2). 벡터 검색은 pgvector로 확정하고, `turn_voice` · `belonging` · `belonging_image` · `observation`을 `models.py`와 `docs/ERD.md`에 넣었다. 실행 장비·입력원 열은 여전히 없어서 당분간 `eval_run.metrics`에 같이 적는다.
+7. ~~**ERD에 새로 생긴 테이블이 코드에 없다.**~~ → **반영함**(10/2). 벡터 검색은 pgvector로 확정하고, `turn_voice` · `belonging` · `belonging_image` · `observation`을 `models.py`와 `docs/ERD.md`에 넣었다. 실행 장비·입력원 열은 여전히 없어서 당분간 `eval_run.metrics`에 같이 적는다. `belonging` · `belonging_image`는 10/7 팀 결정으로 ③ 소지품 재인식을 빼면서 다시 지웠다.
 
 ---
 

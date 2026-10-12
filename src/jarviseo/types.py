@@ -153,7 +153,6 @@ class Intent(StrEnum):
 
     POINTING = "pointing"  # "저거 뭐야?" — 지시 대상 특정 필요
     INGREDIENT = "ingredient"  # "이거 뭐 들어갔어?" — 성분표 판정 필요
-    BELONGING = "belonging"  # "내 가방 어디 있어?" — 소지품 재인식
     RECALL = "recall"  # "아까 본 그거" — 개인 기억 검색
     GENERAL = "general"  # 그 외 전부 — 기본 VLM
 
@@ -332,7 +331,7 @@ class AllergenJudgement:
 
 
 # --------------------------------------------------------------------------
-# ③④ 소지품 재인식 · 개인 기억  (담당: 문태현)
+# ④ 개인 기억  (담당: 문태현)
 # --------------------------------------------------------------------------
 
 
@@ -341,7 +340,7 @@ class MemoryHit:
     """벡터 검색으로 찾아낸 과거 기록 하나."""
 
     memory_id: str
-    kind: str  # "belonging" / "observation" / "profile"
+    kind: str  # "observation" / "profile"
     text: str  # 사람이 읽을 수 있는 설명
     score: float  # 유사도 0.0 ~ 1.0
     observed_at: float | None = None
