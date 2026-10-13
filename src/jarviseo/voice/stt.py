@@ -79,9 +79,10 @@ class SpeechToText:
         """마이크에서 발화 하나를 받아쓰고, 호출어·필러를 뺀 질문을 돌려준다.
 
         말 시작을 잡는 순간 ``on_speech_start(started_at)`` 을 부른다.
-        since 는 호출어를 잡은 시각(``on_detect`` 의 t)이다. 주면 그 뒤부터 읽어서, 호출어에
-        이어 한 번에 말한 질문이 잘리지 않는다. 공유 마이크(mic)가 있을 때만 쓰고,
-        없으면 지금부터 듣는다.
+        since 는 호출어를 잡은 시각(``on_detect`` 의 t)이다. 주면 그보다
+        ``config.WAKE_LOOKBACK_SEC``(0.4초) 앞부터 읽는다. 감지가 호출어 끝보다 늦게 돼서,
+        호출어에 바로 이어 말하면 감지 시각에는 이미 질문이 시작돼 있다.
+        공유 마이크(mic)가 있을 때만 쓰고, 없으면 지금부터 듣는다.
         timeout 초 안에 말이 시작되지 않거나, 받아쓰기가 끝내 실패하거나,
         정리하고 나니 비었거나 너무 짧으면 None.
         """
@@ -92,7 +93,8 @@ class SpeechToText:
         self.last_raw_text = self.last_latency_ms = None
         # TTS 가 재생 중이거나 막 끝났으면 그동안 들어온 소리는 무음으로 바뀐다(gate.py).
         if self.mic is not None:
-            blocks = self.mic.blocks(since=since)
+            start = None if since is None else since - config.WAKE_LOOKBACK_SEC
+            blocks = self.mic.blocks(since=start)
             speech = record_speech(MIC_GATE.mute(blocks), on_speech_start, timeout=timeout)
         else:
             # 받아쓰는 동안 마이크를 붙잡고 있지 않게, 녹음이 끝나면 바로 닫는다.

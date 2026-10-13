@@ -151,11 +151,31 @@ def test_listen_은_공유_마이크에서_since_뒤에_말한_것만_받아쓴�
         client = FakeClient()
         listener = stt.SpeechToText(mic=mic, client=client)
         before = listener.listen(since=0.5, timeout=2.0)  # 말 시작(1초) 앞을 잡았다
-        after = listener.listen(since=1.2 + len(voice) / SAMPLE_RATE, timeout=2.0)  # 말이 끝난 뒤
+        # 말이 끝나고 0.6초 뒤 (앞으로 0.4초 당겨 읽어도 말이 끝난 뒤다)
+        after = listener.listen(since=1.6 + len(voice) / SAMPLE_RATE, timeout=2.0)
 
     assert before.text == "저거 뭐야?"
     assert before.started_at == pytest.approx(1.0, abs=0.06)
     assert after is None and len(client.requests) == 1
+
+
+def test_감지보다_먼저_시작한_질문도_앞부분부터_받아쓴다(monkeypatch):
+    """감지는 호출어가 끝나고 조금 뒤에 된다. 그새 시작한 질문 앞부분을 놓치면 안 된다."""
+    with wave.open(str(DATA / "jarviseo_question.wav"), "rb") as f:
+        voice = np.frombuffer(f.readframes(f.getnframes()), dtype="<i2")
+    silence = np.zeros(SAMPLE_RATE, np.int16)
+    audio = np.concatenate([silence, voice, silence])
+    blocks = [
+        (audio[i : i + BLOCK], i / SAMPLE_RATE) for i in range(0, len(audio) - BLOCK + 1, BLOCK)
+    ]
+    monkeypatch.setattr(stt, "MIC_GATE", MicGate())
+    spoken_at = 1.0 + np.flatnonzero(np.abs(voice) > 500)[0] / SAMPLE_RATE  # 실제 소리가 나는 곳
+
+    with MicStream(source=blocks, history_sec=10.0) as mic:
+        listener = stt.SpeechToText(mic=mic, client=FakeClient())
+        utterance = listener.listen(since=spoken_at + 0.3, timeout=2.0)  # 말이 0.3초 지나서 감지
+
+    assert utterance.started_at <= spoken_at
 
 
 def test_커스텀_모델_파일이_없으면_받는_법을_알려_준다(tmp_path):

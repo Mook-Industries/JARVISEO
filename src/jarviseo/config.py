@@ -158,3 +158,7 @@ WAKEWORD_MODEL = _get("JARVISEO_WAKEWORD_MODEL") or str(MODELS_DIR / "jarviseo.o
 # 재생 중에는 자기 목소리에 깨지 않게 더 높인다. 0.99 는 아직 재생 소리로 재지 않은 값이다.
 WAKEWORD_THRESHOLD = _get_float("JARVISEO_WAKEWORD_THRESHOLD", 0.97)
 WAKEWORD_PLAYBACK_THRESHOLD = _get_float("JARVISEO_WAKEWORD_PLAYBACK_THRESHOLD", 0.99)
+# 호출어 감지는 "자비서"가 끝나고 조금 뒤에 된다(실제 녹음 37개에서 중앙 0.12초, 최대 0.33초).
+# listen(since=감지 시각)은 이만큼 앞에서부터 읽어, 호출어에 바로 이어 말한 질문 앞부분이
+# 잘리지 않게 한다. 호출어 끝이 같이 받아써져도 transcript.clean 이 지운다.
+WAKE_LOOKBACK_SEC = _get_float("JARVISEO_WAKE_LOOKBACK_SEC", 0.4)

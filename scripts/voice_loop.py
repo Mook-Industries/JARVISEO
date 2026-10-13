@@ -16,7 +16,8 @@ OpenAI 키가 필요하다.
 
 --long 은 질문 뒤에 15초쯤 걸리는 문장을 붙여 읽는다. 끼어들 틈을 만들려는 것이다.
 --db 는 턴마다 session_turn·turn_voice 에 남긴다. 주소를 안 주면 data/voice_loop.db(SQLite).
---reopen wake 는 끊은 뒤 게이트를 끊은 시각이 아니라 호출어 감지 시각까지 거슬러 연다(비교용).
+--reopen wake 는 끊은 뒤 게이트를 끊은 시각이 아니라 질문을 읽기 시작하는 곳(호출어 감지
+0.4초 전)까지 거슬러 연다. 질문 앞부분이 덜 잘리는 대신 재생 소리가 같이 받아써질 수 있다(비교용).
 
 찍는 값 (ms)
     말끝 대기    말이 끝나고 VAD 가 끝으로 판정해 녹음을 멈추기까지 (무음 700ms 가 대부분)
@@ -118,7 +119,7 @@ def wake_loop(
                 stops.append((tts.speaker.stopped_at - wake.t) * 1000)
                 print(f"\n끼어들기 (점수 {wake.score:.3f}, 감지 → 멈춤 {stops[-1]:.0f}ms)")
                 if reopen_at_wake:
-                    MIC_GATE.reopen(wake.t)
+                    MIC_GATE.reopen(wake.t - config.WAKE_LOOKBACK_SEC)
             else:
                 print(f"\n호출어 감지 (점수 {wake.score:.3f})")
             utterance = stt.listen(timeout=2.0, since=wake.t)
@@ -188,7 +189,7 @@ def main() -> None:
         "--reopen",
         choices=("stop", "wake"),
         default="stop",
-        help="끼어든 뒤 게이트를 끊은 시각(stop)에 열지, 호출어 감지 시각(wake)까지 거슬러 열지",
+        help="끼어든 뒤 게이트를 끊은 시각(stop)에 열지, 질문 읽는 곳(wake)까지 거슬러 열지",
     )
     args = parser.parse_args()
 
