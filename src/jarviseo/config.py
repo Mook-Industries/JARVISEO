@@ -155,9 +155,10 @@ TTS_MIC_GATE_SEC = _get_float("JARVISEO_TTS_MIC_GATE_SEC", 0.3)
 WAKEWORD_MODEL = _get("JARVISEO_WAKEWORD_MODEL") or str(MODELS_DIR / "jarviseo.onnx")
 # 호출어 점수(0~1)가 이 값을 넘으면 깨어난다. 0.97 은 평가셋에서 FRR 조용 3.8%·소음 16.7%,
 # 비슷한 발음 FAR 5% 였다(TV 30분 3회는 기준 미달, docs/experiments.md 학습 기록 6회차).
-# 재생 중에는 자기 목소리에 깨지 않게 더 높인다. 0.99 는 아직 재생 소리로 재지 않은 값이다.
+# 재생 중 임계값은 따로 둔다. 자기 목소리(TTS 대답)는 실제 재생 6개·약 2분 반에서 최고 0.001 이라
+# 평소와 같은 0.97 로 둔다. 0.99 로는 재생 중 붙여 말한 "자비서"를 자주 놓쳤다(잡힌 점수 0.974~).
 WAKEWORD_THRESHOLD = _get_float("JARVISEO_WAKEWORD_THRESHOLD", 0.97)
-WAKEWORD_PLAYBACK_THRESHOLD = _get_float("JARVISEO_WAKEWORD_PLAYBACK_THRESHOLD", 0.99)
+WAKEWORD_PLAYBACK_THRESHOLD = _get_float("JARVISEO_WAKEWORD_PLAYBACK_THRESHOLD", 0.97)
 # 호출어 감지는 "자비서"가 끝나고 조금 뒤에 된다(실제 녹음 37개에서 중앙 0.12초, 최대 0.33초).
 # listen(since=감지 시각)은 이만큼 앞에서부터 읽어, 호출어에 바로 이어 말한 질문 앞부분이
 # 잘리지 않게 한다. 호출어("자비서" 길이 중앙 0.57초)가 통째로 들어가야 받아쓴 뒤
