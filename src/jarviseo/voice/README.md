@@ -65,7 +65,8 @@ if not interrupted:
 `listen(since=t)` 는 감지 시각보다 `JARVISEO_WAKE_LOOKBACK_SEC`(1초) 앞부터 읽는다. 감지는 호출어가
 끝나고 0.1~0.3초 뒤에 돼서, 감지 시각부터 읽으면 바로 이어 말한 질문 앞부분이 빠진다.
 호출어도 같이 받아써지고 `clean()` 이 호출어와 그 앞을 지운다. "자비서." 하고 쉬었다가 질문하면
-호출어만 받아써지는데, 그때는 이어서 한 번 더 듣는다. 말 시작 시각은 감지 0.35초 전보다 앞으로 두지 않는다.
+녹음이 호출어에서 끝나는데(감지 0.4초 안), 그때는 받아쓰지 않고 이어서 한 번 더 듣는다.
+말 시작 시각은 감지 0.35초 전보다 앞으로 두지 않는다. 측정 스크립트는 `scripts/wakeword/lag.py`·`lookback.py`.
 모델·임계값은 `.env` 의 `JARVISEO_WAKEWORD_MODEL`(기본 `data/models/jarviseo.onnx`), `JARVISEO_WAKEWORD_THRESHOLD`(0.97),
 `JARVISEO_WAKEWORD_PLAYBACK_THRESHOLD`(0.97)로 바꾼다. 기본 모델은 "자비서"로 학습한 커스텀 모델이고
 Git 에 없어서 따로 받아야 한다(`data/README.md`). 평가 결과와 한계는 `docs/experiments.md` 학습 기록 6회차에 있다.
