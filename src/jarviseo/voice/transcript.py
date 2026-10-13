@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["MIN_LETTERS", "clean", "is_question"]
+__all__ = ["MIN_LETTERS", "clean", "is_question", "is_wake_only"]
 
 # 호출어. 힌트를 줘도 "자비스"처럼 받아써질 수 있어서 비슷한 표기도 같이 잡는다.
 # "자비서야" 같은 부르는 말은 호출어로 보고, "자비스럽게"처럼 뒤에 말이 이어지면 아니다.
@@ -45,3 +45,8 @@ def clean(text: str) -> str:
 def is_question(text: str) -> bool:
     """정리한 글자가 질문으로 쓸 만한지. 비었거나 너무 짧으면 False."""
     return len(_LETTER.findall(text)) >= MIN_LETTERS
+
+
+def is_wake_only(text: str | None) -> bool:
+    """호출어만 받아써졌는지("자비서."). 부르고 쉬었다가 질문할 때 이렇게 끊긴다."""
+    return bool(text) and _WAKE.search(text) is not None and not is_question(clean(text))
