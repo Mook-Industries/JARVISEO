@@ -103,7 +103,7 @@ def test_조각이_하나도_없으면_게이트를_건드리지_않는다(speak
     assert gate.is_open(time.monotonic())
 
 
-def test_재생_중_stop_하면_남은_소리를_버리고_멈춘다(speaker_log):
+def test_재생_중_stop_하면_남은_소리를_버리고_게이트를_유예_없이_연다(speaker_log):
     gate = MicGate(grace_sec=0.3)
     gate.on_playback(speaker_log.append)
     speaker = Speaker(gate=gate)
@@ -118,6 +118,7 @@ def test_재생_중_stop_하면_남은_소리를_버리고_멈춘다(speaker_log
 
     assert speaker_log == [True, b"\x01\x00", "abort", "stop", False]
     assert speaker.interrupted
+    assert gate.is_open(speaker.stopped_at)  # 끝까지 재생했다면 0.3초 더 막혀 있다
 
 
 def test_큰_조각은_20ms_씩_나눠_써서_그_사이에도_멈춘다(monkeypatch):
@@ -173,6 +174,19 @@ def test_재생_전에_부른_stop_은_다음_재생에_영향이_없다(speaker
 
     assert speaker_log == [b"\x01\x00", "stop"]
     assert not speaker.interrupted
+
+
+def test_reopen_은_닫힌_구간을_줄이기만_한다():
+    gate = MicGate(grace_sec=0.3)
+    with gate.playing():
+        start = time.monotonic()
+    end = time.monotonic()
+
+    gate.reopen(end + 1.0)  # 늘리지 않는다
+    assert gate.is_open(end + 0.5)
+
+    gate.reopen(start)  # 지난 시각까지 거슬러 연다
+    assert gate.is_open(start)
 
 
 def test_STT_와_TTS_는_같은_게이트를_쓴다():

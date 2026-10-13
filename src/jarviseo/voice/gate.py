@@ -3,6 +3,7 @@
 스피커 소리를 마이크가 다시 들으면 자기 목소리를 질문으로 받아쓴다(되먹임 루프).
 그래서 재생이 시작되면 STT 쪽 마이크를 닫고, 재생이 끝나고 ``config.TTS_MIC_GATE_SEC``
 (0.3초) 뒤에 다시 연다. 0.3초는 이미 나간 소리와 방 울림이 잦아들 시간이다.
+끼어들기로 재생을 끊었을 때는 유예 없이 끊은 시각에 연다(``reopen``).
 
 닫혀 있던 동안 들어온 블록은 버리지 않고 무음으로 바꿔 넘긴다. 버리면 VAD 가 그 시간을
 세지 못해서, 재생이 길면 ``listen()`` 의 timeout 이 재생 시간만큼 늘어난다.
@@ -57,6 +58,15 @@ class MicGate:
             self._open_at = time.monotonic() + self.grace_sec
             for hook in self._hooks:
                 hook(False)
+
+    def reopen(self, at: float) -> None:
+        """닫힌 구간을 at 시각(monotonic)에 끝낸다. 유예(grace_sec)를 기다리지 않는다.
+
+        끼어들기로 재생을 끊었을 때 쓴다. 사용자가 호출어에 이어 말한 질문이 유예에 막혀
+        앞부분이 잘리지 않게 한다. ``mute()`` 는 블록을 읽을 때 판정하므로, at 이 지난 시각이면
+        ``MicStream`` 이 들고 있던 그 뒤 블록도 다시 들린다. 구간을 늘리지는 않는다.
+        """
+        self._open_at = min(self._open_at, at)
 
     def is_open(self, t: float) -> bool:
         """t 시각(monotonic)에 마이크에 들어온 소리를 STT 에 넘겨도 되면 True."""

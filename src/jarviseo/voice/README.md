@@ -9,7 +9,8 @@
 | `transcript.py` | 받아쓴 원문에서 호출어·필러를 빼고, 비었거나 너무 짧은 발화를 거른다 | 로컬 | — |
 | `tts.py` | 응답 음성 합성과 재생 (`speak()` 이 `synthesize()` 의 PCM 조각을 받는 대로 재생한다) | OpenAI TTS | — |
 | `tts_text.py` | TTS 에 넣기 전에 단위·쉼표·물결표를 읽는 말로 바꾸고 마크다운 기호를 뺀다. 문장 분할 함수도 있다 | 로컬 | — |
-| `speaker.py` | PCM 조각을 받는 순서대로 스피커로 낸다. 재생하는 동안 마이크 게이트를 닫는다 | 로컬 | — |
+| `speaker.py` | PCM 조각을 받는 순서대로 스피커로 낸다. 재생하는 동안 마이크 게이트를 닫는다. `stop()` 으로 바로 끊는다 | 로컬 | — |
+| `bargein.py` | 재생 중 끼어들기. 호출어가 들리면 읽던 답을 끊고 그 호출을 다음 턴으로 넘긴다 | 로컬 | — |
 | `gate.py` | 재생 중과 끝난 뒤 0.3초 동안 STT 쪽 마이크를 막고, 호출어 쪽에는 그 구간을 알려 임계값을 올리게 한다 | 로컬 | — |
 | `mic.py` | 마이크를 30ms 블록으로 읽고 블록마다 들어온 시각을 붙인다. `MicStream` 은 마이크 하나를 여럿이 같이 읽게 한다 | 로컬 | — |
 | `vad.py` | webrtcvad 로 발화 하나를 잘라 낸다 (무음 700ms 면 끝) | 로컬 | — |
@@ -42,6 +43,23 @@ with MicStream() as mic:
 ```
 
 `MicStream` 은 최근 3초를 들고 있어서, 감지하고 `listen()` 을 부르기까지 지나간 말도 놓치지 않는다.
+
+읽어 주는 중에 "자비서"라고 부르면 끊고 새 질문을 받으려면(끼어들기) 감지를 `BargeIn` 으로 받는다.
+
+```python
+barge = BargeIn(tts)
+detector = WakeWordDetector(mic, on_detect=barge.on_detect)  # 들리면 tts.stop()
+...
+wake = barge.wait(timeout=0.5)  # 다음 호출 (Wake(t, score))
+utterance = stt.listen(since=wake.t)
+tts.speak(answer)  # 도중에 호출어가 들리면 바로 돌아온다
+interrupted = tts.last_interrupted  # True 면 이 턴은 is_interrupted, 다음 턴은 BARGE_IN
+if not interrupted:
+    barge.clear()  # 질문하는 동안 다시 잡힌 호출어 같은 지난 감지는 버린다
+```
+
+끊기면 남은 소리는 버리고(20ms 안에 멈춤 신호를 본다), 덜 받은 합성 스트림은 닫고,
+게이트는 0.3초 유예 없이 바로 연다. 호출어에 바로 이어 말한 질문 앞부분이 막히지 않게 하려는 것이다.
 모델·임계값은 `.env` 의 `JARVISEO_WAKEWORD_MODEL`(기본 `data/models/jarviseo.onnx`), `JARVISEO_WAKEWORD_THRESHOLD`(0.97),
 `JARVISEO_WAKEWORD_PLAYBACK_THRESHOLD`(0.99)로 바꾼다. 기본 모델은 "자비서"로 학습한 커스텀 모델이고
 Git 에 없어서 따로 받아야 한다(`data/README.md`). 평가 결과와 한계는 `docs/experiments.md` 학습 기록 6회차에 있다.
@@ -55,5 +73,6 @@ Git 에 없어서 따로 받아야 한다(`data/README.md`). 평가 결과와 �
   재생하는 동안과 끝난 뒤 `TTS_MIC_GATE_SEC`(0.3초) 동안 들어온 소리를 무음으로 바꿔 STT 에 넘긴다.
   STT·TTS 가 같은 게이트를 자동으로 쓰므로 그래프에서 따로 연결할 것은 없다.
 - 호출어는 재생 중에도 막지 않는다(소프트 게이트, 2단). 같은 구간에 들어온 소리에는 임계값만
-  0.8 로 올려, 자기 목소리에는 안 깨고 재생 중에 "자비서"로 끼어들 수는 있게 한다.
-  재생 시작·끝을 알리는 `MIC_GATE.on_playback(hook)` 은 재생음과 비교하는 끼어들기 이슈에서 쓴다.
+  0.99 로 올려, 자기 목소리에는 안 깨고 재생 중에 "자비서"로 끼어들 수는 있게 한다.
+  재생 시작·끝을 알리는 `MIC_GATE.on_playback(hook)` 은 재생음과 비교해 자기 목소리를 거르는 단계가
+  필요해지면 쓴다.

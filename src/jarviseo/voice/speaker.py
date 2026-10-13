@@ -3,7 +3,8 @@
 TTS 가 받는 대로 내는 PCM 조각을 순서대로 재생한다. 합성이 다 끝날 때까지 기다리지 않고
 첫 조각이 오면 바로 소리를 낸다. 재생하는 동안은 마이크 게이트(``gate.py``)를 닫는다.
 
-재생 중에 ``stop()`` 을 부르면(끼어들기) 남은 소리를 버리고 바로 멈춘다.
+재생 중에 ``stop()`` 을 부르면(끼어들기) 남은 소리를 버리고 바로 멈춘다. 이때는 게이트도
+유예 없이 바로 연다. 사용자가 "자비서" 뒤에 이어 말한 질문 앞부분이 막히지 않게 하려는 것이다.
 """
 
 from __future__ import annotations
@@ -80,6 +81,8 @@ class Speaker:
                 if not self._write(out, chunk):
                     out.abort()
                     break
+        if self.interrupted:
+            self.gate.reopen(self.stopped_at)
 
     def _write(self, out: sd.RawOutputStream, chunk: bytes) -> bool:
         """chunk 를 나눠 쓴다. 도중에 멈춤 신호가 오면 멈춘 시각을 남기고 False."""
