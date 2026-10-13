@@ -18,8 +18,11 @@
         if not tts.last_interrupted:
             barge.clear()
 
-재생 중에는 감지기가 임계값을 0.99 로 올려 자기 목소리에는 깨지 않게 한다(wakeword.py).
-끊긴 뒤 게이트는 ``Speaker`` 가 유예 없이 바로 연다(gate.py ``reopen``).
+재생 중에는 감지기가 임계값을 따로 쓴다(``config.WAKEWORD_PLAYBACK_THRESHOLD``, wakeword.py).
+끊긴 뒤 게이트는 ``Speaker`` 가 유예 없이 끊은 시각에 열고, ``wait()`` 이 그 호출을 넘길 때
+질문을 읽기 시작하는 곳(감지 ``config.WAKE_LOOKBACK_SEC`` 전)까지 거슬러 연다. 재생 중에
+말한 "자비서"와 바로 이어 말한 질문 앞부분이 무음으로 바뀌지 않고 받아써진다(재생 소리가
+같이 들어가도 ``clean()`` 이 호출어 앞을 지운다).
 """
 
 from __future__ import annotations
@@ -27,6 +30,9 @@ from __future__ import annotations
 import logging
 import queue
 from typing import NamedTuple, Protocol
+
+from jarviseo import config
+from jarviseo.voice.gate import MIC_GATE, MicGate
 
 __all__ = ["BargeIn", "Wake"]
 
@@ -47,9 +53,13 @@ class _Stoppable(Protocol):
 class BargeIn:
     """호출어가 들리면 읽던 답을 끊고, 그 호출을 다음 턴으로 넘긴다."""
 
-    def __init__(self, tts: _Stoppable) -> None:
-        """tts 는 ``TextToSpeech`` 나 ``FakeTextToSpeech``. stop() 만 쓴다."""
+    def __init__(self, tts: _Stoppable, gate: MicGate | None = None) -> None:
+        """tts 는 ``TextToSpeech`` 나 ``FakeTextToSpeech``. stop() 만 쓴다.
+
+        gate 는 테스트에서만 넘긴다. 기본은 STT·TTS 와 같이 쓰는 ``MIC_GATE``.
+        """
         self.tts = tts
+        self.gate = gate or MIC_GATE
         self._wakes: queue.Queue[Wake] = queue.Queue()
 
     def on_detect(self, t: float, score: float) -> None:
@@ -60,6 +70,8 @@ class BargeIn:
     def wait(self, timeout: float | None = None) -> Wake | None:
         """다음 호출을 기다린다. 쌓인 게 여럿이면 가장 최근 것만 주고 나머지는 버린다.
 
+        재생 중에 들린 호출이면 게이트를 그 질문을 읽기 시작하는 곳까지 거슬러 연다.
+        그래서 speak() 이 돌아온 뒤에 부른다(재생 중에 열면 재생이 끝날 때 다시 닫힌다).
         timeout 초 안에 없으면 None. 윈도우에서는 timeout 없이 기다리면 Ctrl+C 가 안 먹는다.
         """
         try:
@@ -68,6 +80,8 @@ class BargeIn:
             return None
         while not self._wakes.empty():
             wake = self._wakes.get_nowait()
+        if not self.gate.is_open(wake.t):
+            self.gate.reopen(wake.t - config.WAKE_LOOKBACK_SEC)
         return wake
 
     def clear(self) -> None:

@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from jarviseo import config
 from jarviseo.voice import BargeIn, Wake, stt
 from jarviseo.voice.gate import MicGate
 from jarviseo.voice.mic import BLOCK, SAMPLE_RATE, MicStream
@@ -51,6 +52,33 @@ def test_쌓인_호출이_여럿이면_가장_최근_것만_준다():
 
     assert barge.wait(timeout=0.1).t == 4.0
     assert barge.wait(timeout=0.01) is None
+
+
+def test_재생_중에_들린_호출을_넘길_때_게이트를_질문_읽는_곳까지_거슬러_연다():
+    gate = MicGate(grace_sec=0.3)
+    barge = BargeIn(StopCounter(), gate=gate)
+    with gate.playing():
+        t = time.monotonic()
+        barge.on_detect(t, 0.995)
+    gate.reopen(t + 0.1)  # 스피커가 끊은 시각에 열었다
+    assert not gate.is_open(t)
+
+    wake = barge.wait(timeout=0.1)
+
+    assert gate.is_open(wake.t - config.WAKE_LOOKBACK_SEC)
+
+
+def test_재생_중이_아닐_때_들린_호출은_게이트를_건드리지_않는다():
+    gate = MicGate(grace_sec=0.3)
+    with gate.playing():
+        pass
+    closed_until = time.monotonic() + 0.2  # 끝난 뒤 유예 안
+    barge = BargeIn(StopCounter(), gate=gate)
+    barge.on_detect(time.monotonic() - 5.0, 0.98)
+
+    barge.wait(timeout=0.1)
+
+    assert not gate.is_open(closed_until - 0.1)
 
 
 def test_clear_는_쌓인_호출을_버린다():
@@ -115,7 +143,7 @@ def loop(monkeypatch):
     client = SpeechClient()
     tts = TextToSpeech(client=client)
     tts.speaker.gate = gate
-    barge = BargeIn(tts)
+    barge = BargeIn(tts, gate=gate)
     detector = WakeWordDetector(
         None,
         on_detect=barge.on_detect,
@@ -148,6 +176,8 @@ def test_재생_중_호출어가_들리면_끊고_이어_말한_질문을_자르
     assert wake.score == pytest.approx(0.995)
     stopped_at = loop.tts.speaker.stopped_at
     assert wake.t <= stopped_at + FRAME / SAMPLE_RATE
+    # 재생 중에 말한 호출어부터 받아쓰게, 질문을 읽기 시작하는 곳까지 거슬러 열렸다
+    assert loop.gate.is_open(wake.t - config.WAKE_LOOKBACK_SEC)
 
     # 호출어에 바로 이어(멈추고 0.05초 뒤) 질문을 시작했다.
     # 0.3초 유예가 남아 있었다면 앞부분이 무음이 된다
