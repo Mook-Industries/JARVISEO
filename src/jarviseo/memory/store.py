@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session as OrmSession
@@ -27,11 +28,16 @@ from jarviseo.memory.models import (
     SessionTurn,
     TurnCandidate,
     TurnInference,
+    TurnIngredient,
     TurnVoice,
     User,
     UserAllergen,
 )
 from jarviseo.types import AssistantResponse, IngredientSource, ProductInfo, Utterance
+
+if TYPE_CHECKING:
+    # 타입 표기에만 쓴다. 실제로 불러오면 DB 모듈이 OpenCV·OCR 까지 끌고 온다.
+    from jarviseo.nutrition.service import IngredientCheck
 
 __all__ = ["MemoryStore", "STAGE_COLUMNS"]
 
@@ -233,6 +239,37 @@ class MemoryStore:
             if ingredients is not None:
                 row.ingredients = ingredients
             row.status = status
+
+    def log_ingredient(self, turn_id: int, check: IngredientCheck) -> None:
+        """성분 판정 결과를 턴에 붙여 남긴다 (``turn_ingredient``, ``session_turn.ocr_text``).
+
+        ``log_turn`` 으로 턴을 만든 뒤 부른다. 재촬영하면 같은 턴의 기록을 새 결과로 덮어쓴다.
+
+        barcode 는 product 테이블에 있을 때만 적는다. 외래키라서, 바코드는 읽었는데
+        제품을 못 찾고 캐시도 안 한 경우에 적으면 Postgres 에서 저장이 실패한다.
+        retry_count 는 재촬영 횟수다(같은 사진 재처리는 세지 않는다).
+        """
+        j = check.judgement
+        read = check.barcode.barcode if check.barcode else None
+        with self.session() as db:
+            barcode = read.code if read and db.get(Product, read.code) is not None else None
+            row = db.get(TurnIngredient, turn_id) or TurnIngredient(turn_id=turn_id)
+            row.barcode = barcode
+            row.source = j.source.value if j.source else None
+            row.verdict = j.verdict.value
+            row.matched = list(j.matched_terms)
+            row.may_contain = list(j.may_contain_terms)
+            row.normalized = list(check.ingredients)
+            row.ocr_conf = round(check.ocr_conf, 3) if check.ocr_conf is not None else None
+            row.retry_count = check.retake_count
+            row.response_text = check.message
+            row.ocr_ms = check.timings_ms.get("ocr")
+            row.match_ms = check.timings_ms.get("match")
+            db.add(row)
+
+            turn = db.get(SessionTurn, turn_id)
+            if turn is not None and check.ocr_text:
+                turn.ocr_text = check.ocr_text
 
     # -- 세션 --------------------------------------------------------------
 
