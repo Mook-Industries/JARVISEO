@@ -19,7 +19,7 @@ from jarviseo.voice.speaker import PIECE_BYTES, Speaker
 from jarviseo.voice.tts import TextToSpeech
 
 BLOCK_SEC = BLOCK / SAMPLE_RATE
-DATA = Path(__file__).parent / "data"
+DATA = Path(__file__).parents[1] / "data"
 
 
 def test_재생_중과_끝나고_유예_안에_들어온_블록만_무음이_된다():

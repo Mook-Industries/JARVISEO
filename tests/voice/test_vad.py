@@ -11,7 +11,7 @@ from jarviseo.voice.vad import record_speech, voiced_seconds
 
 T0 = 100.0  # 첫 블록의 monotonic 시각. 값 자체는 상관없다
 BLOCK_SEC = BLOCK / SAMPLE_RATE
-DATA = Path(__file__).parent / "data"
+DATA = Path(__file__).parents[1] / "data"
 
 
 def blocks_of(audio: np.ndarray):

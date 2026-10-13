@@ -18,7 +18,7 @@ from jarviseo.voice.mic import BLOCK, SAMPLE_RATE, MicStream
 from jarviseo.voice.wakeword import FRAME, WakeWordDetector
 
 BLOCK_SEC = BLOCK / SAMPLE_RATE
-DATA = Path(__file__).parent / "data"
+DATA = Path(__file__).parents[1] / "data"
 
 
 def fake_score(frame):
