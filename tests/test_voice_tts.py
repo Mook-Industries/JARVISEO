@@ -32,7 +32,11 @@ class FakeClient:
     @contextmanager
     def _create(self, **kwargs):
         self.requests.append(kwargs)
-        yield SimpleNamespace(iter_bytes=self.chunks)
+        self.closed = False
+        try:
+            yield SimpleNamespace(iter_bytes=self.chunks)
+        finally:
+            self.closed = True  # 응답 스트림을 닫았다
 
 
 @pytest.fixture
@@ -52,6 +56,9 @@ def played(monkeypatch):
 
         def write(self, data):
             written.append(data)
+
+        def abort(self):
+            pass
 
     sounddevice = SimpleNamespace(RawOutputStream=FakeOutputStream)
     monkeypatch.setitem(sys.modules, "sounddevice", sounddevice)
@@ -82,8 +89,33 @@ def test_speak_는_받은_조각을_순서대로_재생하고_첫_조각_시간�
 
     took = tts.speak("안녕하세요.")
 
-    assert played == [b"\x01" * CHUNK_BYTES, b"\x02" * CHUNK_BYTES]
+    # 스피커에는 20ms 씩 나눠 쓴다
+    assert b"".join(played) == b"\x01" * CHUNK_BYTES + b"\x02" * CHUNK_BYTES
     assert took == tts.last_latency_ms >= 0
+    assert tts.last_interrupted is False
+
+
+def test_stop_하면_남은_조각을_받지_않고_응답_스트림을_닫는다(played):
+    def chunks(size):
+        yield b"\x01" * size
+        tts.stop()  # 첫 조각을 쓰는 사이 호출어가 들렸다
+        yield b"\x02" * size
+        raise AssertionError("끊긴 뒤에는 더 받지 않는다")
+
+    client = FakeClient(chunks)
+    tts = TextToSpeech(client=client)
+
+    took = tts.speak("안녕하세요.")
+
+    assert b"".join(played) == b"\x01" * CHUNK_BYTES
+    assert tts.last_interrupted is True
+    assert client.closed
+    assert took == tts.last_latency_ms >= 0
+
+    # 다음 speak() 은 처음부터 끝까지 읽는다
+    client.chunks = two_chunks
+    tts.speak("다시")
+    assert tts.last_interrupted is False
 
 
 def test_받는_도중_끊기면_받은_만큼만_재생하고_예외를_올리지_않는다(played):
@@ -93,7 +125,7 @@ def test_받는_도중_끊기면_받은_만큼만_재생하고_예외를_올리�
 
     took = TextToSpeech(client=FakeClient(cut)).speak("안녕하세요.")
 
-    assert played == [b"\x01" * CHUNK_BYTES]
+    assert b"".join(played) == b"\x01" * CHUNK_BYTES
     assert took is not None
 
 

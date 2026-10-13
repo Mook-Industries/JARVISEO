@@ -15,7 +15,7 @@ import pytest
 from jarviseo.voice import stt
 from jarviseo.voice.gate import MIC_GATE, MicGate
 from jarviseo.voice.mic import BLOCK, SAMPLE_RATE
-from jarviseo.voice.speaker import Speaker
+from jarviseo.voice.speaker import PIECE_BYTES, Speaker
 from jarviseo.voice.tts import TextToSpeech
 
 BLOCK_SEC = BLOCK / SAMPLE_RATE
@@ -76,6 +76,9 @@ def speaker_log(monkeypatch):
         def write(self, data):
             log.append(data)
 
+        def abort(self):
+            log.append("abort")  # 버퍼에 남은 소리를 버린다
+
     sounddevice = SimpleNamespace(RawOutputStream=FakeOutputStream)
     monkeypatch.setitem(sys.modules, "sounddevice", sounddevice)
     return log
@@ -98,6 +101,78 @@ def test_조각이_하나도_없으면_게이트를_건드리지_않는다(speak
 
     assert speaker_log == []
     assert gate.is_open(time.monotonic())
+
+
+def test_재생_중_stop_하면_남은_소리를_버리고_멈춘다(speaker_log):
+    gate = MicGate(grace_sec=0.3)
+    gate.on_playback(speaker_log.append)
+    speaker = Speaker(gate=gate)
+
+    def chunks():
+        yield b"\x01\x00"
+        speaker.stop()  # 다른 스레드에서 호출어를 잡았다
+        yield b"\x02\x00"
+        raise AssertionError("끊긴 뒤에는 더 읽지 않는다")
+
+    speaker.play(chunks())
+
+    assert speaker_log == [True, b"\x01\x00", "abort", "stop", False]
+    assert speaker.interrupted
+
+
+def test_큰_조각은_20ms_씩_나눠_써서_그_사이에도_멈춘다(monkeypatch):
+    speaker, written = Speaker(gate=MicGate()), []
+
+    class FakeOutputStream:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            pass
+
+        def write(self, data):
+            written.append(data)
+            speaker.stop()  # 첫 20ms 를 쓰자마자 호출어가 들렸다
+
+        def abort(self):
+            written.append("abort")
+
+    monkeypatch.setitem(
+        sys.modules, "sounddevice", SimpleNamespace(RawOutputStream=FakeOutputStream)
+    )
+    chunk = b"\x01" * (PIECE_BYTES * 3)
+
+    speaker.play(iter([chunk]))
+
+    assert written == [chunk[:PIECE_BYTES], "abort"]
+
+
+def test_첫_조각을_기다리는_동안_stop_하면_소리를_내지_않는다(speaker_log):
+    gate = MicGate()
+    gate.on_playback(speaker_log.append)
+    speaker = Speaker(gate=gate)
+
+    def chunks():
+        speaker.stop()
+        yield b"\x01\x00"
+
+    speaker.play(chunks())
+
+    assert speaker_log == []
+    assert speaker.interrupted
+
+
+def test_재생_전에_부른_stop_은_다음_재생에_영향이_없다(speaker_log):
+    speaker = Speaker(gate=MicGate())
+    speaker.stop()
+
+    speaker.play(iter([b"\x01\x00"]))
+
+    assert speaker_log == [b"\x01\x00", "stop"]
+    assert not speaker.interrupted
 
 
 def test_STT_와_TTS_는_같은_게이트를_쓴다():
