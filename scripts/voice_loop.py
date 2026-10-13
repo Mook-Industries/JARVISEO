@@ -16,8 +16,9 @@ OpenAI 키가 필요하다.
 
 --long 은 질문 뒤에 15초쯤 걸리는 문장을 붙여 읽는다. 끼어들 틈을 만들려는 것이다.
 --db 는 턴마다 session_turn·turn_voice 에 남긴다. 주소를 안 주면 data/voice_loop.db(SQLite).
---reopen wake 는 끊은 뒤 게이트를 끊은 시각이 아니라 질문을 읽기 시작하는 곳(호출어 감지
-1초 전)까지 거슬러 연다. 질문 앞부분이 덜 잘리는 대신 재생 소리가 같이 받아써질 수 있다(비교용).
+--playback-threshold 는 재생 중 호출어 임계값을 바꿔 본다(기본 config.WAKEWORD_PLAYBACK_THRESHOLD).
+--wake 는 끝까지 읽은 대답마다 재생 중 호출어 최고 점수를 찍는다. 자기 목소리 점수와
+못 잡은 끼어들기가 임계값에서 얼마나 떨어져 있는지 보려는 것이다.
 
 찍는 값 (ms)
     말끝 대기    말이 끝나고 VAD 가 끝으로 판정해 녹음을 멈추기까지 (무음 700ms 가 대부분)
@@ -33,12 +34,15 @@ import statistics
 import time
 from collections.abc import Callable
 
+import numpy as np
+
 from jarviseo import config
 from jarviseo.memory import MemoryStore
 from jarviseo.types import AssistantResponse, Intent, Utterance
 from jarviseo.voice import BargeIn, SpeechToText, TextToSpeech, WakeWordDetector
 from jarviseo.voice.gate import MIC_GATE
 from jarviseo.voice.mic import MicStream
+from jarviseo.voice.wakeword import load_scorer
 
 STAGES = ("말끝 대기", "STT 왕복", "TTS 첫 조각", "재생", "말 끝 → 첫 조각")
 # 호출어("자비서")는 일부러 넣지 않는다. 자기 목소리에 깨는지 볼 때 답에 호출어가 있으면 안 된다.
@@ -81,6 +85,26 @@ def echo(
     return answer, turn
 
 
+class PlaybackPeak:
+    """호출어 점수를 그대로 넘기면서, 재생하는 동안 나온 최고 점수를 잰다."""
+
+    def __init__(self) -> None:
+        self.scorer = load_scorer(config.WAKEWORD_MODEL)
+        self.playing, self.peak = False, 0.0
+        MIC_GATE.on_playback(self._playback)
+
+    def _playback(self, playing: bool) -> None:
+        if playing:
+            self.peak = 0.0
+        self.playing = playing
+
+    def __call__(self, frame: np.ndarray) -> float:
+        score = self.scorer(frame)
+        if self.playing:
+            self.peak = max(self.peak, score)
+        return score
+
+
 def enter_loop(
     stt: SpeechToText, tts: TextToSpeech, turns: list, long: bool, record: Record | None
 ) -> None:
@@ -101,15 +125,23 @@ def wake_loop(
     turns: list,
     long: bool,
     record: Record | None,
-    reopen_at_wake: bool,
-) -> list[float]:
-    """호출어로 턴을 연다. 끼어들기마다 감지 → 멈춤(ms)을 모아 돌려준다."""
+    playback_threshold: float,
+) -> tuple[list[float], list[float]]:
+    """호출어로 턴을 연다. 끼어들기마다 감지 → 멈춤(ms)을, 끝까지 읽은 대답마다 재생 중
+    호출어 최고 점수를 모아 돌려준다."""
     barge = BargeIn(tts)
-    detector = WakeWordDetector(mic, on_detect=barge.on_detect)
+    peak = PlaybackPeak()
+    detector = WakeWordDetector(
+        mic, on_detect=barge.on_detect, playback_threshold=playback_threshold, scorer=peak
+    )
     detector.start()
     stops: list[float] = []
+    peaks: list[float] = []
     trigger = "WAKEWORD"
-    print(f"\n호출어({config.WAKEWORD_MODEL})를 부르고 이어서 말하세요. 끝내려면 Ctrl+C")
+    print(
+        f"\n호출어({config.WAKEWORD_MODEL}, 임계값 {detector.threshold}, 재생 중 "
+        f"{detector.playback_threshold})를 부르고 이어서 말하세요. 끝내려면 Ctrl+C"
+    )
     try:
         while True:
             wake = barge.wait(timeout=0.5)
@@ -118,8 +150,6 @@ def wake_loop(
             if trigger == "BARGE_IN":
                 stops.append((tts.speaker.stopped_at - wake.t) * 1000)
                 print(f"\n끼어들기 (점수 {wake.score:.3f}, 감지 → 멈춤 {stops[-1]:.0f}ms)")
-                if reopen_at_wake:
-                    MIC_GATE.reopen(wake.t - config.WAKE_LOOKBACK_SEC)
             else:
                 print(f"\n호출어 감지 (점수 {wake.score:.3f})")
             utterance = stt.listen(timeout=2.0, since=wake.t)
@@ -134,6 +164,9 @@ def wake_loop(
                 turns.append(result[1])
                 if record is not None:
                     record(utterance, *result, trigger)
+                if not tts.last_interrupted:
+                    peaks.append(peak.peak)
+                    print(f"  재생 중 호출어 최고 점수 {peak.peak:.3f}")
             # 대답을 읽다 끊겼으면 끊은 호출이 큐에 있고, 그게 다음 턴이 된다.
             # 끝까지 읽었으면 질문하는 동안 다시 잡힌 호출어 같은 지난 감지는 버린다.
             trigger = "BARGE_IN" if result and tts.last_interrupted else "WAKEWORD"
@@ -143,7 +176,7 @@ def wake_loop(
         pass
     finally:
         detector.stop()
-    return stops
+    return stops, peaks
 
 
 def recorder(url: str, tts: TextToSpeech, stt: SpeechToText) -> Record:
@@ -186,21 +219,24 @@ def main() -> None:
         "--db", nargs="?", const=DEFAULT_DB, help=f"턴을 DB 에 남긴다 (기본 {DEFAULT_DB})"
     )
     parser.add_argument(
-        "--reopen",
-        choices=("stop", "wake"),
-        default="stop",
-        help="끼어든 뒤 게이트를 끊은 시각(stop)에 열지, 질문 읽는 곳(wake)까지 거슬러 열지",
+        "--playback-threshold",
+        type=float,
+        default=config.WAKEWORD_PLAYBACK_THRESHOLD,
+        help="재생 중 호출어 임계값",
     )
     args = parser.parse_args()
 
     turns: list[dict[str, float]] = []
     stops: list[float] = []
+    peaks: list[float] = []
     tts = TextToSpeech(device=args.speaker)
     if args.wake:
         with MicStream(args.mic) as mic:
             stt = SpeechToText(mic=mic)
             record = recorder(args.db, tts, stt) if args.db else None
-            stops = wake_loop(stt, tts, mic, turns, args.long, record, args.reopen == "wake")
+            stops, peaks = wake_loop(
+                stt, tts, mic, turns, args.long, record, args.playback_threshold
+            )
     else:
         stt = SpeechToText(device=args.mic)
         record = recorder(args.db, tts, stt) if args.db else None
@@ -212,6 +248,8 @@ def main() -> None:
             print(f"  {name} {statistics.median(t[name] for t in turns):.0f}")
     if stops:
         print(f"끼어들기 {len(stops)}회, 감지 → 멈춤 중앙값 {statistics.median(stops):.0f}ms")
+    if peaks:
+        print(f"끝까지 읽은 대답 {len(peaks)}개, 재생 중 호출어 최고 점수 {max(peaks):.3f}")
 
 
 if __name__ == "__main__":

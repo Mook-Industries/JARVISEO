@@ -68,7 +68,7 @@ class WakeWordDetector:
         gate: MicGate | None = None,
         scorer: Callable[[np.ndarray], float] | None = None,
     ) -> None:
-        """mic 는 STT 와 같이 쓰는 ``MicStream``. gate·scorer 는 테스트에서만 넘긴다.
+        """mic 는 STT 와 같이 쓰는 ``MicStream``. gate·scorer 는 테스트·측정에서만 넘긴다.
 
         gate 가 닫혀 있던 동안(재생 중과 끝난 뒤 유예) 들어온 소리에는 playback_threshold 를 댄다.
 
