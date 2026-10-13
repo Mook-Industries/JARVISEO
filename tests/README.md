@@ -3,19 +3,23 @@
 CI(`.github/workflows/ci.yml`)에서 ubuntu · windows · macOS 세 OS 로 돌아간다.
 DB 테스트는 여기에 더해 db job 이 pgvector 컨테이너를 띄워 실제 Postgres 에서 한 번 더 돌린다.
 
+테스트 위치는 **시험하는 코드가 있는 폴더**를 따른다. `src/jarviseo/pointing/resolver.py` 의 테스트는 `tests/pointing/test_resolver.py` 다.
+`tests/` 바로 아래에는 `src/jarviseo/` 바로 아래 모듈(`types.py` · `config.py`)의 테스트, 공통 fixture(`conftest.py`), 공통 데이터(`data/`)만 둔다.
+여러 모듈을 가로질러 주인이 없는 흐름 테스트가 생기면 `tests/integration/` 에 둔다. 모듈 하나만 돌릴 때는 `pytest tests/voice` 처럼 폴더를 준다.
+
 | 파일 | 무엇을 지키나 |
 |---|---|
 | `test_types_contract.py` | `types.py` 의 모듈 간 계약이 깨지지 않았는지 |
-| `test_db_schema.py` | 테이블·관계·외래키가 실제로 만들어지는지 |
-| `test_memory_embed.py` | 임베딩 요청 모양과 Fake 임베딩이 실제 클래스와 같은 모양인지 (API 는 가짜로) |
-| `test_memory_vector.py` | 기억 검색: 저장·가까운 순·점수 문턱·사용자 구분·임베딩 실패 |
-| `test_voice_fake.py` | Fake STT·TTS 가 실제 클래스와 같은 모양인지 |
-| `test_voice_vad.py` | VAD 가 발화를 맞게 잘라 내는지 (마이크 없이) |
-| `test_voice_stt.py` | STT 요청 모양과 받아쓴 글자 정리 (API 는 가짜로) |
-| `test_voice_tts.py` | TTS 요청 모양·속도 변환·읽을 글자 다듬기와 재생, 스트림 끊김 (API·스피커는 가짜로) |
-| `test_voice_gate.py` | 재생 중 STT 입력 차단·0.3초 유예와 호출어 훅 (마이크·스피커 없이) |
-| `test_voice_mic.py` | `MicStream` 이 마이크 하나를 여럿이 같은 순서로 읽게 하는지, 지나간 블록부터 읽기 |
-| `test_voice_wakeword.py` | 호출어 감지·2초 중복 무시·재생 중 임계값 0.8, 감지 시각부터 `listen()` (가짜 점수로) |
+| `memory/test_db_schema.py` | 테이블·관계·외래키가 실제로 만들어지는지 |
+| `memory/test_embed.py` | 임베딩 요청 모양과 Fake 임베딩이 실제 클래스와 같은 모양인지 (API 는 가짜로) |
+| `memory/test_vector.py` | 기억 검색: 저장·가까운 순·점수 문턱·사용자 구분·임베딩 실패 |
+| `voice/test_fake.py` | Fake STT·TTS 가 실제 클래스와 같은 모양인지 |
+| `voice/test_vad.py` | VAD 가 발화를 맞게 잘라 내는지 (마이크 없이) |
+| `voice/test_stt.py` | STT 요청 모양과 받아쓴 글자 정리 (API 는 가짜로) |
+| `voice/test_tts.py` | TTS 요청 모양·속도 변환·읽을 글자 다듬기와 재생, 스트림 끊김 (API·스피커는 가짜로) |
+| `voice/test_gate.py` | 재생 중 STT 입력 차단·0.3초 유예와 호출어 훅 (마이크·스피커 없이) |
+| `voice/test_mic.py` | `MicStream` 이 마이크 하나를 여럿이 같은 순서로 읽게 하는지, 지나간 블록부터 읽기 |
+| `voice/test_wakeword.py` | 호출어 감지·2초 중복 무시·재생 중 임계값 0.8, 감지 시각부터 `listen()` (가짜 점수로) |
 
 ## 로컬에서 돌리는 법
 
@@ -39,3 +43,4 @@ pytest -q
   docker stop jarviseo-test-pg
   ```
 - 테스트 이름은 한글로 쓴다. 실패했을 때 무엇이 깨졌는지 바로 읽히게.
+- 테스트 데이터(`tests/data/`)는 하위 폴더에서 `Path(__file__).parents[1] / "data"` 로 찾는다. 폴더가 한 단계 깊어서 `.parent` 로는 못 찾는다.

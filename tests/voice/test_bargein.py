@@ -21,7 +21,7 @@ from jarviseo.voice.speaker import PIECE_BYTES
 from jarviseo.voice.tts import CHUNK_BYTES, TextToSpeech
 from jarviseo.voice.wakeword import FRAME, WakeWordDetector
 
-DATA = Path(__file__).parent / "data"
+DATA = Path(__file__).parents[1] / "data"
 
 
 class StopCounter:

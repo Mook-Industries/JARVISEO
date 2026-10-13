@@ -14,7 +14,7 @@ import pytest
 
 from jarviseo.nutrition.allergen import KNOWN_ALLERGENS, load_synonyms, normalize_term
 
-SYNONYMS_PATH = Path(__file__).resolve().parents[1] / "data" / "datasets" / "allergen_synonyms.json"
+SYNONYMS_PATH = Path(__file__).resolve().parents[2] / "data" / "datasets" / "allergen_synonyms.json"
 
 
 @pytest.fixture(scope="module")
