@@ -211,11 +211,11 @@ def test_호출어부터_같이_녹음해도_말_시작은_호출어가_끝난_�
     assert starts == [utterance.started_at]
 
 
-def test_호출어만_받아써지면_쉬었다가_한_질문을_이어서_받는다(monkeypatch):
+def test_호출어만_말하고_쉬면_받아쓰지_않고_이어서_질문을_받는다(monkeypatch):
     monkeypatch.setattr(stt, "MIC_GATE", MicGate())
-    # "자비서" 0.6초, 1초 쉬고, 질문 1.2초
+    # "자비서" 0.6초, 1초 쉬고, 질문 1.2초. 감지는 호출어가 끝나고 0.1초 뒤
     blocks = question_audio((1.0, False), (0.6, True), (1.0, False), (1.2, True), (1.0, False))
-    client = FakeClient(["자비서.", "저거 뭐야?"])
+    client = FakeClient(["저거 뭐야?"])
     starts = []
 
     with MicStream(source=blocks, history_sec=10.0) as mic:
@@ -223,9 +223,23 @@ def test_호출어만_받아써지면_쉬었다가_한_질문을_이어서_받�
         utterance = listener.listen(on_speech_start=starts.append, since=1.7, timeout=2.0)
 
     assert utterance.text == "저거 뭐야?"
-    assert len(client.requests) == 2
+    assert len(client.requests) == 1  # 호출어 쪽은 STT 에 보내지 않았다
     assert utterance.started_at == pytest.approx(2.6, abs=0.06)  # 질문 시작
     assert starts[-1] == utterance.started_at
+
+
+def test_늘여_말한_호출어만_받아써지면_이어서_질문을_받는다(monkeypatch):
+    monkeypatch.setattr(stt, "MIC_GATE", MicGate())
+    # "자~비~서" 1.4초 중간(1.7초)에 감지됐고, 1초 쉬고 질문
+    blocks = question_audio((1.0, False), (1.4, True), (1.0, False), (1.2, True), (1.0, False))
+    client = FakeClient(["자비서.", "저거 뭐야?"])
+
+    with MicStream(source=blocks, history_sec=10.0) as mic:
+        listener = stt.SpeechToText(mic=mic, client=client)
+        utterance = listener.listen(since=1.7, timeout=2.0)
+
+    assert utterance.text == "저거 뭐야?"
+    assert len(client.requests) == 2
 
 
 def test_커스텀_모델_파일이_없으면_받는_법을_알려_준다(tmp_path):

@@ -41,6 +41,10 @@ TIMEOUT_SEC, RETRIES = 8.0, 1
 # 호출어 감지가 호출어 끝보다 늦는 최대 시간(초). 평가셋 실제 녹음 37개에서 중앙 0.12, 최대 0.33초.
 # 질문은 그 뒤에 시작하므로 말 시작 시각을 감지 시각에서 이만큼 전보다 앞으로 두지 않는다.
 WAKE_LAG_SEC = 0.35
+# 감지 뒤 이 시간 안에 말이 끝났으면 호출어만 말하고 쉰 것으로 본다("자비서." … 질문).
+# 감지는 호출어 끝보다 최대 0.33초 늦고, 끼어들기면 재생을 멈추기까지 0.2초쯤 재생 소리가 남는다.
+# 이어 말한 질문은 이보다 늦게 끝난다.
+WAKE_ONLY_SEC = 0.4
 
 
 class SpeechToText:
@@ -89,7 +93,8 @@ class SpeechToText:
         감지는 호출어가 끝나고 조금 뒤에 돼서, 바로 이어 말하면 감지 시각에는 질문이 이미
         시작돼 있다. 호출어도 같이 받아써지고 ``clean()`` 이 지운다. 말 시작 시각은 호출어가
         끝났을 때(감지 ``WAKE_LAG_SEC`` 전)보다 앞으로 두지 않는다. 프레임을 이 시각으로 고른다.
-        "자비서." 하고 쉬었다가 질문하면 호출어만 받아써지는데, 그때는 이어서 한 번 더 듣는다.
+        "자비서." 하고 쉬었다가 질문하면 녹음이 호출어에서 끝나는데, 그때는 받아쓰지 않고
+        이어서 한 번 더 듣는다(감지 ``WAKE_ONLY_SEC`` 안에 말이 끝났거나, 호출어만 받아써졌을 때).
 
         timeout 초 안에 말이 시작되지 않거나, 받아쓰기가 끝내 실패하거나,
         정리하고 나니 비었거나 너무 짧으면 None.
@@ -118,9 +123,13 @@ class SpeechToText:
 
         blocks = MIC_GATE.mute(self.mic.blocks(since=since - config.WAKE_LOOKBACK_SEC))
         speech = record_speech(blocks, started, timeout=timeout)
+        if speech is not None and speech.ended_at <= since + WAKE_ONLY_SEC:
+            # 호출어(와 그 앞 소리)에서 말이 끝났다. 받아쓰면 STT 가 호출어를 "자비다"처럼 잘못 써서
+            # 질문으로 넘어갈 수 있다. 같은 마이크 줄에서 질문을 더 기다린다.
+            speech = record_speech(blocks, started, timeout=timeout)
         utterance = self._question(speech)
         if utterance is None and speech is not None and is_wake_only(self.last_raw_text):
-            # 호출어 뒤에서 말이 끊겨 거기까지만 녹음됐다. 같은 마이크 줄에서 질문을 더 기다린다.
+            # 늘여 말해서 감지 뒤에도 호출어가 이어졌다. 호출어만 받아써졌으면 한 번 더 듣는다.
             utterance = self._question(record_speech(blocks, started, timeout=timeout))
         if utterance is None:
             return None
