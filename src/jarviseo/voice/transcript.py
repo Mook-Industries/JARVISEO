@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["MIN_LETTERS", "clean", "is_question"]
+__all__ = ["MIN_LETTERS", "clean", "is_question", "is_wake_only"]
 
 # 호출어. 힌트를 줘도 "자비스"처럼 받아써질 수 있어서 비슷한 표기도 같이 잡는다.
 # "자비서야" 같은 부르는 말은 호출어로 보고, "자비스럽게"처럼 뒤에 말이 이어지면 아니다.
 _WAKE = re.compile(r"(?:[자재]\s?비\s?[서스써](?:야|아|님)?|jarvis)(?![가-힣])", re.IGNORECASE)
+# 맨 앞에 호출어 끝만 받아써진 토막("서, 오늘 날씨 어때?"). listen() 이 호출어 감지 시각보다
+# 조금 앞에서부터 읽어서 생길 수 있다. "서울"처럼 뒤에 말이 붙으면 아니다.
+_WAKE_TAIL = re.compile(r"^\s*(?:비\s?)?[서써](?:야|아)?(?![가-힣])[\s.,!?…~]*")
 # 말 사이에 끼는 소리. 따로 떨어진 토막일 때만 지운다("아까"의 "아"는 그대로 둔다).
 _FILLER = re.compile(r"(?<!\w)(?:음+|으+음|어+|아+|에+|흠+)(?!\w)[.,!?…~]*")
 _LETTER = re.compile(r"[가-힣A-Za-z0-9]")
@@ -33,6 +36,8 @@ def clean(text: str) -> str:
     if hits:
         after = text[hits[-1].end() :]
         text = after if _LETTER.search(after) else text[: hits[0].start()]
+    else:
+        text = _WAKE_TAIL.sub("", text, count=1)
     text = re.sub(r"\s+", " ", _FILLER.sub(" ", text)).strip()
     return text.lstrip(",.!?…~ ").rstrip(", ")
 
@@ -40,3 +45,8 @@ def clean(text: str) -> str:
 def is_question(text: str) -> bool:
     """정리한 글자가 질문으로 쓸 만한지. 비었거나 너무 짧으면 False."""
     return len(_LETTER.findall(text)) >= MIN_LETTERS
+
+
+def is_wake_only(text: str | None) -> bool:
+    """호출어만 받아써졌는지("자비서."). 부르고 쉬었다가 질문할 때 이렇게 끊긴다."""
+    return bool(text) and _WAKE.search(text) is not None and not is_question(clean(text))

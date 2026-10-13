@@ -64,11 +64,15 @@ class FakeTextToSpeech:
     def __init__(self) -> None:
         self.spoken: list[str] = []
         self.last_latency_ms: float | None = None
+        self.last_interrupted = False
 
     def speak(self, text: str) -> float | None:
         self.spoken.append(text)
-        self.last_latency_ms = 0.0
+        self.last_latency_ms, self.last_interrupted = 0.0, False
         return 0.0
+
+    def stop(self) -> None:
+        """바로 끝나는 speak() 이라 끊을 것이 없다."""
 
     def synthesize(self, text: str) -> Iterator[bytes]:
         self.last_latency_ms = 0.0

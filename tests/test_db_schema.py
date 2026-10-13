@@ -7,6 +7,9 @@ Postgres 에서만 터지는 문제(타입 불일치, pgvector 열 등)는 그�
 실행: pytest tests/test_db_schema.py
 """
 
+import time
+from datetime import UTC, datetime
+
 import pytest
 
 from jarviseo.memory.models import (
@@ -209,6 +212,40 @@ def test_되물은_턴은_정답_라벨로_남지_않는다(store: MemoryStore):
         assert db.get(TurnInference, asked).resolved_by is None
         assert db.get(TurnInference, answered).resolved_by == "USER"
         assert db.get(TurnInference, plain).resolved_by == "MODEL"
+
+
+def _utc(t: datetime) -> datetime:
+    """SQLite 는 시간대를 빼고 돌려준다. 저장할 때는 UTC 였다."""
+    return t if t.tzinfo is not None else t.replace(tzinfo=UTC)
+
+
+def test_끼어들기로_끊긴_턴과_다음_턴의_음성_기록(store: MemoryStore):
+    session_id = store.start_session(store.ensure_user())
+    now = time.monotonic()
+    first = Utterance(text="오늘 일정 알려 줘", started_at=now - 5.0, ended_at=now - 3.5)
+    second = Utterance(text="저거 뭐야?", started_at=now - 1.2, ended_at=now)
+    response = AssistantResponse(
+        text="오늘은 일정이 세 개 있어요.",
+        intent=Intent.GENERAL,
+        latency_ms={"stt": 900.0, "tts": 1100.0},
+    )
+
+    cut = store.log_turn(session_id, first, response, interrupted=True)
+    barged = store.log_turn(session_id, second, response, trigger_type="BARGE_IN")
+
+    with store.session() as db:
+        assert db.get(SessionTurn, cut).trigger_type == "WAKEWORD"
+        assert db.get(SessionTurn, barged).trigger_type == "BARGE_IN"
+        cut_voice, barged_voice = db.get(TurnVoice, cut), db.get(TurnVoice, barged)
+        assert cut_voice.is_interrupted is True
+        assert barged_voice.is_interrupted is False
+        assert (cut_voice.stt_ms, cut_voice.tts_ms) == (900, 1100)
+
+        # monotonic 시각이 실제 시각으로 옮겨진다. 윈도우 시계 해상도(15.6ms)만큼은 흔들린다
+        started, ended = _utc(cut_voice.speech_started_at), _utc(cut_voice.speech_ended_at)
+        assert (ended - started).total_seconds() == pytest.approx(1.5, abs=0.05)
+        assert (datetime.now(UTC) - started).total_seconds() == pytest.approx(5.0, abs=1.0)
+        assert _utc(barged_voice.speech_started_at) > ended
 
 
 def test_지연_백분위(store: MemoryStore):

@@ -2,44 +2,75 @@
 
 TTS 가 받는 대로 내는 PCM 조각을 순서대로 재생한다. 합성이 다 끝날 때까지 기다리지 않고
 첫 조각이 오면 바로 소리를 낸다. 재생하는 동안은 마이크 게이트(``gate.py``)를 닫는다.
+
+재생 중에 ``stop()`` 을 부르면(끼어들기) 남은 소리를 버리고 바로 멈춘다. 이때는 게이트도
+유예 없이 바로 연다. 사용자가 "자비서" 뒤에 이어 말한 질문 앞부분이 막히지 않게 하려는 것이다.
 """
 
 from __future__ import annotations
 
 import itertools
+import threading
+import time
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 from jarviseo.voice.gate import MIC_GATE, MicGate
+
+if TYPE_CHECKING:
+    import sounddevice as sd
 
 __all__ = ["SAMPLE_RATE", "Speaker"]
 
 # OpenAI TTS 의 response_format="pcm" 은 24kHz 16비트 모노(리틀엔디언)로 온다.
 SAMPLE_RATE = 24000
+# 스피커에는 20ms 씩 나눠 쓴다. write() 는 버퍼에 자리가 날 때까지 막히므로, 멈춤 신호는
+# 이만큼마다 확인된다. TTS 조각(100ms)을 통째로 쓰면 멈추기까지 최대 0.1초가 더 걸린다.
+PIECE_BYTES = SAMPLE_RATE * 2 // 50
 
 
 class Speaker:
-    """``Speaker().play(tts.synthesize(text))``"""
+    """``Speaker().play(tts.synthesize(text))``. 다른 스레드에서 ``stop()`` 으로 끊는다."""
 
     def __init__(self, device: int | None = None, gate: MicGate | None = None) -> None:
         """gate 는 테스트에서만 넘긴다. 기본은 STT 와 같이 쓰는 ``MIC_GATE``."""
         self.device = device
         self.gate = gate or MIC_GATE
+        self._stop = threading.Event()
+        # 마지막 play() 가 stop() 으로 끊겼으면 True, 그때 소리를 멈춘 시각(monotonic).
+        self.interrupted = False
+        self.stopped_at: float | None = None
+
+    def stop(self) -> None:
+        """재생 중이면 남은 소리를 버리고 멈추게 한다. 어느 스레드에서 불러도 된다.
+
+        재생 중이 아니면 아무 일도 없다. 다음 play() 는 처음부터 끝까지 재생한다.
+        첫 조각을 기다리는 동안 부르면 소리를 하나도 내지 않고 끝난다.
+        """
+        self._stop.set()
 
     def play(self, chunks: Iterable[bytes]) -> None:
         """조각을 받는 순서대로 재생하고, 마지막 소리가 다 나올 때까지 기다린다.
 
         첫 조각이 오기 전에는 스피커도 게이트도 건드리지 않는다. chunks 가 도중에 예외를 내면
-        그때까지 받은 소리는 마저 내고 예외를 그대로 올린다.
+        그때까지 받은 소리는 마저 내고 예외를 그대로 올린다. stop() 으로 끊기면 chunks 를
+        더 읽지 않고 돌아온다(닫는 것은 chunks 를 만든 쪽이 한다).
         """
+        self._stop.clear()
+        self.interrupted, self.stopped_at = False, None
         chunks = iter(chunks)
         first = next(chunks, None)
         if first is None:
+            return
+        if self._stop.is_set():  # 첫 조각을 기다리는 동안 끊겼다. 게이트는 닫힌 적이 없다
+            self._interrupted()
             return
         # 리눅스 CI 에는 PortAudio 가 없어서, 맨 위에서 import 하면 이 모듈을 읽기만 해도 죽는다.
         import sounddevice as sd
 
         # with 를 빠져나갈 때 stop() 이 버퍼에 남은 소리를 다 낼 때까지 기다린다(약 0.2초).
-        # 게이트는 그다음에 풀어야 해서 바깥쪽에 둔다.
+        # 게이트는 그다음에 풀어야 해서 바깥쪽에 둔다. 끊긴 경우는 abort() 로 버퍼를 버려서
+        # 기다리지 않는다(그 뒤 stop() 은 이미 멈춘 스트림이라 바로 돌아온다).
         with (
             self.gate.playing(),
             sd.RawOutputStream(
@@ -47,4 +78,20 @@ class Speaker:
             ) as out,
         ):
             for chunk in itertools.chain([first], chunks):
-                out.write(chunk)
+                if not self._write(out, chunk):
+                    out.abort()
+                    break
+        if self.interrupted:
+            self.gate.reopen(self.stopped_at)
+
+    def _write(self, out: sd.RawOutputStream, chunk: bytes) -> bool:
+        """chunk 를 나눠 쓴다. 도중에 멈춤 신호가 오면 멈춘 시각을 남기고 False."""
+        for i in range(0, len(chunk), PIECE_BYTES):
+            if self._stop.is_set():
+                self._interrupted()
+                return False
+            out.write(chunk[i : i + PIECE_BYTES])
+        return True
+
+    def _interrupted(self) -> None:
+        self.interrupted, self.stopped_at = True, time.monotonic()

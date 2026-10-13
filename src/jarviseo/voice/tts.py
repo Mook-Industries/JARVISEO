@@ -55,20 +55,37 @@ class TextToSpeech:
         # 마지막 합성에서 첫 조각을 받기까지 걸린 시간(ms, TTFB). 아직 못 받았으면 None.
         # 그래프가 latency_ms["tts"] 로 넘기면 log_turn 이 turn_voice.tts_ms 에 적는다.
         self.last_latency_ms: float | None = None
+        # 마지막 speak() 이 stop() 으로 중간에 끊겼으면 True (turn_voice.is_interrupted).
+        self.last_interrupted = False
 
     def speak(self, text: str) -> float | None:
-        """text 를 합성하면서 받는 대로 읽어 준다. 재생이 끝날 때까지 기다린다.
+        """text 를 합성하면서 받는 대로 읽어 준다. 재생이 끝나거나 stop() 으로 끊길 때까지 기다린다.
 
         첫 오디오 청크를 받기까지 걸린 시간(ms)을 돌려준다. 이 값이 ``turn_voice.tts_ms`` 다.
         합성이 도중에 실패하면 그때까지 받은 소리만 내고 멈춘다. 소리를 하나도 못 냈으면 None.
+        끝까지 읽었는지는 ``last_interrupted`` 로 본다.
         """
+        self.last_interrupted = False
+        chunks = self.synthesize(text)
         try:
-            self.speaker.play(self.synthesize(text))
+            self.speaker.play(chunks)
         except (OpenAIError, httpx2.HTTPError) as e:
             # 요청이 실패하면 OpenAIError 로 오지만, 받는 도중에 끊기면 openai 가 감싸지 않은
             # httpx2.ReadTimeout 같은 것이 그대로 올라온다. 어느 쪽이든 음성 루프는 멈추지 않는다.
             log.warning("합성 실패, 재생을 멈춘다: %s", e)
+        finally:
+            # 끊겨서 덜 읽은 응답 스트림을 바로 닫는다. 그냥 두면 GC 될 때까지 연결이 남는다.
+            chunks.close()
+        self.last_interrupted = self.speaker.interrupted
         return self.last_latency_ms
+
+    def stop(self) -> None:
+        """읽던 것을 바로 멈춘다(끼어들기). 호출어 감지 스레드에서 부른다.
+
+        speak() 은 남은 합성을 받지 않고 곧 돌아오고, last_interrupted 가 True 가 된다.
+        읽는 중이 아니면 아무 일도 없다.
+        """
+        self.speaker.stop()
 
     def synthesize(self, text: str) -> Iterator[bytes]:
         """text 를 읽기 좋게 다듬어 합성하고, PCM(24kHz 16비트 모노) 조각을 받는 대로 낸다.

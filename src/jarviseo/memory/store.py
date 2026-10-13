@@ -10,9 +10,10 @@ Postgres 에 붙어서 대화 기록·지연시간·판정 결과를 남기고 �
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from sqlalchemy import create_engine, select, text
@@ -58,6 +59,15 @@ STAGE_COLUMNS = {
     "tts": TurnVoice.tts_ms,
     "total": SessionTurn.total_ms,
 }
+
+
+def _wall_clock(t: float) -> datetime:
+    """``time.monotonic()`` 시각을 실제 시각(UTC)으로 바꾼다. 같은 컴퓨터에서 잰 값이어야 한다.
+
+    음성 쪽 시각(Utterance.started_at 등)은 시계를 맞출 때 튀지 않게 monotonic 으로 잰다.
+    DB 의 시각 열은 실제 시각이라, 기록하는 순간 두 시계의 차이로 옮긴다.
+    """
+    return datetime.now(UTC) - timedelta(seconds=time.monotonic() - t)
 
 
 class MemoryStore:
@@ -306,6 +316,7 @@ class MemoryStore:
         pointing_variant: str | None = None,
         detector_version: str | None = None,
         stt_raw_text: str | None = None,
+        interrupted: bool = False,
     ) -> int:
         """대화 한 번을 기록하고 turn_id 를 반환한다.
 
@@ -317,6 +328,11 @@ class MemoryStore:
 
         stt_raw_text 는 호출어·필러를 빼기 전 받아쓴 원문(``SpeechToText.last_raw_text``)이다.
         안 넘기면 utterance.text 를 그대로 적는다.
+
+        답을 다 읽거나 끊긴 뒤에 부른다. interrupted 는 읽던 답이 끼어들기로 끊겼는지
+        (``TextToSpeech.last_interrupted``)이고, 끼어들어 시작한 다음 턴은
+        trigger_type="BARGE_IN" 으로 남긴다.
+        말 시작·끝 시각은 utterance 의 monotonic 시각을 실제 시각(UTC)으로 바꿔 적는다.
         """
         with self.session() as db:
             turn = SessionTurn(
@@ -329,7 +345,13 @@ class MemoryStore:
             db.add(turn)
             db.flush()
 
-            voice = TurnVoice(turn_id=turn.turn_id, stt_raw_text=stt_raw_text or utterance.text)
+            voice = TurnVoice(
+                turn_id=turn.turn_id,
+                speech_started_at=_wall_clock(utterance.started_at),
+                speech_ended_at=_wall_clock(utterance.ended_at),
+                stt_raw_text=stt_raw_text or utterance.text,
+                is_interrupted=interrupted,
+            )
             inference = TurnInference(
                 turn_id=turn.turn_id,
                 is_reask=response.needs_clarify,
