@@ -86,22 +86,42 @@ def echo(
 
 
 class PlaybackPeak:
-    """호출어 점수를 그대로 넘기면서, 재생하는 동안 나온 최고 점수를 잰다."""
+    """호출어 점수를 그대로 넘기면서, 재생하는 동안 나온 점수를 모은다.
 
-    def __init__(self) -> None:
+    peak 는 재생 중 최고 점수, missed 는 임계값을 못 넘은 높은 점수(못 잡은 끼어들기로 본다)다.
+    """
+
+    MISS = 0.3  # 이 점수를 넘었는데 임계값은 못 넘으면 못 잡은 끼어들기로 본다
+    GAP = 12  # 프레임(80ms) 수. 이만큼 안에 이어진 높은 점수는 한 번 부른 것으로 친다
+
+    def __init__(self, threshold: float) -> None:
         self.scorer = load_scorer(config.WAKEWORD_MODEL)
+        self.threshold = threshold
         self.playing, self.peak = False, 0.0
+        self._calls: list[float] = []  # 재생 중 높은 점수가 이어진 구간마다 최고 점수
+        self._frame = self._last_high = 0
         MIC_GATE.on_playback(self._playback)
+
+    @property
+    def missed(self) -> list[float]:
+        return [score for score in self._calls if score < self.threshold]
 
     def _playback(self, playing: bool) -> None:
         if playing:
-            self.peak = 0.0
+            self.peak, self._calls = 0.0, []
         self.playing = playing
 
     def __call__(self, frame: np.ndarray) -> float:
         score = self.scorer(frame)
+        self._frame += 1
         if self.playing:
             self.peak = max(self.peak, score)
+            if score >= self.MISS:
+                if not self._calls or self._frame - self._last_high > self.GAP:
+                    self._calls.append(score)
+                else:
+                    self._calls[-1] = max(self._calls[-1], score)
+                self._last_high = self._frame
         return score
 
 
@@ -126,17 +146,18 @@ def wake_loop(
     long: bool,
     record: Record | None,
     playback_threshold: float,
-) -> tuple[list[float], list[float]]:
+) -> tuple[list[float], list[float], list[float]]:
     """호출어로 턴을 연다. 끼어들기마다 감지 → 멈춤(ms)을, 끝까지 읽은 대답마다 재생 중
-    호출어 최고 점수를 모아 돌려준다."""
+    호출어 최고 점수를, 재생 중 임계값을 못 넘은 높은 점수를 모아 돌려준다."""
     barge = BargeIn(tts)
-    peak = PlaybackPeak()
+    peak = PlaybackPeak(playback_threshold)
     detector = WakeWordDetector(
         mic, on_detect=barge.on_detect, playback_threshold=playback_threshold, scorer=peak
     )
     detector.start()
     stops: list[float] = []
     peaks: list[float] = []
+    missed: list[float] = []
     trigger = "WAKEWORD"
     print(
         f"\n호출어({config.WAKEWORD_MODEL}, 임계값 {detector.threshold}, 재생 중 "
@@ -167,6 +188,12 @@ def wake_loop(
                 if not tts.last_interrupted:
                     peaks.append(peak.peak)
                     print(f"  재생 중 호출어 최고 점수 {peak.peak:.3f}")
+                if peak.missed:
+                    missed += peak.missed
+                    print(
+                        "  재생 중 임계값 못 넘은 점수 "
+                        + ", ".join(f"{s:.3f}" for s in peak.missed)
+                    )
             # 대답을 읽다 끊겼으면 끊은 호출이 큐에 있고, 그게 다음 턴이 된다.
             # 끝까지 읽었으면 질문하는 동안 다시 잡힌 호출어 같은 지난 감지는 버린다.
             trigger = "BARGE_IN" if result and tts.last_interrupted else "WAKEWORD"
@@ -176,7 +203,7 @@ def wake_loop(
         pass
     finally:
         detector.stop()
-    return stops, peaks
+    return stops, peaks, missed
 
 
 def recorder(url: str, tts: TextToSpeech, stt: SpeechToText) -> Record:
@@ -229,12 +256,13 @@ def main() -> None:
     turns: list[dict[str, float]] = []
     stops: list[float] = []
     peaks: list[float] = []
+    missed: list[float] = []
     tts = TextToSpeech(device=args.speaker)
     if args.wake:
         with MicStream(args.mic) as mic:
             stt = SpeechToText(mic=mic)
             record = recorder(args.db, tts, stt) if args.db else None
-            stops, peaks = wake_loop(
+            stops, peaks, missed = wake_loop(
                 stt, tts, mic, turns, args.long, record, args.playback_threshold
             )
     else:
@@ -250,6 +278,11 @@ def main() -> None:
         print(f"끼어들기 {len(stops)}회, 감지 → 멈춤 중앙값 {statistics.median(stops):.0f}ms")
     if peaks:
         print(f"끝까지 읽은 대답 {len(peaks)}개, 재생 중 호출어 최고 점수 {max(peaks):.3f}")
+    if missed:
+        print(
+            f"재생 중 임계값 못 넘은 높은 점수 {len(missed)}번: "
+            + ", ".join(f"{s:.3f}" for s in missed)
+        )
 
 
 if __name__ == "__main__":
