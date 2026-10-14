@@ -17,7 +17,11 @@
 엔진:
     easyocr       지금 파이프라인 그대로 (EasyOCR 한국어+영어)
     easyocr-pre   흑백 → 대비 보정(CLAHE) → 샤프닝 후 EasyOCR
-    paddle        PaddleOCR 한국어 모델 (pip install paddlepaddle paddleocr 필요)
+    paddle        PaddleOCR 한국어 모델. torch 와 섞이지 않게 venv 를 따로 만들어 돌린다
+                    py -3.12 -m venv .venv-paddle
+                    .venv-paddle\Scripts\pip install paddlepaddle paddleocr
+                    $env:PYTHONPATH="src"
+                    .venv-paddle\Scripts\python scripts\ocr_eval\evaluate.py --engines paddle
 
 지표 (사진마다 내고 엔진별로 모은다):
     CER          문자 오류율 = 편집 거리 ÷ 정답 글자 수. 낮을수록 좋다. 공백은 빼고 센다
@@ -141,11 +145,14 @@ class PaddleReader:
         from paddleocr import PaddleOCR
 
         try:  # 3.x
+            # enable_mkldnn=False: paddle 3.3 윈도우 CPU 에서 oneDNN 을 켜면 추론 때
+            # "ConvertPirAttribute2RuntimeAttribute not support" 로 멈춘다.
             self._ocr = PaddleOCR(
                 lang="korean",
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
                 use_textline_orientation=False,
+                enable_mkldnn=False,
             )
             self._v3 = True
         except (TypeError, ValueError):  # 2.x 는 위 인자를 모른다
@@ -225,9 +232,13 @@ def score(pred_text: str, label: Label, synonyms: dict[str, list[str]]) -> dict:
     gt_sec, pr_sec = split_sections(_normalize(label.text)), split_sections(pred_text)
     gt_all = label.allergens or set(find_allergens(sections_text(gt_sec), synonyms))
     pr_all = set(find_allergens(sections_text(pr_sec), synonyms))
+    # OCR 이 정답 글자를 그대로 읽었을 때 찾는 알레르겐. 이보다 못 찾은 만큼이 OCR 탓이고,
+    # 여기서도 못 찾는 것은 구간 분리·사전(파서) 탓이다.
+    ceil_all = set(find_allergens(sections_text(gt_sec), synonyms))
     return {
         "cer": cer(pred_text, label.text),
         "gt_allergens": len(gt_all),
+        "ceil_allergens": len(gt_all & ceil_all),
         "hit_allergens": len(gt_all & pr_all),
         "pred_allergens": len(pr_all),
         "missed": ",".join(sorted(gt_all - pr_all)),
@@ -242,10 +253,12 @@ def summarize(rows: list[dict]) -> dict:
     gt = sum(r["gt_allergens"] for r in rows)
     pred = sum(r["pred_allergens"] for r in rows)
     hit = sum(r["hit_allergens"] for r in rows)
+    ceil = sum(r["ceil_allergens"] for r in rows)
     return {
         "images": len(rows),
         "cer_mean": statistics.mean(r["cer"] for r in rows),
         "allergen_recall": hit / gt if gt else float("nan"),
+        "allergen_recall_ceiling": ceil / gt if gt else float("nan"),
         "allergen_precision": hit / pred if pred else float("nan"),
         "header_ok": sum(r["header_ok"] for r in rows) / len(rows),
         "cross_ok": sum(r["cross_ok"] for r in rows) / len(rows),
@@ -343,7 +356,9 @@ def main() -> None:
                   f" · 신뢰도 {row['conf']:.2f} · {ms:.0f}ms")  # fmt: skip
 
     summary = [{"engine": n, **summarize([r for r in rows if r["engine"] == n])} for n in names]
+    ceiling = fmt(summary[0]["allergen_recall_ceiling"], True)
     print(f"\n=== 요약 (사진 {len(cases)}장, 배율 {args.scale})")
+    print(f"알레르겐 재현율 상한 {ceiling} — OCR 이 정답 글자를 그대로 읽어도 파서가 찾는 비율")
     print(f"{'엔진':<12} {'CER':>6} {'알레르겐재현':>8} {'정밀':>6} {'머리말':>6} {'혼입문장':>6} "
           f"{'신뢰도':>6} {'판독ms':>7}")  # fmt: skip
     for s in summary:
