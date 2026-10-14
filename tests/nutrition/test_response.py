@@ -70,7 +70,8 @@ def test_함유와_혼입_가능을_같이_말한다():
 def test_혼입_가능():
     msg = build_message(J(V.MAY_CONTAIN, may_contain_allergens=["땅콩", "호두"]))
     assert "땅콩, 호두를 쓰는 시설" in msg
-    assert msg.startswith("원재료에는 등록하신 알레르기 성분이 없어요.")
+    assert msg.startswith("원재료에서는 등록하신 알레르기 성분을 찾지 못했어요.")
+    assert "없어요" not in msg  # 없다고 단정하지 않는다
 
 
 def test_미검출은_안전하다고_하지_않는다():

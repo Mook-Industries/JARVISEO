@@ -15,11 +15,22 @@ from __future__ import annotations
 
 from jarviseo.types import AllergenJudgement, AllergenVerdict
 
-__all__ = ["RETAKE_CLOSER", "RETAKE_WHOLE", "build_message", "josa"]
+__all__ = [
+    "RETAKE_CLOSER",
+    "RETAKE_GLARE",
+    "RETAKE_STEADY",
+    "RETAKE_WHOLE",
+    "build_message",
+    "josa",
+]
 
 # 재처리 후에도 판독이 안 될 때 다시 비춰 달라고 하는 안내 (기획 05-workflow 5.4)
 RETAKE_CLOSER = "성분표를 더 가까이 가리켜 주세요."
 RETAKE_WHOLE = "성분표 전체가 보이도록 가리켜 주세요."
+# OCR 전 품질 검사에서 걸렸을 때 (nutrition/quality.py). 반사는 보정으로 못 살려서
+# 촬영 방법을 바꿔 달라고 한다 (멘토 피드백 2026-10-14).
+RETAKE_STEADY = "성분표를 가까이, 흔들리지 않게 다시 보여 주세요."
+RETAKE_GLARE = "빛이 반사되지 않게 포장을 조금 돌려서 다시 보여 주세요."
 
 # 근거 표기는 이만큼만 읽는다. 길면 듣다가 놓친다.
 _MAX_TERMS = 3
@@ -33,6 +44,8 @@ _UNDETERMINED = {
     "unreadable": f"성분표 글자를 정확히 읽지 못했어요. {_CHECK_PACKAGE}",
     "no_ingredients": "원재료명을 찾지 못했어요. 성분표 전체가 보이게 비춰 주세요.",
     "opaque_ingredient": f"성분을 알 수 없는 원료가 들어 있어 확인할 수 없어요. {_CHECK_PACKAGE}",
+    "blurry": f"사진이 흐려서 성분표를 읽지 못했어요. {_CHECK_PACKAGE}",
+    "glare": f"빛이 반사돼서 성분표를 읽지 못했어요. {_CHECK_PACKAGE}",
 }
 _UNDETERMINED_DEFAULT = f"성분을 확인하지 못했어요. {_CHECK_PACKAGE}"
 
@@ -81,17 +94,19 @@ def build_message(j: AllergenJudgement, product_name: str = "") -> str:
             parts.append(f"{josa(may, '은/는')} 같은 시설에서 써서 섞여 들어갔을 수 있어요.")
         return " ".join(parts)
 
+    # 미검출은 "읽힌 범위에서 그 표기를 찾지 못했다"는 뜻일 뿐이다. 없다고 단정하지 않는다.
+    # 라벨이 바뀌었거나 잘못 읽었을 수 있어서 포장 표기를 직접 보라고 덧붙인다 (멘토 피드백).
     if j.verdict is AllergenVerdict.MAY_CONTAIN:
         may = ", ".join(j.may_contain_allergens)
         return (
-            f"{where}원재료에는 등록하신 알레르기 성분이 없어요. "
+            f"{where}원재료에서는 등록하신 알레르기 성분을 찾지 못했어요. "
             f"다만 {josa(may, '을/를')} 쓰는 시설에서 만들어 섞여 들어갔을 수 있어요."
         )
 
     if j.verdict is AllergenVerdict.NOT_DETECTED:
         return (
-            "확인한 성분표에서 등록하신 알레르기 성분을 찾지 못했어요. "
-            "포장지 표시도 함께 확인해 주세요."
+            "읽은 성분표에서는 등록하신 알레르기 성분을 찾지 못했어요. "
+            "표시가 바뀌었거나 잘못 읽었을 수 있으니 포장지를 직접 확인해 주세요."
         )
 
     return _UNDETERMINED.get(j.reason, _UNDETERMINED_DEFAULT)

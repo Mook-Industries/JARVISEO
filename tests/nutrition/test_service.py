@@ -3,13 +3,15 @@
 실행: pytest tests/test_nutrition_service.py
 """
 
+import cv2
 import numpy as np
 import pytest
 
 from jarviseo.memory.store import MemoryStore
 from jarviseo.nutrition import service
 from jarviseo.nutrition.barcode import BarcodeLookup
-from jarviseo.nutrition.response import RETAKE_CLOSER, RETAKE_WHOLE
+from jarviseo.nutrition.quality import ImageQuality
+from jarviseo.nutrition.response import RETAKE_CLOSER, RETAKE_GLARE, RETAKE_STEADY, RETAKE_WHOLE
 from jarviseo.nutrition.service import IngredientChecker
 from jarviseo.types import AllergenVerdict as V
 from jarviseo.types import BarcodeRead, IngredientSource, ProductInfo
@@ -43,6 +45,8 @@ def miss(code: str | None = None, reason: str = "no_barcode"):
 
 
 def checker(reader, **kw) -> IngredientChecker:
+    # CROP 은 단색이라 품질 검사에 걸린다. 품질 검사는 아래에서 따로 본다.
+    kw.setdefault("quality_check", None)
     return IngredientChecker(reader=reader, conf_threshold=0.8, **kw)
 
 
@@ -147,3 +151,67 @@ def test_판독이_불확실하면_캐시하지_않는다(monkeypatch, store):
     monkeypatch.setattr(service, "lookup_product", miss(CODE, "not_found"))
     checker(FakeReader((LABEL, 0.4)), store=store).check(CROP, ["우유"])
     assert store.get_product(CODE) is None
+
+
+# --- OCR 전 품질 검사 ----------------------------------------------------------
+
+
+def text_image() -> np.ndarray:
+    img = np.full((240, 600, 3), 235, np.uint8)
+    for i in range(8):
+        cv2.putText(img, "Ingredients: wheat flour, sugar, milk, soy", (10, 30 + i * 28),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (30, 30, 30), 1, cv2.LINE_AA)  # fmt: skip
+    return img
+
+
+def bad(reason: str):
+    return lambda image: ImageQuality(sharpness=1.0, edge=1.0, glare=0.0, reason=reason)
+
+
+def test_흐린_사진은_ocr_없이_재촬영을_안내한다(monkeypatch):
+    monkeypatch.setattr(service, "lookup_product", miss())
+    reader = FakeReader((LABEL, 0.9))
+    r = checker(reader, quality_check=bad("blurry")).check(CROP, ["땅콩"])
+    assert reader.calls == 0  # 30초짜리 OCR 을 돌리지 않는다
+    assert r.retake == RETAKE_STEADY and r.message == RETAKE_STEADY
+    assert r.judgement.verdict is V.UNDETERMINED and r.judgement.reason == "blurry"
+    assert "quality" in r.timings_ms and "ocr" not in r.timings_ms
+
+
+def test_반사가_심하면_포장을_돌려_달라고_한다(monkeypatch):
+    monkeypatch.setattr(service, "lookup_product", miss())
+    r = checker(FakeReader((LABEL, 0.9)), quality_check=bad("glare")).check(CROP, ["땅콩"])
+    assert r.retake == RETAKE_GLARE
+
+
+def test_재촬영_상한을_넘으면_확인_불가로_끝낸다(monkeypatch):
+    monkeypatch.setattr(service, "lookup_product", miss())
+    r = checker(FakeReader((LABEL, 0.9)), quality_check=bad("blurry")).check(
+        CROP, ["땅콩"], retake_count=2
+    )
+    assert r.retake is None
+    assert r.judgement.verdict is V.UNDETERMINED
+    assert "흐려서" in r.message and "포장지" in r.message
+
+
+def test_바코드로_찾으면_품질이_나빠도_판정한다(monkeypatch):
+    info = ProductInfo(barcode=CODE, product_name="쿠키", raw_ingredients="밀가루, 버터")
+    monkeypatch.setattr(
+        service, "lookup_product", lambda image, store=None, client=None: BarcodeLookup(None, info)
+    )
+    r = checker(FakeReader((LABEL, 0.9)), quality_check=bad("blurry")).check(CROP, ["우유"])
+    assert r.judgement.verdict is V.CONTAINS and r.quality is None
+
+
+def test_여러_프레임이면_가장_선명한_것으로_확인한다(monkeypatch):
+    seen = []
+
+    def lookup(image, store=None, client=None):
+        seen.append(image)
+        return BarcodeLookup(None, None, reason="no_barcode")
+
+    monkeypatch.setattr(service, "lookup_product", lookup)
+    sharp = text_image()
+    frames = [cv2.GaussianBlur(sharp, (0, 0), 3), sharp, cv2.GaussianBlur(sharp, (0, 0), 1.5)]
+    checker(FakeReader((LABEL, 0.9))).check_frames(frames, ["땅콩"])
+    assert seen[0] is sharp
