@@ -37,18 +37,30 @@ __all__ = [
 _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
-def _open_capture(index_or_path: int | str) -> cv2.VideoCapture:
-    """OS 별로 다른 카메라 백엔드를 골라서 연다.
+def _open_camera(index: int, width: int, height: int, fps: int | None = None) -> cv2.VideoCapture:
+    """OS 별로 다른 카메라 백엔드를 골라서 해상도를 맞춰 연다.
 
     윈도우에서 기본 백엔드로 열면 카메라가 잡히기까지 몇 초씩 걸리거나
     해상도 설정이 먹지 않는다. CAP_DSHOW(DirectShow)를 명시해야 한다.
     맥/리눅스에는 CAP_DSHOW 가 없으므로 기본값을 쓴다.
 
+    DirectShow 는 연 뒤에 cap.set() 으로 해상도를 바꾸면 압축하지 않은 YUY2 로 받는다.
+    USB 2.0 대역폭이 모자라 팀 카메라(PC Camera)는 1920x1080 이 초당 2.5장,
+    1280x720 도 5장뿐이다. MJPG 와 해상도를 여는 순간에 같이 넘겨야 30장이 나온다.
+    연 뒤에 다시 set() 하면 YUY2 로 돌아가므로 윈도우에서는 set() 을 부르지 않는다.
+
     OS 분기는 반드시 이 파일 안에서만 한다. 크로스 플랫폼 규칙.
     """
-    if sys.platform == "win32" and isinstance(index_or_path, int):
-        return cv2.VideoCapture(index_or_path, cv2.CAP_DSHOW)
-    return cv2.VideoCapture(index_or_path)
+    props = [cv2.CAP_PROP_FRAME_WIDTH, width, cv2.CAP_PROP_FRAME_HEIGHT, height]
+    if fps is not None:
+        props += [cv2.CAP_PROP_FPS, fps]
+    if sys.platform == "win32":
+        mjpg = cv2.VideoWriter_fourcc(*"MJPG")
+        return cv2.VideoCapture(index, cv2.CAP_DSHOW, [cv2.CAP_PROP_FOURCC, mjpg, *props])
+    cap = cv2.VideoCapture(index)
+    for prop, value in zip(props[::2], props[1::2], strict=True):
+        cap.set(prop, value)
+    return cap
 
 
 class FrameSource(ABC):
@@ -93,14 +105,12 @@ class WebcamSource(FrameSource):
 
     def __init__(self, index: int = 0, width: int = 1280, height: int = 720) -> None:
         self.source_id = f"webcam:{index}"
-        self._cap = _open_capture(index)
+        self._cap = _open_camera(index, width, height)
         if not self._cap.isOpened():
             raise RuntimeError(
                 f"웹캠 {index} 번을 열지 못했습니다. "
                 "맥이라면 시스템 설정 > 개인정보 보호 > 카메라 권한을 확인하세요."
             )
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
 
     def read(self) -> Frame | None:
         ok, image = self._cap.read()
@@ -124,15 +134,12 @@ class USBCamSource(FrameSource):
         self, index: int = 0, width: int = 1920, height: int = 1080, fps: int = 30
     ) -> None:
         self.source_id = f"usbcam:{index}"
-        self._cap = _open_capture(index)
+        self._cap = _open_camera(index, width, height, fps)
         if not self._cap.isOpened():
             raise RuntimeError(
                 f"USB 카메라 {index} 번을 열지 못했습니다. "
                 "맥북은 USB-A 포트가 없으므로 허브 연결을 먼저 확인하세요."
             )
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self._cap.set(cv2.CAP_PROP_FPS, fps)
 
     def read(self) -> Frame | None:
         ok, image = self._cap.read()
@@ -158,7 +165,7 @@ class VideoFileSource(FrameSource):
             raise FileNotFoundError(f"영상 파일이 없습니다: {self.path}")
         self.source_id = f"video:{self.path.name}"
         self.loop = loop
-        self._cap = _open_capture(str(self.path))
+        self._cap = cv2.VideoCapture(str(self.path))
         if not self._cap.isOpened():
             raise RuntimeError(f"영상을 열지 못했습니다: {self.path}")
 
