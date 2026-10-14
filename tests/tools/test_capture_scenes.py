@@ -18,7 +18,7 @@ import pytest
 
 from jarviseo import config
 
-_TOOL_PATH = Path(__file__).resolve().parents[1] / "tools" / "capture_scenes.py"
+_TOOL_PATH = Path(__file__).resolve().parents[2] / "tools" / "capture_scenes.py"
 _spec = importlib.util.spec_from_file_location("capture_scenes", _TOOL_PATH)
 capture_scenes = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(capture_scenes)
