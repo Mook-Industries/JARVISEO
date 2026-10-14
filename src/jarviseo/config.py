@@ -118,6 +118,15 @@ OCR_CONF_THRESHOLD = _get_float("JARVISEO_OCR_CONF_THRESHOLD", 0.8)
 OCR_REPROCESS_PER_PHOTO = _get_int("JARVISEO_OCR_REPROCESS_PER_PHOTO", 1)
 OCR_MAX_RETAKE = _get_int("JARVISEO_OCR_MAX_RETAKE", 2)
 
+# OCR 전 사진 품질 검사 (nutrition/quality.py). 흐리거나 반사가 심하면 OCR 을 돌리지 않고
+# 다시 보여 달라고 한다. 평가 세트 21장으로 정한 임시값 — 실제 카메라 프레임으로 다시 맞춘다.
+#   선명도 비율: 한 번 더 흐리게 했을 때 경계가 줄어드는 비율. 원본 5.6~42, 흐린 사진 3 이하
+#   경계 세기: 라플라시안 분산. 원본 77 이상, 심하게 흐린 사진 15 이하
+#   반사: 하얗게 날아간 픽셀 비율. 대부분 0.03 이하, 반사가 심한 사진 0.21
+QUALITY_MIN_SHARPNESS = _get_float("JARVISEO_QUALITY_MIN_SHARPNESS", 4.0)
+QUALITY_MIN_EDGE = _get_float("JARVISEO_QUALITY_MIN_EDGE", 40.0)
+QUALITY_MAX_GLARE = _get_float("JARVISEO_QUALITY_MAX_GLARE", 0.15)
+
 # 동의어 사전("탈지분유" → "우유"). 판정 recall 이 이 파일 품질에 달려 있다.
 ALLERGEN_SYNONYMS_PATH = DATASETS_DIR / "allergen_synonyms.json"
 # 성분표 검출 YOLO 가중치. 학습 전에는 파일이 없고, 그때는 크롭 전체를 OCR 한다.

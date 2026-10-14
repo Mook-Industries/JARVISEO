@@ -5,6 +5,8 @@
 
 재처리·재촬영 (기획 05-workflow 5.4, 2026-10-02 반영)
 ------------------------------------------------------
+0. OCR 전에 사진 품질을 본다(quality.py). 흐리거나 반사가 심하면 OCR 을 돌리지 않고
+   바로 재촬영을 안내한다. 무리하게 읽어서 '못 읽은 것'을 미검출로 말하지 않기 위해서다.
 1. OCR 결과가 검증(신뢰도 기준 + "원재료명" 머리말)을 통과하지 못하면
    같은 사진을 대비 보정·더 크게 확대해서 한 번 더 읽는다 (사진당 1회).
 2. 그래도 실패하면 재촬영 안내를 돌려준다. 호출한 쪽이 새 사진을 찍어
@@ -16,6 +18,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import cv2
@@ -34,7 +37,14 @@ from jarviseo.nutrition.ocr import (
     read_panel,
     split_sections,
 )
-from jarviseo.nutrition.response import RETAKE_CLOSER, RETAKE_WHOLE, build_message
+from jarviseo.nutrition.quality import ImageQuality, assess_quality, best_frame
+from jarviseo.nutrition.response import (
+    RETAKE_CLOSER,
+    RETAKE_GLARE,
+    RETAKE_STEADY,
+    RETAKE_WHOLE,
+    build_message,
+)
 from jarviseo.types import (
     AllergenJudgement,
     AllergenVerdict,
@@ -61,7 +71,8 @@ class IngredientCheck:
     ocr_conf: float | None = None
     reprocessed: bool = False
     retake_count: int = 0
-    timings_ms: dict[str, int] = field(default_factory=dict)  # barcode / ocr / match
+    timings_ms: dict[str, int] = field(default_factory=dict)  # barcode / quality / ocr / match
+    quality: ImageQuality | None = None  # OCR 전 품질 검사 결과 (바코드로 찾으면 None)
 
 
 @dataclass
@@ -90,6 +101,7 @@ class IngredientChecker:
         client: ``MfdsClient``. 없으면 식품안전나라를 부르지 않는다(오프라인·테스트).
         synonyms: 동의어 사전. 없으면 ``config.ALLERGEN_SYNONYMS_PATH`` 에서 읽는다.
         reader: OCR 엔진. 없으면 EasyOCR. 테스트에서 가짜를 끼운다.
+        quality_check: OCR 전 품질 검사. None 이면 검사하지 않는다(테스트용 단색 이미지 등).
     """
 
     def __init__(
@@ -101,11 +113,13 @@ class IngredientChecker:
         conf_threshold: float = config.OCR_CONF_THRESHOLD,
         max_reprocess: int = config.OCR_REPROCESS_PER_PHOTO,
         max_retake: int = config.OCR_MAX_RETAKE,
+        quality_check: Callable[[np.ndarray], ImageQuality] | None = assess_quality,
     ) -> None:
         self.store = store
         self.client = client
         self.synonyms = synonyms or load_synonyms(config.ALLERGEN_SYNONYMS_PATH)
         self.reader = reader
+        self.quality_check = quality_check
         self.conf_threshold = conf_threshold
         self.max_reprocess = max_reprocess
         self.max_retake = max_retake
@@ -136,6 +150,17 @@ class IngredientChecker:
         if lookup.hit:
             return self._from_product(lookup, user_allergens, timings)
         return self._from_ocr(crop, lookup, user_allergens, retake_count, product_name, timings)
+
+    def check_frames(
+        self,
+        frames: list[np.ndarray],
+        user_allergens: list[str],
+        retake_count: int = 0,
+        product_name: str = "",
+    ) -> IngredientCheck:
+        """여러 프레임 중 흔들림·반사가 가장 적은 한 장으로 확인한다."""
+        i, _ = best_frame(frames)
+        return self.check(frames[i], user_allergens, retake_count, product_name)
 
     # -- 바코드로 찾은 경우 ------------------------------------------------
 
@@ -175,6 +200,14 @@ class IngredientChecker:
         product_name: str,
         timings: dict[str, int],
     ) -> IngredientCheck:
+        quality = None
+        if self.quality_check is not None:
+            t0 = time.perf_counter()
+            quality = self.quality_check(crop)
+            timings["quality"] = _ms(t0)
+            if not quality.ok:
+                return self._poor_photo(quality, lookup, user_allergens, retake_count, timings)
+
         t0 = time.perf_counter()
         best = self._read(crop, scale=2.0)
         reprocessed = False
@@ -223,6 +256,7 @@ class IngredientChecker:
             reprocessed=reprocessed,
             retake_count=retake_count,
             timings_ms=timings,
+            quality=quality,
         )
 
         needs_retake = (
@@ -243,6 +277,35 @@ class IngredientChecker:
             self.store.save_product(
                 judgement.product, status="pending", ingredients=result.ingredients
             )
+        return result
+
+    def _poor_photo(
+        self,
+        quality: ImageQuality,
+        lookup: BarcodeLookup,
+        user_allergens: list[str],
+        retake_count: int,
+        timings: dict[str, int],
+    ) -> IngredientCheck:
+        """흐리거나 반사가 심한 사진. OCR 없이 재촬영을 안내하고, 상한을 넘으면 확인 불가."""
+        judgement = judge_allergens(
+            user_allergens, self.synonyms, readable=False, reason=quality.reason
+        )
+        judgement.source = IngredientSource.OCR
+        result = IngredientCheck(
+            judgement=judgement,
+            message="",
+            barcode=lookup,
+            retake_count=retake_count,
+            timings_ms=timings,
+            quality=quality,
+        )
+        if judgement.reason == quality.reason and retake_count < self.max_retake:
+            result.retake = RETAKE_GLARE if quality.reason == "glare" else RETAKE_STEADY
+            result.message = result.retake
+            return result
+        judgement.response_text = build_message(judgement)
+        result.message = judgement.response_text
         return result
 
 
