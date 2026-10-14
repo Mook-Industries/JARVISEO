@@ -84,6 +84,15 @@ class BargeIn:
             self.gate.reopen(wake.t - config.WAKE_LOOKBACK_SEC)
         return wake
 
+    def called_since(self, t: float) -> bool:
+        """t(monotonic) 뒤에 들린 호출이 쌓여 있으면 True. 꺼내지 않고 보기만 한다.
+
+        답을 기다리는 동안 다시 불렀는지 볼 때 쓴다(``ResponseCollector``). 그러면 늦게 온
+        답은 버리고, 쌓인 호출은 다음 ``wait()`` 이 꺼내 새 질문을 받는다.
+        """
+        with self._wakes.mutex:
+            return any(wake.t > t for wake in self._wakes.queue)
+
     def clear(self) -> None:
         """쌓인 호출을 버린다. 답을 끝까지 읽은 뒤 부른다.
 

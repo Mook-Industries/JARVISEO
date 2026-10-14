@@ -311,3 +311,15 @@ def test_관찰_기록에_임베딩이_남는다(store: MemoryStore):
         db.delete(db.get(User, user_id))
     with store.session() as db:
         assert db.query(Observation).count() == 0
+
+
+def test_잠깐만요를_먼저_읽은_턴은_필러로_남는다(store: MemoryStore):
+    session_id = store.start_session(store.ensure_user())
+    utterance, response = _sample_response()
+
+    late = store.log_turn(session_id, utterance, response, filler_sent=True)
+    quick = store.log_turn(session_id, utterance, response)
+
+    with store.session() as db:
+        assert db.get(TurnVoice, late).is_filler_sent is True
+        assert db.get(TurnVoice, quick).is_filler_sent is False

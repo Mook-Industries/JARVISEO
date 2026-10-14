@@ -317,6 +317,7 @@ class MemoryStore:
         detector_version: str | None = None,
         stt_raw_text: str | None = None,
         interrupted: bool = False,
+        filler_sent: bool = False,
     ) -> int:
         """대화 한 번을 기록하고 turn_id 를 반환한다.
 
@@ -332,6 +333,7 @@ class MemoryStore:
         답을 다 읽거나 끊긴 뒤에 부른다. interrupted 는 읽던 답이 끼어들기로 끊겼는지
         (``TextToSpeech.last_interrupted``)이고, 끼어들어 시작한 다음 턴은
         trigger_type="BARGE_IN" 으로 남긴다.
+        filler_sent 는 답이 늦어 "잠깐만요"를 먼저 읽었는지(``ResponseCollector.filler_sent``)다.
         말 시작·끝 시각은 utterance 의 monotonic 시각을 실제 시각(UTC)으로 바꿔 적는다.
         """
         with self.session() as db:
@@ -351,6 +353,7 @@ class MemoryStore:
                 speech_ended_at=_wall_clock(utterance.ended_at),
                 stt_raw_text=stt_raw_text or utterance.text,
                 is_interrupted=interrupted,
+                is_filler_sent=filler_sent,
             )
             inference = TurnInference(
                 turn_id=turn.turn_id,

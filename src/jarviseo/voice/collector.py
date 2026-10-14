@@ -1,0 +1,85 @@
+"""Response Collector — 답을 기다리는 동안의 처리.  담당: 문태현
+
+VLM 답이 ``config.FILLER_AFTER_SEC``(1.5초) 안에 안 오면 "잠깐만요"를 먼저 읽는다.
+안경에는 화면이 없어서, 아무 소리가 없으면 사용자는 못 들은 줄 알고 다시 부른다.
+
+기다리는 동안 사용자가 다시 "자비서"라고 부르면 지금 기다리던 답은 버린다.
+새 질문을 하려는 것이라, 늦게 온 옛 답을 읽으면 엉뚱한 대답이 된다.
+
+    collector = ResponseCollector(tts, called_since=barge.called_since)
+    answer = collector.collect(lambda: vlm.ask(frame, question))
+    collector.filler_sent   # "잠깐만요"를 읽었는지 (turn_voice.is_filler_sent)
+    collector.dropped       # 다시 불러서 답을 버렸는지 (그러면 answer 는 None)
+"""
+
+from __future__ import annotations
+
+import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING
+
+from jarviseo import config
+
+if TYPE_CHECKING:
+    from jarviseo.voice.fake import FakeTextToSpeech
+    from jarviseo.voice.tts import TextToSpeech
+
+__all__ = ["FILLER", "ResponseCollector"]
+
+FILLER = "잠깐만요."
+# 답이 왔는지, 다시 불렀는지 이만큼마다 본다.
+POLL_SEC = 0.05
+
+
+class ResponseCollector:
+    """답을 다른 스레드에서 받아 오고, 늦으면 "잠깐만요"를 먼저 읽는다."""
+
+    def __init__(
+        self,
+        tts: TextToSpeech | FakeTextToSpeech,
+        called_since: Callable[[float], bool] | None = None,
+        after_sec: float = config.FILLER_AFTER_SEC,
+        filler: str = FILLER,
+    ) -> None:
+        """called_since(t) 는 t 뒤에 다시 불렀으면 True 를 주는 함수다(``BargeIn.called_since``).
+
+        filler 는 여기서 한 번 미리 합성해 둔다. 합성이 실패하면 필러 없이 기다리기만 한다.
+        """
+        self.tts = tts
+        self.called_since = called_since or (lambda t: False)
+        self.after_sec = after_sec
+        self._filler = tts.prepare(filler)
+        # 버린 답의 요청은 끝까지 돌게 둔다. 일꾼이 하나면 그게 끝날 때까지 다음 질문이 막힌다.
+        self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="answer")
+        # 마지막 collect() 의 결과
+        self.filler_sent = False
+        self.dropped = False
+
+    def collect(self, ask: Callable[[], str | None]) -> str | None:
+        """ask() 를 다른 스레드에서 부르고 그 답을 돌려준다.
+
+        기다리는 동안 다시 불렸으면 답을 기다리지 않고 None 을 돌려주고 ``dropped`` 가 True 다.
+        """
+        self.filler_sent = self.dropped = False
+        started = time.monotonic()
+        future = self._pool.submit(ask)
+        while not future.done():
+            if self.called_since(started):
+                self.dropped = True
+                return None
+            waited = time.monotonic() - started
+            if not self.filler_sent and self._filler and waited >= self.after_sec:
+                # 읽는 동안에도 답은 다른 스레드에서 계속 온다. 다시 부르면 여기서 바로 끊긴다.
+                self.tts.play(self._filler)
+                self.filler_sent = True
+                continue
+            time.sleep(POLL_SEC)
+        if self.called_since(started):
+            self.dropped = True
+            return None
+        return future.result()
+
+    def close(self) -> None:
+        """받아 오던 답을 기다려 마치고 닫는다. 프로그램을 끝낼 때 부른다."""
+        self._pool.shutdown(wait=True)

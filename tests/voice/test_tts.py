@@ -11,7 +11,7 @@ import httpx2
 import pytest
 
 from jarviseo import config
-from jarviseo.voice.tts import CHUNK_BYTES, TextToSpeech
+from jarviseo.voice.tts import CHUNK_BYTES, SAMPLE_RATE, TRIM_PAD_SEC, TextToSpeech
 from jarviseo.voice.tts_text import normalize, split_sentences
 
 
@@ -174,3 +174,46 @@ def test_문장_끝과_줄바꿈에서_자르고_소수점은_안_자른다():
         "네",
     ]
     assert split_sentences("") == []
+
+
+def test_prepare_는_끝까지_합성해_두고_play_가_그대로_재생한다(played):
+    tts = TextToSpeech(client=FakeClient())
+
+    pcm = tts.prepare("잠깐만요.")
+    assert pcm == b"\x01" * CHUNK_BYTES + b"\x02" * CHUNK_BYTES
+    assert played == []  # 만들어 두기만 하고 소리는 안 냈다
+
+    tts.play(pcm)
+    assert b"".join(played) == pcm
+    assert tts.last_interrupted is False
+
+
+def test_미리_합성이_실패하면_빈_바이트이고_play_는_소리를_안_낸다(played):
+    def dead(size):
+        raise httpx2.ReadTimeout("끊김")
+        yield
+
+    tts = TextToSpeech(client=FakeClient(dead))
+
+    assert tts.prepare("잠깐만요.") == b""
+    tts.play(b"")
+    assert played == []
+
+
+def test_prepare_는_앞뒤_무음을_잘라_둔다(played):
+    quiet = bytes(SAMPLE_RATE * 2)  # 1초 무음
+    voice = (3000).to_bytes(2, "little", signed=True) * (SAMPLE_RATE // 2)  # 0.5초 말소리
+
+    def padded(size):
+        yield quiet
+        yield voice
+        yield quiet
+
+    def silent(size):
+        yield quiet
+
+    pcm = TextToSpeech(client=FakeClient(padded)).prepare("잠깐만요.")
+
+    # 말소리와 앞뒤 여유만 남는다. 무음 2초를 다 읽으면 대답이 그만큼 늦는다
+    assert len(pcm) // 2 == SAMPLE_RATE // 2 + 2 * round(TRIM_PAD_SEC * SAMPLE_RATE)
+    assert TextToSpeech(client=FakeClient(silent)).prepare("잠깐만요.") == b""
