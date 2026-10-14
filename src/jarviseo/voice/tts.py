@@ -11,13 +11,14 @@ import time
 from collections.abc import Iterator
 
 import httpx2
+import numpy as np
 from openai import OpenAI, OpenAIError
 
 from jarviseo import config
 from jarviseo.voice.speaker import SAMPLE_RATE, Speaker
 from jarviseo.voice.tts_text import normalize
 
-__all__ = ["SAMPLE_RATE", "TextToSpeech"]
+__all__ = ["SAMPLE_RATE", "TextToSpeech", "trim_silence"]
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +28,12 @@ CHUNK_BYTES = SAMPLE_RATE * 2 // 10  # 100ms 씩 받는다
 SPEEDS = {"SLOW": 0.85, "NORMAL": 1.0, "FAST": 1.2}
 # 한 번 기다리는 최대 시간(초)과 다시 보내는 횟수.
 TIMEOUT_SEC, RETRIES = 10.0, 1
+# 미리 만든 소리의 앞뒤 무음을 자를 때, 샘플 크기(16비트 절댓값)가 이 값 이하면 무음으로 본다.
+# "잠깐만요." 합성은 2.25~2.65초인데 말소리는 0.11~1.21초뿐이었다. 뒤 무음은 최대 7,
+# 말소리는 최대 1만쯤이다(10/14). 자르지 않으면 대답이 그 무음이 끝날 때까지 1초 넘게 기다린다.
+SILENCE_LEVEL = 100
+# 자른 뒤 앞뒤에 남기는 여유(초). 첫소리·끝소리가 뚝 끊겨 들리지 않게 한다.
+TRIM_PAD_SEC = 0.05
 
 
 class TextToSpeech:
@@ -84,9 +91,10 @@ class TextToSpeech:
 
         자주 읽는 짧은 말("잠깐만요")을 시작할 때 한 번 만들어 둔다. 그때그때 합성하면
         첫 소리까지 약 1초가 걸려서, 기다리는 사람에게 너무 늦게 나간다.
+        앞뒤 무음은 잘라 둔다(``trim_silence``). play() 는 무음까지 다 읽어야 돌아온다.
         """
         try:
-            return b"".join(self.synthesize(text))
+            return trim_silence(b"".join(self.synthesize(text)))
         except (OpenAIError, httpx2.HTTPError) as e:
             log.warning("미리 합성 실패: %s", e)
             return b""
@@ -127,3 +135,14 @@ class TextToSpeech:
                 if self.last_latency_ms is None:
                     self.last_latency_ms = (time.monotonic() - asked_at) * 1000
                 yield chunk
+
+
+def trim_silence(pcm: bytes) -> bytes:
+    """PCM(16비트 모노)의 앞뒤 무음을 자르고 TRIM_PAD_SEC 만큼만 남긴다. 전부 무음이면 빈 바이트."""
+    samples = np.frombuffer(pcm, np.int16)
+    loud = np.flatnonzero(np.abs(samples.astype(np.int32)) > SILENCE_LEVEL)
+    if loud.size == 0:
+        return b""
+    pad = round(TRIM_PAD_SEC * SAMPLE_RATE)
+    start, end = max(loud[0] - pad, 0), min(loud[-1] + 1 + pad, len(samples))
+    return samples[start:end].tobytes()
