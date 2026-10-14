@@ -79,6 +79,25 @@ class TextToSpeech:
         self.last_interrupted = self.speaker.interrupted
         return self.last_latency_ms
 
+    def prepare(self, text: str) -> bytes:
+        """text 를 미리 끝까지 합성해 PCM 을 통째로 돌려준다. 실패하면 빈 바이트.
+
+        자주 읽는 짧은 말("잠깐만요")을 시작할 때 한 번 만들어 둔다. 그때그때 합성하면
+        첫 소리까지 약 1초가 걸려서, 기다리는 사람에게 너무 늦게 나간다.
+        """
+        try:
+            return b"".join(self.synthesize(text))
+        except (OpenAIError, httpx2.HTTPError) as e:
+            log.warning("미리 합성 실패: %s", e)
+            return b""
+
+    def play(self, pcm: bytes) -> None:
+        """prepare() 로 만든 소리를 바로 재생한다. speak() 처럼 stop() 으로 끊긴다."""
+        self.last_interrupted = False
+        if pcm:
+            self.speaker.play([pcm])
+        self.last_interrupted = self.speaker.interrupted
+
     def stop(self) -> None:
         """읽던 것을 바로 멈춘다(끼어들기). 호출어 감지 스레드에서 부른다.
 
