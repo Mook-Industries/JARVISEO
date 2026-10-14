@@ -5,6 +5,6 @@
 그래서 질문 주제에 제한이 없다.
 """
 
-from jarviseo.vlm.client import VLMClient
+from jarviseo.vlm.client import FakeVLMClient, VLMClient
 
-__all__ = ["VLMClient"]
+__all__ = ["FakeVLMClient", "VLMClient"]
