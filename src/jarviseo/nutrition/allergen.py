@@ -27,6 +27,8 @@ from jarviseo.types import AllergenJudgement, AllergenVerdict, ProductInfo
 
 __all__ = [
     "KNOWN_ALLERGENS",
+    "NOT_ALLERGEN",
+    "Synonyms",
     "find_allergens",
     "judge_allergens",
     "judge_product",
@@ -58,6 +60,10 @@ KNOWN_ALLERGENS = [
     "잣",
 ]
 
+# 사전에서 "알레르겐 이름이 들어 있지만 알레르겐이 아닌 표기"를 적는 키.
+# 예: 로커스트콩검(콩과 식물의 씨앗에서 뽑은 증점제)은 '콩'을 포함하지만 대두가 아니다.
+NOT_ALLERGEN = "_제외"
+
 
 def normalize_term(text: str) -> str:
     """성분 표기를 비교 가능한 모양으로 맞춘다. 사전과 성분표 양쪽에 같은 함수를 쓴다.
@@ -69,11 +75,24 @@ def normalize_term(text: str) -> str:
     return "".join(unicodedata.normalize("NFC", text).split())
 
 
-def load_synonyms(path: Path) -> dict[str, list[str]]:
+class Synonyms(dict[str, list[str]]):
+    """표준명 → 표기 목록. 보통의 dict 와 같고, 알레르겐이 아닌 표기를 따로 들고 있다.
+
+    ``not_allergen`` 을 키로 넣지 않는 이유: 사전을 돌며 알레르겐을 세는 코드가
+    '_제외'를 알레르겐으로 착각하지 않게 하려고.
+    """
+
+    def __init__(self, *args, not_allergen: list[str] | None = None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.not_allergen: list[str] = list(not_allergen or [])
+
+
+def load_synonyms(path: Path) -> Synonyms:
     """동의어 사전을 읽는다.
 
     형태: {"우유": ["우유", "탈지분유", "전지분유", "카제인", "유청", ...]}
     ``_`` 로 시작하는 키(``_meta`` 등)는 메모용이라 건너뛴다.
+    단 ``_제외`` 는 알레르겐이 아닌 표기 목록으로 읽어 ``Synonyms.not_allergen`` 에 둔다.
 
     파일을 열 때 encoding="utf-8" 을 반드시 명시한다.
     윈도우 기본값은 cp949 라서 생략하면 팀원 노트북에서만 깨진다.
@@ -96,7 +115,14 @@ def load_synonyms(path: Path) -> dict[str, list[str]]:
     owner: dict[str, str] = {}  # 표기 → 처음 등록한 알레르겐 (중복 검사용)
     result: dict[str, list[str]] = {}
 
+    blockers: list[str] = []
+
     for key, aliases in raw.items():
+        if key == NOT_ALLERGEN:
+            if not isinstance(aliases, list) or not all(isinstance(a, str) for a in aliases):
+                raise ValueError(f"{path}: '{key}' 의 값은 문자열 배열이어야 합니다")
+            blockers = [t for t in dict.fromkeys(normalize_term(a) for a in aliases) if t]
+            continue
         if key.startswith("_"):
             continue
         name = normalize_term(key)
@@ -116,7 +142,12 @@ def load_synonyms(path: Path) -> dict[str, list[str]]:
             terms.append(term)
         result[name] = terms
 
-    return result
+    for term in blockers:
+        if term in owner:
+            raise ValueError(
+                f"{path}: '{term}' 이 '{NOT_ALLERGEN}' 와 '{owner[term]}' 에 중복됩니다"
+            )
+    return Synonyms(result, not_allergen=blockers)
 
 
 # 내용을 알 수 없는 원료 표기. 괄호로 내용이 적혀 있으면 그 안을 읽으면 되므로
@@ -137,14 +168,15 @@ def find_allergens(text: str, synonyms: dict[str, list[str]]) -> dict[str, list[
     긴 표기가 다른 알레르겐 것일 때 짧은 표기가 남아서 오탐이 난다.
 
     한 글자 표기(밀·게·굴·잣·콩)는 다른 낱말 속에서도 잡힐 수 있다(예: 굴비→굴).
-    재현율 우선이라 그대로 둔다. 과잉 경고 사례가 모이면 사전에서 긴 표기로 막는다.
+    재현율 우선이라 그대로 둔다. 과잉 경고 사례가 모이면 사전의 ``_제외`` 에 적어 막는다.
+    ``_제외`` 표기(예: 로커스트콩검)는 다른 표기처럼 자리를 먼저 차지하지만 결과에는 넣지 않는다.
     """
     compact = normalize_term(text)
     if not compact:
         return {}
-    terms = sorted(
-        ((t, a) for a, ts in synonyms.items() for t in ts), key=lambda x: len(x[0]), reverse=True
-    )
+    pairs = [(t, a) for a, ts in synonyms.items() for t in ts]
+    pairs += [(t, NOT_ALLERGEN) for t in getattr(synonyms, "not_allergen", [])]
+    terms = sorted(pairs, key=lambda x: len(x[0]), reverse=True)
     taken = [False] * len(compact)
     found: dict[str, list[str]] = {}
     for term, allergen in terms:
@@ -153,9 +185,10 @@ def find_allergens(text: str, synonyms: dict[str, list[str]]) -> dict[str, list[
             end = start + len(term)
             if not any(taken[start:end]):
                 taken[start:end] = [True] * len(term)
-                hits = found.setdefault(allergen, [])
-                if term not in hits:
-                    hits.append(term)
+                if allergen != NOT_ALLERGEN:
+                    hits = found.setdefault(allergen, [])
+                    if term not in hits:
+                        hits.append(term)
             start = compact.find(term, start + 1)
     return found
 

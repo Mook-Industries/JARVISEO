@@ -230,7 +230,11 @@ def score(pred_text: str, label: Label, synonyms: dict[str, list[str]]) -> dict:
     이때 OCR 쪽에서 '게'가 나오면 오탐(extra)으로 잡힌다. 실제 판정에서도 과잉 경고가 되는 경우다.
     """
     gt_sec, pr_sec = split_sections(_normalize(label.text)), split_sections(pred_text)
-    gt_all = label.allergens or set(find_allergens(sections_text(gt_sec), synonyms))
+    # '# allergens:' 에 '달걀'처럼 다른 표기로 적어도 표준명('알류')으로 맞춰 비교한다
+    canonical = {t: a for a, ts in synonyms.items() for t in ts}
+    gt_all = {canonical.get(a, a) for a in label.allergens or ()} or set(
+        find_allergens(sections_text(gt_sec), synonyms)
+    )
     pr_all = set(find_allergens(sections_text(pr_sec), synonyms))
     # OCR 이 정답 글자를 그대로 읽었을 때 찾는 알레르겐. 이보다 못 찾은 만큼이 OCR 탓이고,
     # 여기서도 못 찾는 것은 구간 분리·사전(파서) 탓이다.
