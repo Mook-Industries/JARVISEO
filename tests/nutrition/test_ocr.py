@@ -62,10 +62,12 @@ def test_알레르기_유발물질_머리말과_참고표시_구분():
     assert "소비기한" not in sec.ingredients
 
 
-def test_원재료명이_없으면_표시만_남긴다():
+def test_원재료명이_없으면_남은_글자를_보조로_둔다():
+    # 머리말이 없으면 판정은 '확인 불가'로 가지만(has_ingredient_header=False),
+    # 남은 글자에서 알레르겐을 찾으면 '함유' 경고는 해야 해서 버리지 않는다.
     sec = split_sections("설탕, 물엿, 젤라틴 영양정보")
     assert not sec.has_ingredient_header
-    assert sec.ingredients == ""
+    assert sec.ingredients == "설탕, 물엿, 젤라틴 영양정보"
 
 
 def test_마침표가_없어도_혼입_문장이_원재료를_삼키지_않는다():
@@ -300,3 +302,41 @@ def test_보관_안내에서_원재료가_끝난다():
     # "얼지 않게"의 '게'가 알레르겐(게)으로 잡히던 문제
     sec = split_sections("원재료명 정제수, 구연산. •직사광선을 피해 얼지 않게 보관")
     assert sec.ingredients == "정제수, 구연산"
+
+
+# --- 실제 PaddleOCR 출력에서 찾은 것 (검수한 정답으로 다시 채점, 2026-10-14) ---------
+
+
+def test_쉼표가_빠진_함유_표시도_이름만_모은다():
+    sec = split_sections("원재료명 간장분말, 건청경채 닭고기 쇠고기 함유")
+    assert split_terms(sec.allergen_notice) == ["닭고기", "쇠고기"]
+    assert "건청경채" in sec.ingredients
+
+
+def test_쉼표가_빠진_목록_중간에_쉼표가_섞여도_모은다():
+    sec = split_sections("원재료명 볶음참깨, 구운김 밀 대두 계란,우유,닭고기 쇠고기 함유")
+    assert split_terms(sec.allergen_notice) == ["밀", "대두", "계란", "우유", "닭고기", "쇠고기"]
+    assert "구운김" in sec.ingredients
+
+
+def test_머리말이_없어도_원재료_속_알레르겐은_남는다():
+    # 머리말이 잘린 라면 성분표. 예전엔 원재료 글자를 통째로 버려서 간장(대두)·계란을 놓쳤다
+    sec = split_sections("면/소맥분(밀:호주산), 간장분말, 계란스크램블 닭고기 쇠고기 함유")
+    assert not sec.has_ingredient_header
+    assert "간장분말" in sec.ingredients and "계란스크램블" in sec.ingredients
+    assert split_terms(sec.allergen_notice) == ["닭고기", "쇠고기"]
+
+
+def test_쉼표를_마침표로_읽어도_혼입_목록이_끊기지_않는다():
+    sec = split_sections(
+        "원재료명 정제수 품목보고번호 199102620031 ·대두,땅콩.밀.복숭아 혼입 가능."
+    )
+    assert sec.cross_contamination.endswith("대두,땅콩,밀,복숭아 혼입 가능")
+
+
+def test_문장_끝_마침표는_그대로_둔다():
+    sec = split_sections(
+        "원재료명 밀가루. 이 제품은 땅콩을 사용한 제품과 같은 제조시설에서 제조합니다."
+    )
+    assert sec.ingredients == "밀가루"
+    assert sec.cross_contamination.startswith("이 제품은 땅콩")

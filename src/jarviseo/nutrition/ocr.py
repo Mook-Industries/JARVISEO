@@ -98,7 +98,8 @@ _LABELS = {"원산지", "함량", "원재료", "원재료명"}
 class PanelSections:
     """성분표 원문을 세 구간으로 나눈 결과. 못 찾은 구간은 빈 문자열이다."""
 
-    ingredients: str = ""  # 원재료명 구간
+    # 원재료명 구간. 머리말을 못 찾으면 다른 구간에 안 들어간 글자 전체(보조 분석용)
+    ingredients: str = ""
     allergen_notice: str = ""  # "우유, 대두 함유" 같은 알레르기 표시
     cross_contamination: str = ""  # "같은 제조시설에서 ~ 사용" 문장
     has_ingredient_header: bool = False  # "원재료명"을 찾았나. 못 찾으면 판정 불가로 본다
@@ -110,6 +111,9 @@ def _normalize(text: str) -> str:
     for src, dst in {"（": "(", "）": ")", "[": "(", "]": ")", "{": "(", "}": ")",
                      "，": ",", "、": ",", "；": ",", ";": ",", "：": ":"}.items():  # fmt: skip
         text = text.replace(src, dst)
+    # OCR 이 쉼표를 마침표로 읽는 일이 많다("대두,땅콩.밀.복숭아"). 한글 사이에 띄어쓰기 없이
+    # 낀 마침표는 문장 끝이 아니므로 쉼표로 바꾼다. 안 바꾸면 혼입 목록이 거기서 끊긴다.
+    text = re.sub(r"(?<=[가-힣])\.(?=[가-힣])", ",", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -210,8 +214,9 @@ def _allergen_tail(text: str) -> int:
     머리말이 사라져 판정이 '확인 불가'로 간다. 그래서
     - "합성향료 (우유 대두 밀 함유)" 처럼 닫히지 않은 괄호 안이 모두 표시 이름이면
       괄호 안 전체를 쓰고 (OCR 이 쉼표를 빼먹어도 받기 위해서),
-    - 아니면 뒤에서부터 알레르기 표시 이름(우유·대두·계란 …)인 조각만 남긴다.
-      띄어쓰기가 있는 조각은 마지막 낱말만 보고 멈춘다("정제 미강유 우유" → "우유").
+    - 아니면 뒤에서부터 알레르기 표시 이름(우유·대두·계란 …)인 낱말만 남긴다.
+      표시 이름이 아닌 낱말에서 멈춘다("정제 미강유 우유" → "우유", "건청경채 닭고기 쇠고기" →
+      "닭고기 쇠고기").
     """
     base = _open_paren(text) + 1  # 닫히지 않은 괄호가 없으면 0
     if base:
@@ -222,11 +227,21 @@ def _allergen_tail(text: str) -> int:
     start = len(sub)
     for s, e in reversed(_top_chunks(sub)):
         words = _core(sub[s:e]).split()
-        if not words or words[-1] not in _NOTICE_WORDS:
+        # OCR 이 쉼표를 빼먹어 "건청경채 닭고기 쇠고기"처럼 붙어 오므로 낱말 단위로 거슬러 간다.
+        # 표시 이름이 아닌 낱말("건청경채", "정제 미강유")을 만나면 거기서 멈추고 원재료로 남긴다.
+        kept = 0
+        for w in reversed(words):
+            if w not in _NOTICE_WORDS:
+                break
+            kept += 1
+        if not kept:
             break
-        # 이름 앞에 붙은 다른 글자("(합성향료) 우유", "정제 미강유 우유")는 원재료로 남긴다
-        start = s + sub[s:e].rfind(words[-1])
-        if len(words) > 1:
+        chunk = sub[s:e]
+        pos = len(chunk)
+        for w in reversed(words[-kept:]):
+            pos = chunk.rfind(w, 0, pos)
+        start = s + pos
+        if kept < len(words):
             break
     return base + start
 
@@ -274,7 +289,13 @@ def split_sections(text: str) -> PanelSections:
         out.has_ingredient_header = True
         rest = masked[head.end() :]
         stop = _OTHER_HEADER.search(rest)
-        out.ingredients = re.sub(r"\s+", " ", rest[: stop.start()] if stop else rest).strip(" .,•")
+        rest = rest[: stop.start()] if stop else rest
+    else:
+        # 머리말을 못 찾으면 남은 글자 전체를 보조로 원재료 칸에 둔다 (멘토 피드백 2026-10-14).
+        # has_ingredient_header 는 False 로 두므로 판정은 '확인 불가'로 가고,
+        # 그 안에서 알레르겐을 찾으면 '함유'로 경고만 한다. 버리면 그 경고까지 놓친다.
+        rest = masked
+    out.ingredients = re.sub(r"\s+", " ", rest).strip(" .,•")
     return out
 
 
