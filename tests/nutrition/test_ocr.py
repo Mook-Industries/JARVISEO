@@ -238,3 +238,65 @@ def test_mean_confidence():
     assert mean_confidence([]) == 0.0
     ls = [OCRLine("가나다라", 0.9, BBox(0, 0, 1, 1)), OCRLine("마바", 0.3, BBox(0, 0, 1, 1))]
     assert mean_confidence(ls) == pytest.approx((0.9 * 4 + 0.3 * 2) / 6)
+
+
+# --- 평가 세트에서 찾은 파서 버그 (#49 정답 글자로 돌린 결과) ------------------------
+# 정답 글자를 그대로 넣어도 알레르겐을 69% 만 찾던 원인들이다.
+
+LONG_LIST = (
+    "밀, 달걀, 땅콩, 호두, 복숭아, 토마토, 닭고기, 쇠고기, 돼지고기, 오징어, 새우, 게, "
+    "조개류(굴, 홍합 포함) 혼입가능"
+)
+
+
+def test_혼입_목록이_40자를_넘어도_경계부터_잡는다():
+    sec = split_sections(f"원재료명 밀가루, 설탕 • {LONG_LIST} • 제품의 신선도 유지")
+    assert sec.cross_contamination == LONG_LIST
+    assert "땅콩" not in sec.ingredients
+    assert "신선도" not in sec.cross_contamination  # 다음 • 에서 끝난다
+
+
+def test_품목보고번호_뒤_혼입_목록():
+    sec = split_sections("원재료명 밀가루 품목보고번호 19870415003381 우유, 대두, 땅콩 혼입가능")
+    assert sec.cross_contamination == "우유, 대두, 땅콩 혼입가능"
+
+
+def test_경계_없이_이어진_목록은_원재료를_혼입으로_낮추지_않는다():
+    # 원재료도 이름 목록처럼 보인다. 경계가 없으면 목록 전체를 혼입으로 보면 안 된다.
+    sec = split_sections("원재료명 밀가루, 설탕, 버터 땅콩, 호두 혼입가능")
+    assert "밀가루" in sec.ingredients
+    assert "버터" in sec.ingredients
+
+
+def test_괄호가_끼어도_이_제품은_부터_잡는다():
+    sec = split_sections(
+        "원재료명 밀가루 •이 제품은 땅콩, 조개류(굴, 전복, 홍합 포함)를 사용한 제품과 "
+        "같은 제조 시설에서 제조하고 있습니다."
+    )
+    assert sec.cross_contamination.startswith("이 제품은 땅콩")
+
+
+def test_함유_표시가_원재료명_머리말을_삼키지_않는다():
+    sec = split_sections("원재료명 밀가루, 설탕, 정제 미강유 우유, 대두 함유")
+    assert sec.has_ingredient_header
+    assert sec.ingredients.startswith("밀가루")
+    assert "정제 미강유" in sec.ingredients
+    assert split_terms(sec.allergen_notice) == ["우유", "대두"]
+
+
+def test_괄호가_닫히지_않아도_원재료는_표시로_가져가지_않는다():
+    sec = split_sections("원재료명 코코아분말 1(인도네시아 물엿, 향료 2종 함유")
+    assert sec.allergen_notice == ""
+    assert "물엿" in sec.ingredients
+
+
+def test_첫_글자가_잘린_머리말도_찾는다():
+    sec = split_sections("재료명 밀가루(밀 미국산), 백설탕 장재질 폴리프로필렌")
+    assert sec.has_ingredient_header
+    assert sec.ingredients == "밀가루(밀 미국산), 백설탕"
+
+
+def test_보관_안내에서_원재료가_끝난다():
+    # "얼지 않게"의 '게'가 알레르겐(게)으로 잡히던 문제
+    sec = split_sections("원재료명 정제수, 구연산. •직사광선을 피해 얼지 않게 보관")
+    assert sec.ingredients == "정제수, 구연산"

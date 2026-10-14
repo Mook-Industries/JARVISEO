@@ -121,3 +121,27 @@ def test_값이_문자열_배열이_아니면_예외(tmp_path, bad):
     path = write_json(tmp_path, {"우유": bad})
     with pytest.raises(ValueError, match="문자열 배열"):
         load_synonyms(path)
+
+
+# --- _제외: 알레르겐 표기를 품었지만 알레르겐이 아닌 성분 (#49 평가에서 발견) ---------
+
+
+def test_로커스트콩검은_대두가_아니다(synonyms):
+    from jarviseo.nutrition.allergen import find_allergens
+
+    assert "대두" not in find_allergens("카라기난, 로커스트콩검, 구아검", synonyms)
+    # 같은 글자에 진짜 '콩'이 따로 있으면 잡는다
+    assert "대두" in find_allergens("로커스트콩검, 콩", synonyms)
+
+
+def test_제외_목록은_알레르겐_키로_섞이지_않는다(tmp_path):
+    path = write_json(tmp_path, {"_제외": ["로커스트콩검"], "대두": ["콩"]})
+    syn = load_synonyms(path)
+    assert syn == {"대두": ["대두", "콩"]}
+    assert syn.not_allergen == ["로커스트콩검"]
+
+
+def test_제외_표기가_알레르겐_표기와_같으면_예외(tmp_path):
+    path = write_json(tmp_path, {"_제외": ["콩"], "대두": ["콩"]})
+    with pytest.raises(ValueError, match="중복"):
+        load_synonyms(path)

@@ -34,6 +34,7 @@ from typing import Protocol
 import cv2
 import numpy as np
 
+from jarviseo.nutrition.allergen import KNOWN_ALLERGENS
 from jarviseo.types import BBox, OCRLine
 
 __all__ = [
@@ -50,7 +51,10 @@ __all__ = [
 ]
 
 # 원재료명 / 원재료명 및 함량 / 원재료 및 함량 (OCR 이 글자 사이에 공백을 넣는 경우 포함)
-_INGREDIENT_HEADER = re.compile(r"원\s*재\s*료\s*명?(?:\s*및\s*(?:그\s*)?함\s*량)?\s*[:：]?")
+# 성분표를 자를 때 첫 글자가 잘려 "재료명"만 남는 일이 있다. '명'까지 있으면 머리말로 본다.
+_INGREDIENT_HEADER = re.compile(
+    r"(?:원\s*재\s*료\s*명?|재\s*료\s*명)(?:\s*및\s*(?:그\s*)?함\s*량)?\s*[:：]?"
+)
 # "알레르기 유발물질", "알레르기유발물질 표시"
 # EasyOCR 이 "르"를 "로"처럼 잘못 읽어서 셋째 글자는 아무 한 글자나 받는다.
 # "유발물질"만 있어도 머리말로 본다.
@@ -60,12 +64,18 @@ _ALLERGEN_HEADER = re.compile(
 # "같은 제조시설", "동일한 제조시설", "같은 시설" … "혼입"
 # EasyOCR 이 "같은"을 "끝은"처럼 잘못 읽는 일이 있어서 "제조시설"만 있어도 혼입 문장으로 본다.
 _CROSS = re.compile(r"(?:같은|동일한?)\s*시\s*설|제\s*조\s*시\s*설|혼\s*입")
-# "우유, 대두 함유" — 뒤에 량/될/할 이 붙으면 함유량·함유될 수 있음 등 다른 뜻이다
-_CONTAINS = re.compile(r"([가-힣A-Za-z0-9,\s·/]+?)\s*함\s*유(?![량될할])")
-# 원재료 구간이 끝나는 다른 항목들
+# "우유, 대두 함유" — 뒤에 량/될/할 이 붙으면 함유량·함유될 수 있음 등 다른 뜻이다.
+# 앞쪽은 넉넉히 잡고(괄호 포함) 실제 알레르겐 목록은 _allergen_tail 로 잘라낸다.
+_CONTAINS = re.compile(r"([가-힣A-Za-z0-9,\s·/()]+?)\s*함\s*유(?![량될할])")
+# "~ 함유" 알레르기 표시에 쓰이는 이름. 법정 표시명에 흔한 다른 표기를 더했다.
+_NOTICE_WORDS = {
+    *KNOWN_ALLERGENS, "계란", "달걀", "난류", "소고기", "굴", "전복", "홍합", "아황산", "조개",
+}  # fmt: skip
+# 원재료 구간이 끝나는 다른 항목들. 첫 글자가 잘린 "목보고번호", "장재질"도 받는다.
 _OTHER_HEADER = re.compile(
     r"내\s*용\s*량|영\s*양\s*(?:정\s*보|성\s*분)|보\s*관\s*방\s*법|소\s*비\s*기\s*한|유\s*통\s*기\s*한"
-    r"|품\s*목\s*보\s*고\s*번\s*호|제\s*조\s*원|판\s*매\s*원|반\s*품|교\s*환|부\s*정\s*불\s*량"
+    r"|품?\s*목\s*보\s*고\s*번\s*호|제\s*조\s*원|판\s*매\s*원|반\s*품|교\s*환|부\s*정\s*불\s*량"
+    r"|포?\s*장\s*재\s*질|직\s*사\s*광\s*선|업\s*소\s*명"
 )
 # 원산지 표기. "아황산", "구연산", "젖산"처럼 '산'으로 끝나는 성분이 있어서
 # '~산' 전체가 아니라 나라 이름만 원산지로 본다.
@@ -114,9 +124,14 @@ def join_lines(lines: list[OCRLine]) -> str:
 
 # 혼입 문구는 보통 "이 제품은 ~"으로 시작한다. 문장 시작을 찾는 단서로 쓴다.
 _SENTENCE_START = re.compile(r"(?:이|본|해당)\s*제\s*품")
-_SENTENCE_END = ".※"
+_SENTENCE_END = ".※•"
+# 항목이 바뀌는 자리: 문장 부호, 품목보고번호·바코드 같은 긴 숫자, 이미 지운 구간(공백 2칸 이상).
+# _normalize 가 공백을 한 칸으로 줄이므로 2칸 이상은 _blank 로 지운 자리뿐이다.
+_BOUNDARY = re.compile(r"[.※•]|\d{6,}|\s{2,}")
 # 혼입 문장 시작을 못 찾으면 이만큼만 거슬러 올라간다 (원재료까지 삼키지 않게)
 _MAX_LOOKBACK = 40
+# "우유, 대두, 땅콩 혼입가능"처럼 이름만 늘어놓은 목록의 한 항목 최대 길이 (괄호 내용 제외)
+_MAX_LIST_ITEM = 12
 
 
 def _sentence_end(text: str, pos: int) -> int:
@@ -124,18 +139,96 @@ def _sentence_end(text: str, pos: int) -> int:
     return min(ends) if ends else len(text)
 
 
+def _top_chunks(text: str) -> list[tuple[int, int]]:
+    """괄호 바깥 쉼표로 나눈 조각의 (시작, 끝) 위치. "조개류(굴, 홍합)"는 한 조각이다."""
+    spans, depth, start = [], 0, 0
+    for i, ch in enumerate(text):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif ch == "," and depth == 0:
+            spans.append((start, i))
+            start = i + 1
+    spans.append((start, len(text)))
+    return spans
+
+
+def _core(chunk: str) -> str:
+    """괄호 안 내용을 뺀 이름. 짝이 안 맞는 괄호 글자도 지운다."""
+    return re.sub(r"\([^)]*\)?|[()]", " ", chunk).strip()
+
+
+def _is_name_list(text: str) -> bool:
+    """알레르겐 이름만 쉼표로 늘어놓은 목록인가. "우유, 대두, 조개류(굴, 홍합 포함)" → True"""
+    cores = [_core(text[s:e]) for s, e in _top_chunks(text)]
+    cores = [c for c in cores if c]
+    return len(cores) >= 2 and all(
+        len(c.replace(" ", "")) <= _MAX_LIST_ITEM and not re.search(r"\d", c) for c in cores
+    )
+
+
 def _cross_sentence(text: str, pos: int, floor: int = 0) -> tuple[int, int, bool]:
     """혼입 문구가 들어 있는 문장의 (시작, 끝, 시작이 확실한가).
 
     마침표가 없는 성분표가 많아서 마침표만 보면 원재료까지 한 문장으로 잡힌다.
-    "이 제품은"을 먼저 찾고, 없으면 ※·마침표·닫는 괄호·floor 중 가까운 곳에서,
-    그래도 멀면 40자까지만 거슬러 올라간다. 이때는 시작이 불확실하다.
+    가장 가까운 항목 경계(•·※·마침표·긴 숫자·지운 구간) 뒤에서
+    1) "이 제품은"을 찾으면 거기서부터,
+    2) 없어도 그 사이가 이름 목록("우유, 대두, 땅콩 혼입가능")이면 경계부터 확실한 시작으로 본다.
+    3) 둘 다 아니면 예전처럼 닫는 괄호까지 보고, 그래도 멀면 40자까지만 거슬러 올라간다.
+       이때는 시작이 불확실하다.
+    경계를 못 찾아 floor(원재료명 머리말 끝)까지 간 경우에는 2)를 쓰지 않는다.
+    원재료 목록도 이름 목록처럼 보여서, 원재료를 통째로 '혼입 가능'으로 낮출 수 있기 때문이다.
     """
-    base = max(floor, max(text.rfind(ch, 0, pos) for ch in _SENTENCE_END + ")") + 1)
+    bounds = [b.end() for b in _BOUNDARY.finditer(text, floor, pos)]
+    base = bounds[-1] if bounds else floor
     phrases = list(_SENTENCE_START.finditer(text, base, pos))
+    end = _sentence_end(text, pos)
     if phrases:
-        return phrases[-1].start(), _sentence_end(text, pos), True
-    return max(base, pos - _MAX_LOOKBACK), _sentence_end(text, pos), False
+        return phrases[-1].start(), end, True
+    if bounds and _is_name_list(text[base:pos]):
+        return base, end, True
+    base = max(base, text.rfind(")", 0, pos) + 1)
+    return max(base, pos - _MAX_LOOKBACK), end, False
+
+
+def _open_paren(text: str) -> int:
+    """닫히지 않은 마지막 여는 괄호의 위치. 없으면 -1."""
+    stack: list[int] = []
+    for i, ch in enumerate(text):
+        if ch == "(":
+            stack.append(i)
+        elif ch == ")" and stack:
+            stack.pop()
+    return stack[-1] if stack else -1
+
+
+def _allergen_tail(text: str) -> int:
+    """'~ 함유' 앞 글자에서 알레르겐 표시가 시작하는 위치. 없으면 len(text).
+
+    정규식은 앞쪽 원재료와 "원재료명" 머리말까지 붙여 잡는다. 그대로 지우면
+    머리말이 사라져 판정이 '확인 불가'로 간다. 그래서
+    - "합성향료 (우유 대두 밀 함유)" 처럼 닫히지 않은 괄호 안이 모두 표시 이름이면
+      괄호 안 전체를 쓰고 (OCR 이 쉼표를 빼먹어도 받기 위해서),
+    - 아니면 뒤에서부터 알레르기 표시 이름(우유·대두·계란 …)인 조각만 남긴다.
+      띄어쓰기가 있는 조각은 마지막 낱말만 보고 멈춘다("정제 미강유 우유" → "우유").
+    """
+    base = _open_paren(text) + 1  # 닫히지 않은 괄호가 없으면 0
+    if base:
+        words = [w for w in re.split(r"[,\s]+", _core(text[base:])) if w]
+        if words and all(w in _NOTICE_WORDS for w in words):
+            return base
+    sub = text[base:]
+    start = len(sub)
+    for s, e in reversed(_top_chunks(sub)):
+        words = _core(sub[s:e]).split()
+        if not words or words[-1] not in _NOTICE_WORDS:
+            break
+        # 이름 앞에 붙은 다른 글자("(합성향료) 우유", "정제 미강유 우유")는 원재료로 남긴다
+        start = s + sub[s:e].rfind(words[-1])
+        if len(words) > 1:
+            break
+    return base + start
 
 
 def _blank(text: str, s: int, e: int) -> str:
@@ -156,10 +249,14 @@ def split_sections(text: str) -> PanelSections:
         out.allergen_notice = masked[header.end() : e].strip(" .:")
         masked = _blank(masked, header.start(), e)
     else:
-        found = list(_CONTAINS.finditer(masked))
-        out.allergen_notice = ", ".join(c.group(1).strip(" ,") for c in found)
-        for c in found:
-            masked = _blank(masked, c.start(), c.end())
+        notices = []
+        for c in list(_CONTAINS.finditer(masked)):
+            # 원재료 목록과 머리말까지 함께 지우지 않도록 알레르겐 목록 부분만 쓴다
+            s = c.start(1) + _allergen_tail(c.group(1))
+            if s < c.end(1):
+                notices.append(masked[s : c.end(1)].strip(" ,"))
+                masked = _blank(masked, s, c.end())
+        out.allergen_notice = ", ".join(notices)
 
     # 2) 같은 제조시설 (혼입 가능)
     head = _INGREDIENT_HEADER.search(masked)
@@ -177,7 +274,7 @@ def split_sections(text: str) -> PanelSections:
         out.has_ingredient_header = True
         rest = masked[head.end() :]
         stop = _OTHER_HEADER.search(rest)
-        out.ingredients = (rest[: stop.start()] if stop else rest).strip(" .,")
+        out.ingredients = re.sub(r"\s+", " ", rest[: stop.start()] if stop else rest).strip(" .,•")
     return out
 
 
