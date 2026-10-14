@@ -10,6 +10,7 @@
 """
 
 from jarviseo.voice.bargein import BargeIn, Wake
+from jarviseo.voice.collector import ResponseCollector
 from jarviseo.voice.fake import FakeSpeechToText, FakeTextToSpeech
 from jarviseo.voice.stt import SpeechToText
 from jarviseo.voice.tts import TextToSpeech
@@ -19,6 +20,7 @@ __all__ = [
     "BargeIn",
     "FakeSpeechToText",
     "FakeTextToSpeech",
+    "ResponseCollector",
     "SpeechToText",
     "TextToSpeech",
     "Wake",

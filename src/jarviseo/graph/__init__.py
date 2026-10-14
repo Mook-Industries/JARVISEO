@@ -14,7 +14,7 @@
 LangGraph 를 쓰는 이유이기도 하다.
 """
 
-from jarviseo.graph.pipeline import build_graph
+from jarviseo.graph.pipeline import Parts, build_graph
 from jarviseo.graph.state import JarviseoState
 
-__all__ = ["build_graph", "JarviseoState"]
+__all__ = ["Parts", "build_graph", "JarviseoState"]

@@ -208,3 +208,13 @@ def test_재생_중에는_임계값이_높아_자기_목소리_점수로는_끊�
     assert "abort" not in loop.written
     assert sum(loop.written) == CHUNK_BYTES * loop.client.chunks
     assert loop.barge.wait(timeout=0.01) is None
+
+
+def test_called_since_는_그_뒤에_들린_호출이_있는지_꺼내지_않고_본다():
+    barge = BargeIn(StopCounter())
+    barge.on_detect(10.0, 0.99)
+
+    assert barge.called_since(9.0) is True
+    assert barge.called_since(10.0) is False  # 같은 시각은 "뒤"가 아니다
+    assert barge.wait(timeout=0.1).t == 10.0  # 보기만 했으니 그대로 남아 있다
+    assert barge.called_since(0.0) is False

@@ -59,7 +59,11 @@ class FakeSpeechToText:
 
 
 class FakeTextToSpeech:
-    """소리를 내지 않고, 받은 문장을 ``spoken`` 에 모아 둔다."""
+    """소리를 내지 않고, 받은 문장을 ``spoken`` 에 모아 둔다.
+
+    prepare() 는 글자를 그대로 바이트로 주고, play() 는 그걸 글자로 되돌려 ``spoken`` 에 넣는다.
+    그래서 미리 만든 "잠깐만요"를 읽은 것도 ``spoken`` 에서 보인다.
+    """
 
     def __init__(self) -> None:
         self.spoken: list[str] = []
@@ -70,6 +74,13 @@ class FakeTextToSpeech:
         self.spoken.append(text)
         self.last_latency_ms, self.last_interrupted = 0.0, False
         return 0.0
+
+    def prepare(self, text: str) -> bytes:
+        return text.encode()
+
+    def play(self, pcm: bytes) -> None:
+        self.spoken.append(pcm.decode())
+        self.last_interrupted = False
 
     def stop(self) -> None:
         """바로 끝나는 speak() 이라 끊을 것이 없다."""

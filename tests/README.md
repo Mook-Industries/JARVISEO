@@ -20,6 +20,12 @@ DB 테스트는 여기에 더해 db job 이 pgvector 컨테이너를 띄워 실�
 | `voice/test_gate.py` | 재생 중 STT 입력 차단·0.3초 유예와 호출어 훅 (마이크·스피커 없이) |
 | `voice/test_mic.py` | `MicStream` 이 마이크 하나를 여럿이 같은 순서로 읽게 하는지, 지나간 블록부터 읽기 |
 | `voice/test_wakeword.py` | 호출어 감지·2초 중복 무시·재생 중 임계값 0.8, 감지 시각부터 `listen()` (가짜 점수로) |
+| `voice/test_collector.py` | 답이 늦으면 "잠깐만요"를 먼저 읽고, 기다리는 동안 다시 부르면 늦은 답을 버리는지 |
+| `memory/test_scene.py` | 장면 설명이 뒤에서 observation 에 들어가고 기억 검색으로 찾히는지, 실패해도 안 멈추는지 |
+| `vlm/test_client.py` | VLM 요청 모양(사진·질문·기억)·실패하면 None·사진 줄이기, Fake VLM 이 실제와 같은 모양인지 (API 는 가짜로) |
+| `graph/test_state.py` | 노드마다 돌려준 단계별 지연이 덮이지 않고 합쳐지는지 |
+| `graph/test_router.py` | 지난 일을 묻는 말만 RECALL, 나머지는 GENERAL |
+| `graph/test_pipeline.py` | 질문 한 번이 그래프를 끝까지 도는지 — 사진·기억·되묻기·사과 문장·"잠깐만요"·답 버리기와 DB 기록 (Fake 로) |
 
 ## 로컬에서 돌리는 법
 
