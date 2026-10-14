@@ -47,6 +47,8 @@ def miss(code: str | None = None, reason: str = "no_barcode"):
 def checker(reader, **kw) -> IngredientChecker:
     # CROP 은 단색이라 품질 검사에 걸린다. 품질 검사는 아래에서 따로 본다.
     kw.setdefault("quality_check", None)
+    # FakeReader 는 이미지와 상관없이 답하므로 회전 시도를 끈다. 회전은 아래에서 따로 본다.
+    kw.setdefault("try_rotation", False)
     return IngredientChecker(reader=reader, conf_threshold=0.8, **kw)
 
 
@@ -215,3 +217,36 @@ def test_여러_프레임이면_가장_선명한_것으로_확인한다(monkeypa
     frames = [cv2.GaussianBlur(sharp, (0, 0), 3), sharp, cv2.GaussianBlur(sharp, (0, 0), 1.5)]
     checker(FakeReader((LABEL, 0.9))).check_frames(frames, ["땅콩"])
     assert seen[0] is sharp
+
+
+# --- 회전 보정 ----------------------------------------------------------------
+
+
+class SidewaysReader:
+    """세로로 긴 이미지(= 시계 방향으로 돌린 것)일 때만 성분표를 제대로 읽는 가짜 OCR."""
+
+    def __init__(self):
+        self.shapes = []
+
+    def readtext(self, image, **kwargs):
+        self.shapes.append(image.shape[:2])
+        h, w = image.shape[:2]
+        texts, conf = (LABEL, 0.9) if h > w else (["ㅁ ㅇ"], 0.3)
+        return [([[0, i * 30], [300, i * 30], [300, i * 30 + 20], [0, i * 30 + 20]], t, conf)
+                for i, t in enumerate(texts)]  # fmt: skip
+
+
+def test_성분표가_돌아가_있으면_돌려서_읽는다(monkeypatch):
+    monkeypatch.setattr(service, "lookup_product", miss())
+    reader = SidewaysReader()
+    r = checker(reader, try_rotation=True).check(CROP, ["땅콩"])  # CROP 은 가로로 긴 이미지
+    assert r.rotation in (90, 270)
+    assert r.judgement.verdict is V.MAY_CONTAIN and r.retake is None
+    assert len(reader.shapes) == 3  # 그대로 1번 + 90°·270°
+
+
+def test_정방향이면_돌리지_않는다(monkeypatch):
+    monkeypatch.setattr(service, "lookup_product", miss())
+    reader = FakeReader((LABEL, 0.9))
+    r = checker(reader, try_rotation=True).check(CROP, ["땅콩"])
+    assert r.rotation == 0 and reader.calls == 1  # 원재료명을 찾으면 추가 OCR 없음

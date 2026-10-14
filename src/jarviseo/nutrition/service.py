@@ -34,7 +34,7 @@ from jarviseo.nutrition.ocr import (
     join_lines,
     mean_confidence,
     parse_ingredient_text,
-    read_panel,
+    read_upright,
     split_sections,
 )
 from jarviseo.nutrition.quality import ImageQuality, assess_quality, best_frame
@@ -73,6 +73,7 @@ class IngredientCheck:
     retake_count: int = 0
     timings_ms: dict[str, int] = field(default_factory=dict)  # barcode / quality / ocr / match
     quality: ImageQuality | None = None  # OCR 전 품질 검사 결과 (바코드로 찾으면 None)
+    rotation: int = 0  # 성분표가 돌아가 있어 돌려 읽은 각도 (0 / 90 / 270)
 
 
 @dataclass
@@ -80,6 +81,7 @@ class _OcrPass:
     lines: list[OCRLine]
     sections: PanelSections
     conf: float
+    angle: int = 0  # 회전 보정으로 돌린 각도 (시계 방향)
 
     @property
     def text(self) -> str:
@@ -102,6 +104,7 @@ class IngredientChecker:
         synonyms: 동의어 사전. 없으면 ``config.ALLERGEN_SYNONYMS_PATH`` 에서 읽는다.
         reader: OCR 엔진. 없으면 EasyOCR. 테스트에서 가짜를 끼운다.
         quality_check: OCR 전 품질 검사. None 이면 검사하지 않는다(테스트용 단색 이미지 등).
+        try_rotation: 원재료명을 못 찾으면 90°·270° 로 돌려서도 읽는다(ocr.read_upright).
     """
 
     def __init__(
@@ -114,7 +117,9 @@ class IngredientChecker:
         max_reprocess: int = config.OCR_REPROCESS_PER_PHOTO,
         max_retake: int = config.OCR_MAX_RETAKE,
         quality_check: Callable[[np.ndarray], ImageQuality] | None = assess_quality,
+        try_rotation: bool = config.OCR_TRY_ROTATION,
     ) -> None:
+        self.try_rotation = try_rotation
         self.store = store
         self.client = client
         self.synonyms = synonyms or load_synonyms(config.ALLERGEN_SYNONYMS_PATH)
@@ -185,8 +190,9 @@ class IngredientChecker:
     def _read(self, image: np.ndarray, scale: float) -> _OcrPass:
         h, w = image.shape[:2]
         panel = crop_and_upscale(image, BBox(0, 0, w, h), scale=scale)
-        lines = read_panel(panel, reader=self.reader)
-        return _OcrPass(lines, split_sections(join_lines(lines)), mean_confidence(lines))
+        lines, angle = read_upright(panel, reader=self.reader, try_rotation=self.try_rotation)
+        sections = split_sections(join_lines(lines))
+        return _OcrPass(lines, sections, mean_confidence(lines), angle)
 
     def _passes(self, p: _OcrPass) -> bool:
         return p.conf >= self.conf_threshold and p.sections.has_ingredient_header
@@ -257,6 +263,7 @@ class IngredientChecker:
             retake_count=retake_count,
             timings_ms=timings,
             quality=quality,
+            rotation=best.angle,
         )
 
         needs_retake = (

@@ -117,6 +117,9 @@ OCR_CONF_THRESHOLD = _get_float("JARVISEO_OCR_CONF_THRESHOLD", 0.8)
 #   → 최대 사진 3장 × 사진당 OCR 2회 = 검증 최대 6회
 OCR_REPROCESS_PER_PHOTO = _get_int("JARVISEO_OCR_REPROCESS_PER_PHOTO", 1)
 OCR_MAX_RETAKE = _get_int("JARVISEO_OCR_MAX_RETAKE", 2)
+# 원재료명을 못 찾으면 90°·270° 로 돌려서도 읽는다. 캔·병은 성분표를 옆으로 인쇄하는 일이 있다.
+# 그런 사진에서만 OCR 이 최대 3번 돈다. 정방향 사진은 추가 비용이 없다.
+OCR_TRY_ROTATION = _get_bool("JARVISEO_OCR_TRY_ROTATION", True)
 
 # OCR 전 사진 품질 검사 (nutrition/quality.py). 흐리거나 반사가 심하면 OCR 을 돌리지 않고
 # 다시 보여 달라고 한다. 평가 세트 21장으로 정한 임시값 — 실제 카메라 프레임으로 다시 맞춘다.

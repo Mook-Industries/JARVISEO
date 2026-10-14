@@ -46,6 +46,7 @@ __all__ = [
     "parse_ingredient_text",
     "parse_ingredients",
     "read_panel",
+    "read_upright",
     "split_sections",
     "split_terms",
 ]
@@ -503,3 +504,43 @@ def mean_confidence(lines: list[OCRLine]) -> float:
     if n == 0:
         return 0.0
     return sum(line.confidence * len(line.text) for line in lines) / n
+
+
+# 회전 보정에서 시도하는 각도 → cv2.rotate 코드. 성분표는 캔·병 옆면에 90° 돌려 인쇄되는 일이 있다.
+_ROTATIONS = {90: cv2.ROTATE_90_CLOCKWISE, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+
+
+def _orientation_score(lines: list[OCRLine]) -> tuple[bool, float]:
+    """방향이 맞는 정도. (원재료명 머리말을 찾았나, 신뢰도로 가중한 글자 수)
+
+    방향이 틀리면 OCR 은 몇 글자만 낮은 신뢰도로 읽는다. 실측(평가 세트 label_12, PaddleOCR):
+    그대로 0.40 × 79자, 시계 방향 90° 0.89 × 518자.
+    """
+    text = join_lines(lines)
+    return split_sections(text).has_ingredient_header, mean_confidence(lines) * len(text)
+
+
+def read_upright(
+    panel_image: np.ndarray,
+    reader: OcrReader | None = None,
+    try_rotation: bool = True,
+) -> tuple[list[OCRLine], int]:
+    """성분표를 읽되, 글자가 돌아가 있으면 90°·270° 로 돌려서도 읽어 나은 쪽을 쓴다.
+
+    그대로 읽어서 "원재료명" 머리말을 찾으면 바로 끝낸다(대부분의 사진, 추가 비용 없음).
+    못 찾을 때만 돌려서 다시 읽는다. 그래서 회전이 필요 없는 사진은 느려지지 않는다.
+    (멘토 피드백 2026-10-14: 글줄이 기울어진 경우 회전 보정)
+
+    Returns:
+        (줄 목록, 돌린 각도). 각도는 시계 방향 0 / 90 / 270.
+    """
+    lines = read_panel(panel_image, reader=reader)
+    best = (_orientation_score(lines), lines, 0)
+    if best[0][0] or not try_rotation:
+        return lines, 0
+    for angle, code in _ROTATIONS.items():
+        rotated = read_panel(cv2.rotate(panel_image, code), reader=reader)
+        score = _orientation_score(rotated)
+        if score > best[0]:
+            best = (score, rotated, angle)
+    return best[1], best[2]
