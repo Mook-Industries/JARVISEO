@@ -46,13 +46,9 @@ INSTRUCTIONS = """\
 사진으로 알 수 없는 것은 추측하지 말고 모른다고 말한다."""
 
 MEMORY_RULE = """\
-아래는 사용자가 전에 본 장면 기록이다. 기억을 묻는 질문이면 이 기록만 근거로 답한다.
+아래는 사용자와 전에 나눈 대화 기록이다. 한 줄이 한 번의 대화로, 그때 사용자의 질문과
+네가 그때 사진을 보고 한 대답이다. 기억을 묻는 질문이면 이 기록만 근거로 답한다.
 기록에 없는 내용은 지어내지 말고 기억에 없다고 말한다."""
-
-SCENE_INSTRUCTIONS = """\
-사진은 스마트 안경 카메라에 보인 장면이다. 나중에 사용자가 "아까 본 그거"를 물으면
-찾을 수 있게, 눈에 띄는 물건과 그 색·위치·적힌 글자를 한국어 한두 문장으로 적는다.
-사람의 얼굴 생김새나 신원은 적지 않는다."""
 
 
 class VLMClient:
@@ -88,15 +84,6 @@ class VLMClient:
         self.last_latency_ms = ms
         return answer
 
-    def describe(self, frame: Frame) -> str | None:
-        """기억 검색에 쓸 장면 설명을 한두 문장으로 돌려준다. 실패하면 None.
-
-        대답을 읽은 뒤 다른 스레드에서 부르므로 ``last_latency_ms`` 는 건드리지 않는다.
-        건드리면 그사이 시작된 다음 질문의 지연이 이 값으로 덮인다.
-        """
-        scene, _ = self._send(SCENE_INSTRUCTIONS, "이 장면을 기록해 줘.", frame)
-        return scene
-
     def _send(
         self, instructions: str, text: str, frame: Frame | None
     ) -> tuple[str | None, float | None]:
@@ -128,20 +115,17 @@ class FakeVLMClient:
     """정해 둔 답을 차례로 주고, 받은 질문을 ``asked`` 에 모아 둔다.
 
     답이 하나 남으면 그 답을 계속 준다. None 을 넣어 두면 실패한 호출을 흉내 낸다.
-    delay 초만큼 기다렸다가 답한다("잠깐만요" 시험용). describe() 는 늘 scene 을 준다.
+    delay 초만큼 기다렸다가 답한다("잠깐만요" 시험용).
     """
 
     def __init__(
         self,
         answers: Iterable[str | None] = ("컵이에요.",),
-        scene: str | None = "책상 위에 흰 컵이 있다.",
         delay: float = 0.0,
     ) -> None:
         self._answers = list(answers)
-        self.scene = scene
         self.delay = delay
         self.asked: list[tuple[Frame | None, str, list[MemoryHit] | None]] = []
-        self.described: list[Frame] = []
         self.last_latency_ms: float | None = None
 
     def ask(
@@ -152,10 +136,6 @@ class FakeVLMClient:
         answer = self._answers.pop(0) if len(self._answers) > 1 else self._answers[0]
         self.last_latency_ms = None if answer is None else self.delay * 1000
         return answer
-
-    def describe(self, frame: Frame) -> str | None:
-        self.described.append(frame)
-        return self.scene
 
 
 def encode_image(image: np.ndarray, max_side: int = MAX_SIDE) -> str:
@@ -176,13 +156,21 @@ def encode_image(image: np.ndarray, max_side: int = MAX_SIDE) -> str:
 
 
 def _prompt(question: str, memories: list[MemoryHit] | None) -> str:
-    """질문 글자를 만든다. 기억 검색을 했으면 기록과 지금 시각을 앞에 붙인다."""
+    """질문 글자를 만든다. 기억 검색을 했으면 기록과 지금 시각을 앞에 붙인다.
+
+    기록("질문: …" / "대답: …" 두 줄)은 한 줄로 펴서 적는다. 줄이 나뉘면 어디까지가 한 기록이고
+    어느 것이 지금 질문인지 모델이 헷갈린다. 같은 까닭으로 지금 질문에는 "지금"을 붙인다.
+    """
     if memories is None:
         return question
-    lines = [f"- {_when(hit.observed_at)}{hit.text}" for hit in memories]
+    lines = [f"- {_when(hit.observed_at)}{_one_line(hit.text)}" for hit in memories]
     records = "\n".join(lines) or "- (찾은 기록 없음)"
     now = _when(time.time()).strip()
-    return f"{MEMORY_RULE}\n{records}\n\n지금 시각: {now}\n질문: {question}"
+    return f"{MEMORY_RULE}\n{records}\n\n지금 시각: {now}\n지금 질문: {question}"
+
+
+def _one_line(text: str) -> str:
+    return " / ".join(part.strip() for part in text.splitlines() if part.strip())
 
 
 def _when(timestamp: float | None) -> str:

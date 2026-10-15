@@ -5,7 +5,7 @@ OpenAI 키가 필요하다. 사진 경로를 안 주면 웹캠으로 한 장 찍
 실행:
     python scripts/check_vlm.py "이거 뭐야?"
     python scripts/check_vlm.py "이거 뭐야?" --image 사진.jpg
-    python scripts/check_vlm.py "아까 본 가방 어디 있었지?" --memory "책상 위에 검은 백팩이 있다"
+    python scripts/check_vlm.py "아까 본 가방?" --memory "질문: 이거 뭐야? / 대답: 백팩이에요."
     python scripts/check_vlm.py "아까 본 가방 어디 있었지?" --memory    # 찾은 기록이 없을 때
 """
 
@@ -35,7 +35,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="VLM 한 번 묻기")
     parser.add_argument("question", help="질문")
     parser.add_argument("--image", help="사진 경로. 없으면 웹캠으로 찍는다")
-    parser.add_argument("--memory", nargs="*", help="기억 검색 결과로 넘길 장면 설명 (10분 전)")
+    parser.add_argument("--memory", nargs="*", help="기억 검색 결과로 넘길 대화 기록 (10분 전)")
     args = parser.parse_args()
 
     if args.image:
