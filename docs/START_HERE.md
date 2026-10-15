@@ -119,7 +119,7 @@ fix/15-windows-path
 src/jarviseo/
 ├── pointing/     지시 대상 특정        → 최홍묵
 ├── capture/      프레임 입력           → 최홍묵
-├── graph/        파이프라인 연결        → 최홍묵
+├── workflow/     파이프라인 연결        → 최홍묵
 │
 ├── nutrition/    성분표 · OCR · 알레르기 → 권용현
 │

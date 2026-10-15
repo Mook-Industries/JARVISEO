@@ -10,8 +10,6 @@ import numpy as np
 import pytest
 
 from jarviseo.capture import FrameBuffer
-from jarviseo.graph import GraphDeps, build_graph
-from jarviseo.graph.nodes import RECAPTURE_GIVE_UP, REPROMPT, SORRY
 from jarviseo.memory import (
     DialogMemory,
     FakeEmbedder,
@@ -26,6 +24,8 @@ from jarviseo.types import Frame, Intent
 from jarviseo.vlm import FakeVLMClient, VLMClient
 from jarviseo.voice import FakeSpeechToText, FakeTextToSpeech, ResponseCollector
 from jarviseo.voice.collector import FILLER
+from jarviseo.workflow import GraphDeps, build_graph
+from jarviseo.workflow.messages import RECAPTURE_GIVE_UP, REPROMPT, SORRY
 
 
 @pytest.fixture

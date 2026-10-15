@@ -1,6 +1,6 @@
-# graph — LangGraph 오케스트레이션 · 담당 최홍묵
+# workflow — LangGraph 오케스트레이션 · 담당 최홍묵
 
-질문 한 번이 `graph.invoke()` 한 번이다. 노드와 분기 그림은 `pipeline.py` 머리말에 있다.
+질문 한 번이 `graph.invoke()` 한 번이다. 노드와 분기 그림은 `graph.py` 머리말에 있다.
 
 ```
 listen(STT + 말을 시작한 순간의 사진) ─▶ (recapture ↺) ─▶ route(키워드 규칙)
@@ -13,11 +13,22 @@ listen(STT + 말을 시작한 순간의 사진) ─▶ (recapture ↺) ─▶ ro
 
 | 파일 | 하는 일 |
 |---|---|
-| `pipeline.py` | 조립만 한다. `build_graph()` 가 노드와 분기를 잇고 부품을 `partial` 로 묶는다 |
-| `nodes.py` | 부품 묶음 `GraphDeps` 와 노드 함수. 각 모듈의 함수를 부르기만 한다 |
-| `edges.py` | 분기 함수. 다음에 갈 노드 이름을 돌려준다 |
+| `graph.py` | 조립만 한다. 노드를 잇고, 분기의 결과 이름 → 다음 노드 매핑을 정하고, 부품을 `partial` 로 묶는다 |
+| `nodes/` | 기능별 노드 파일. 노드 뒤 분기 함수도 그 파일에 있다 (아래 표) |
+| `deps.py` | 부품 묶음 `GraphDeps` 와 "가리킬 수 있나" 판단 `can_point` |
+| `messages.py` | 미리 정한 안내 문장과 그 답을 만드는 `canned_response` |
 | `state.py` | 그래프를 흐르는 상태 = **노드 사이의 계약**. 리듀서 `merge_latency` |
 | `router.py` | 질문 글자로 의도 정하기 `classify_intent()` (성분 → 기억 → 가리킴 → 나머지) |
+
+| `nodes/` 파일 | 노드 | 분기가 돌려주는 결과 |
+|---|---|---|
+| `voice.py` | `listen` · `speak` | `no_question` / `bad_frame` / `heard` |
+| `capture.py` | `recapture` | `gave_up` / `still_bad` / `good` |
+| `intent.py` | `route` | 의도 뒤 `recall` / `needs_target` / `ingredient` / `answer`, 크롭 뒤 `ingredient` / `answer` |
+| `pointing.py` | `detect` · `resolve` · `clarify` · `crop_target` | `ambiguous` / `chosen`, `gave_up` / `replied` |
+| `ingredient.py` | `check_ingredient` | — |
+| `answer.py` | `generate` | `dropped` / `answered` |
+| `memory.py` | `recall` · `log` | — |
 
 ## 부품 (`GraphDeps`)
 
@@ -39,6 +50,8 @@ listen(STT + 말을 시작한 순간의 사진) ─▶ (recapture ↺) ─▶ ro
   그래야 각자 자기 모듈만 고쳐도 되고 이 폴더에서 충돌이 안 난다.
 - 노드는 `(state, deps)` 를 받는 보통 함수다. `build_graph()` 가 `functools.partial` 로 `deps` 를 묶어 넣는다.
   상태에는 이번 질문에서 바뀌는 값만 둔다.
+- **분기 함수는 다음 노드 이름이 아니라 결과 이름을 돌려준다**(예: `ambiguous`). 어느 노드로 갈지는 `graph.py`
+  매핑이 정한다. 노드 파일이 다른 기능의 노드 이름을 몰라도 되고, 흐름을 바꿀 때 `graph.py` 한 곳만 고친다.
 - **의도 분류는 키워드 규칙이다. LLM 을 부르지 않는다.** 말 끝에서 대답 첫 소리까지 3초 목표 안에
   API 왕복을 하나 더 넣을 자리가 없다.
 - 되돌아가는 분기 두 개: 사진이 없거나 흐리면 `recapture`(최대 2번), 대상이 모호하면 `clarify`(최대 2번).

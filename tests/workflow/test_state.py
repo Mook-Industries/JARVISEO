@@ -2,7 +2,7 @@
 
 from langgraph.graph import END, START, StateGraph
 
-from jarviseo.graph.state import JarviseoState, merge_latency
+from jarviseo.workflow.state import JarviseoState, merge_latency
 
 
 def test_다른_단계는_나란히_남는다():

@@ -23,5 +23,5 @@ Closes #
 - [ ] 브랜치를 판 지 3일이 안 됐다
 - [ ] 아직 안 끝난 기능은 `config.ENABLE_*` 플래그로 꺼뒀다
 - [ ] `.env`, 가중치(`*.pt`, `*.onnx`), 데이터셋이 포함되지 않았다
-- [ ] `types.py` / `graph/state.py` 를 바꿨다면 커밋 타입에 `!` 를 붙이고 `breaking` 라벨을 달았다
+- [ ] `types.py` / `workflow/state.py` 를 바꿨다면 커밋 타입에 `!` 를 붙이고 `breaking` 라벨을 달았다
 - [ ] 성능 수치가 바뀌었다면 `docs/experiments.md` 에 기록했다

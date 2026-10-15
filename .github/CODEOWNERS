@@ -11,7 +11,7 @@
 
 # 계약 파일 — 세 사람이 전부 의존하므로 통합 담당이 반드시 본다
 # /src/jarviseo/types.py          @LeoChoi224
-# /src/jarviseo/graph/            @LeoChoi224
+# /src/jarviseo/workflow/         @LeoChoi224
 
 # 최홍묵 — 지시 대상 특정
 # /src/jarviseo/pointing/         @LeoChoi224

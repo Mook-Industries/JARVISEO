@@ -199,7 +199,7 @@ np.fromfile 로 바이트를 읽고 cv2.imdecode 로 디코딩하도록 바꿨�
 
 ### ⚠️ 계약 파일을 바꿀 때
 
-`src/jarviseo/types.py` 와 `src/jarviseo/graph/state.py` 는 세 사람이 전부
+`src/jarviseo/types.py` 와 `src/jarviseo/workflow/state.py` 는 세 사람이 전부
 의존한다. 필드 하나만 바뀌어도 남의 코드가 조용히 깨진다.
 
 이 두 파일의 **필드를 추가 · 삭제 · 개명**할 때는 타입 뒤에 `!` 를 붙이고,

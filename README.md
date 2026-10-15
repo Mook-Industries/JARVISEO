@@ -56,7 +56,7 @@ src/jarviseo/
 ├── memory/           ④ 개인 기억 검색        (담당 문태현)
 ├── voice/              웨이크워드 · STT · TTS (담당 문태현)
 ├── vlm/                클라우드 VLM 호출
-├── graph/              LangGraph 오케스트레이션 (담당 최홍묵)
+├── workflow/           LangGraph 오케스트레이션 (담당 최홍묵)
 └── api/                FastAPI · 대시보드      (담당 권용현)
 
 data/        학습 데이터 · 가중치 · 영상 (공용 Drive 에서 받음, Git 제외)
@@ -327,7 +327,7 @@ SQLAlchemy 를 끼고 쓰기 때문에 코드는 한 줄도 안 바꿔도 된다
 
 ### 계약 파일을 바꿀 때
 
-`types.py` 와 `graph/state.py` 는 남의 코드가 의존하는 파일이다.
+`types.py` 와 `workflow/state.py` 는 남의 코드가 의존하는 파일이다.
 필드를 추가·삭제·개명할 때는 팀 채널에 공지하고, 커밋 타입 뒤에 `!` 를
 붙인다 (`feat(types)!: Frame 에 sharpness 필드 추가`).
 

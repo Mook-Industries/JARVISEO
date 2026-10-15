@@ -15,7 +15,7 @@
 - 문턱별 정답 유지: 맞는 기록이 5등 안에 있고 점수가 문턱 이상인 질문 수
 - 문턱별 빈 결과: 기록에 없는 질문 중 문턱을 넘는 기록이 하나도 없는 질문 수와,
   그런 질문에 VLM 으로 넘어가는 (상관없는) 기록 수의 평균
-- 라우터: 질문이 실제로 RECALL 로 가는지 (graph/router.py 의 낱말 규칙)
+- 라우터: 질문이 실제로 RECALL 로 가는지 (workflow/router.py 의 낱말 규칙)
 
 실행:
     python scripts/eval_recall.py
@@ -28,10 +28,10 @@ import tempfile
 from pathlib import Path
 
 from jarviseo import config
-from jarviseo.graph.router import classify_intent
 from jarviseo.memory import MemoryStore, TextEmbedder, VectorMemory
 from jarviseo.memory.dialog import dialog_text
 from jarviseo.types import AssistantResponse, Intent, Utterance
+from jarviseo.workflow.router import classify_intent
 
 TOP_K = 5
 THRESHOLDS = [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]

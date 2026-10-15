@@ -12,13 +12,13 @@ import numpy as np
 import pytest
 
 from jarviseo.capture import FrameBuffer, ImageFolderSource
-from jarviseo.graph import GraphDeps, build_graph
-from jarviseo.graph.nodes import CLARIFY_GIVE_UP, RECAPTURE_GIVE_UP
-from jarviseo.graph.pipeline import RECURSION_LIMIT
 from jarviseo.memory import TurnCandidate, TurnInference
 from jarviseo.types import BBox, Detection, Frame, Intent, TargetCandidate, TargetResolution
 from jarviseo.vlm import FakeVLMClient
 from jarviseo.voice import FakeSpeechToText, FakeTextToSpeech
+from jarviseo.workflow import GraphDeps, build_graph
+from jarviseo.workflow.graph import RECURSION_LIMIT
+from jarviseo.workflow.messages import CLARIFY_GIVE_UP, RECAPTURE_GIVE_UP
 
 FULL = (1080, 1920, 3)
 CROP = (400, 300, 3)  # 아래 왼쪽 컵 박스 (400,500)-(700,900)
