@@ -8,6 +8,11 @@
     stt = FakeSpeechToText(["자비서, 저거 뭐야?"])
     picked = []
     utterance = stt.listen(on_speech_start=lambda t: picked.append(buffer.pick_best(around=t)))
+
+사진 폴더(``ImageFolderSource``)로 돌릴 때는 사진 시각이 0초, 0.033초…라서 말 시작 시각도
+그 시각으로 정해 줘야 그 근처 사진이 골린다.
+
+    stt = FakeSpeechToText(["자비서, 저거 뭐야?"], starts=[0.5])  # 0.5초에 말을 시작했다
 """
 
 from __future__ import annotations
@@ -30,10 +35,16 @@ class FakeSpeechToText:
 
     listen() 은 실제처럼 호출어·필러를 뺀 질문을 주고, 비었거나 너무 짧으면 None 을 준다.
     원문은 last_raw_text 에 남는다.
+
+    starts 는 문장마다 말을 시작한 시각(초)이다. 차례로 쓰고, 없거나 다 쓰면 지금 시각
+    (``time.monotonic()``)이다. 말은 시작하고 1초 뒤에 끝난 것으로 친다.
     """
 
-    def __init__(self, texts: Iterable[str] = ("자비서, 저거 뭐야?",)) -> None:
+    def __init__(
+        self, texts: Iterable[str] = ("자비서, 저거 뭐야?",), starts: Iterable[float] = ()
+    ) -> None:
         self._texts = list(texts)
+        self._starts = list(starts)
         self.last_latency_ms: float | None = None
         self.last_raw_text: str | None = None
 
@@ -48,7 +59,7 @@ class FakeSpeechToText:
         if not self._texts:
             return None
         self.last_raw_text, self.last_latency_ms = self._texts.pop(0), 0.0
-        started_at = time.monotonic()
+        started_at = self._starts.pop(0) if self._starts else time.monotonic()
         if on_speech_start is not None:
             on_speech_start(started_at)
         text = clean(self.last_raw_text)
