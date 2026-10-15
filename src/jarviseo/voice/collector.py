@@ -6,6 +6,9 @@ VLM 답이 ``config.FILLER_AFTER_SEC``(1.5초) 안에 안 오면 "잠깐만요"�
 기다리는 동안 사용자가 다시 "자비서"라고 부르면 지금 기다리던 답은 버린다.
 새 질문을 하려는 것이라, 늦게 온 옛 답을 읽으면 엉뚱한 대답이 된다.
 
+답이 오면 그 자리에서 ``tts.prefetch(답)`` 으로 합성을 시작해 둔다. "잠깐만요"를 읽는 동안
+대답 첫 조각을 받아 두면, 필러가 끝나고 speak() 가 바로 대답을 읽는다.
+
     collector = ResponseCollector(tts, called_since=barge.called_since)
     answer = collector.collect(lambda: vlm.ask(frame, question))
     collector.filler_sent   # "잠깐만요"를 읽었는지 (turn_voice.is_filler_sent)
@@ -55,6 +58,8 @@ class ResponseCollector:
         # 마지막 collect() 의 결과
         self.filler_sent = False
         self.dropped = False
+        # collect() 를 부를 때마다 하나씩 는다. 버린 옛 답이 다음 질문 중에 와도 미리 합성하지 않게
+        self._turn = 0
 
     def collect(self, ask: Callable[[], str | None]) -> str | None:
         """ask() 를 다른 스레드에서 부르고 그 답을 돌려준다.
@@ -63,7 +68,17 @@ class ResponseCollector:
         """
         self.filler_sent = self.dropped = False
         started = time.monotonic()
-        future = self._pool.submit(ask)
+        self._turn += 1
+        turn = self._turn
+
+        def answer() -> str | None:
+            text = ask()
+            # 답이 오자마자 합성을 시작한다. 그사이 다시 불러 버린 답이면 하지 않는다.
+            if text and turn == self._turn and not self.dropped:
+                self.tts.prefetch(text)
+            return text
+
+        future = self._pool.submit(answer)
         while not future.done():
             if self.called_since(started):
                 self.dropped = True

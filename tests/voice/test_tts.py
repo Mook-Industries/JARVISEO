@@ -4,6 +4,7 @@ OpenAI API 와 스피커는 부르지 않는다.
 """
 
 import sys
+import time
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -11,7 +12,14 @@ import httpx2
 import pytest
 
 from jarviseo import config
-from jarviseo.voice.tts import CHUNK_BYTES, SAMPLE_RATE, TRIM_PAD_SEC, TextToSpeech
+from jarviseo.voice.tts import (
+    CHUNK_BYTES,
+    READ_TIMEOUT_SEC,
+    RETRIES,
+    SAMPLE_RATE,
+    TRIM_PAD_SEC,
+    TextToSpeech,
+)
 from jarviseo.voice.tts_text import normalize, split_sentences
 
 
@@ -134,7 +142,88 @@ def test_첫_조각도_못_받으면_아무것도_재생하지_않고_None(playe
         raise httpx2.ReadTimeout("끊김")
         yield
 
-    assert TextToSpeech(client=FakeClient(dead)).speak("안녕하세요.") is None
+    client = FakeClient(dead)
+
+    assert TextToSpeech(client=client).speak("안녕하세요.") is None
+    assert played == []
+    assert len(client.requests) == 2  # 한 번 더 요청해 보고 포기했다
+
+
+def test_첫_조각_전에_멈췄으면_새로_요청해서_읽는다(played):
+    def stalled_once(size):
+        client.chunks = two_chunks  # 다음 요청은 정상
+        raise httpx2.ReadTimeout("응답을 받기 시작한 뒤 서버가 멈췄다")
+        yield
+
+    client = FakeClient(stalled_once)
+    tts = TextToSpeech(client=client)
+
+    took = tts.speak("안녕하세요.")
+
+    assert len(client.requests) == 2
+    assert b"".join(played) == b"" * CHUNK_BYTES + b"" * CHUNK_BYTES
+    assert took == tts.last_latency_ms >= 0
+
+
+def test_첫_조각을_기다리는_시간은_짧게_걸고_한_번만_다시_보낸다(monkeypatch):
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-test")  # 요청은 보내지 않는다
+
+    client = TextToSpeech().client
+
+    assert client.timeout.read == READ_TIMEOUT_SEC == 4.0
+    assert client.max_retries == RETRIES == 1
+
+
+def slow_chunks(delay):
+    """첫 조각이 delay 초 뒤에 오는 합성. 실제 TTS 의 첫 조각 왕복(약 0.9초)을 흉내 낸다."""
+
+    def chunks(size):
+        time.sleep(delay)
+        yield from two_chunks(size)
+
+    return chunks
+
+
+def test_prefetch_해_두면_speak_가_새로_요청하지_않고_받아_둔_조각을_바로_읽는다(played):
+    client = FakeClient(slow_chunks(0.2))
+    tts = TextToSpeech(client=client)
+
+    tts.prefetch("컵이에요.")
+    time.sleep(0.4)  # "잠깐만요"를 읽는 동안 첫 조각이 왔다
+    took = tts.speak("컵이에요.")
+
+    assert len(client.requests) == 1
+    assert b"".join(played) == b"" * CHUNK_BYTES + b"" * CHUNK_BYTES
+    assert took == tts.last_latency_ms < 100  # 첫 조각 왕복(200ms)을 다시 기다리지 않았다
+    assert client.closed
+
+
+def test_prefetch_없이_speak_하면_첫_조각_왕복을_그대로_기다린다(played):
+    took = TextToSpeech(client=FakeClient(slow_chunks(0.2))).speak("컵이에요.")
+
+    assert took >= 150  # 윈도우의 time.monotonic() 은 15.6ms 단위라 200 보다 조금 작게 나온다
+
+
+def test_다른_글자로_speak_하면_미리_받던_것은_버리고_새로_합성한다(played):
+    client = FakeClient()
+    tts = TextToSpeech(client=client)
+
+    tts.prefetch("버린 답이에요.")
+    tts.speak("새 답이에요.")
+
+    assert sorted(r["input"] for r in client.requests) == ["버린 답이에요.", "새 답이에요."]
+    assert b"".join(played) == b"" * CHUNK_BYTES + b"" * CHUNK_BYTES  # 한 번만 읽었다
+
+
+def test_미리_합성이_실패하면_speak_도_소리_없이_None(played):
+    def dead(size):
+        raise httpx2.ReadTimeout("끊김")
+        yield
+
+    tts = TextToSpeech(client=FakeClient(dead))
+    tts.prefetch("컵이에요.")
+
+    assert tts.speak("컵이에요.") is None
     assert played == []
 
 

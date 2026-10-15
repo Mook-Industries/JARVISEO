@@ -5,6 +5,7 @@
 """
 
 import inspect
+import time
 
 import pytest
 
@@ -41,6 +42,27 @@ def test_fake_stt_는_돌려주기_전에_시작_콜백을_부른다():
     assert starts == [utterance.started_at]
     assert utterance.started_at <= utterance.ended_at
     assert stt.listen() is None  # 문장을 다 쓰면 말이 없는 것으로 친다
+
+
+def test_fake_stt_는_말_시작_시각을_정할_수_있다():
+    """사진 폴더(0초, 0.033초…)로 돌릴 때 말 시작 시각을 사진 시각에 맞춘다."""
+    starts = []
+    stt = FakeSpeechToText(["저거 뭐야?", "자비서", "컵이요", "뭐야?"], starts=[0.5, 1.0, 2.0])
+
+    first = stt.listen(on_speech_start=starts.append)
+    assert (first.started_at, first.ended_at) == (0.5, 1.5)
+    assert starts == [0.5]
+    assert stt.listen() is None  # 호출어뿐인 문장도 시각 하나를 쓴다
+    assert stt.listen().started_at == 2.0
+
+    before = time.monotonic()
+    last = stt.listen()  # 정해 둔 시각을 다 쓰면 지금 시각
+    assert before <= last.started_at <= time.monotonic()
+
+
+def test_fake_stt_도_min_letters_를_주면_한_글자_대답을_받는다():
+    assert FakeSpeechToText(["컵"]).listen() is None
+    assert FakeSpeechToText(["컵"]).listen(min_letters=1).text == "컵"
 
 
 def test_fake_tts_는_받은_문장을_모은다():

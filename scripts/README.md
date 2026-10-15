@@ -5,9 +5,12 @@
 | `spike/` | 기술 검증 5종 — 각 기술이 되는지만 확인하는 최소 코드 |
 | `check_listen.py` | 실제 마이크로 `listen()` 확인 — 원문·정리된 질문·시각·지연 출력 |
 | `check_tts.py` | 실제 TTS 합성 확인 — 속도별 첫 소리까지 시간·길이 출력하고 재생 |
+| `check_filler_gap.py` | "잠깐만요" 뒤 대답 첫 소리까지의 빈틈 — assistant.py DB 의 VLM 지연·대답으로 미리 합성(prefetch) 끔/켬을 번갈아 재고 중앙값 출력. 실제 TTS, 소리는 안 냄 |
 | `check_ingredient_ocr.py` | 실제 성분표 사진 OCR 확인 — 줄별 판독·신뢰도·지연과 원재료/알레르기 표시/같은 제조시설 구간 출력, 여러 장이면 신뢰도 요약 |
 | `ocr_eval/evaluate.py` | 성분표 OCR 평가 — 정답 글자가 있는 사진으로 엔진·전처리(easyocr, easyocr-pre, paddle)별 CER·알레르겐 재현율/정밀도·머리말/혼입 문장·신뢰도·지연 비교, CSV 저장. `--init` 으로 정답 초안 생성 |
 | `check_memory.py` | 기억 검색 측정 — 임베딩 왕복, 관찰 N행 검색 지연, 실제 임베딩 점수(맞는 장면·틀린 장면·상관없는 질문). 테스트용 DB 필요 |
+| `stt_compare.py` | 받아쓰기 모델 비교 — 같은 질문 20개를 마이크로 녹음(`--record`)하거나 TTS 로 합성(`--tts`, `--noise` 로 배경 소리 섞기)해 모델별 지연 중앙값·p95·맞은 문장·CER 출력, `--silence` 는 말끝 대기별로 말이 중간에 끊긴 녹음 수. 녹음은 `data/datasets/stt/` |
+| `eval_recall.py` | 기억 질문 평가셋(`data/eval/recall_set.csv`: 장면 20·질문 30)으로 기억 검색 측정 — 1등·5등 안 정답률, 문턱별 정답 유지·기록에 없는 질문에 넘어가는 장면 수, 라우터가 RECALL 로 보내는지. 실제 임베딩, SQLite 임시 DB |
 | `check_vlm.py` | 실제 VLM 확인 — 웹캠 사진(또는 `--image`) 한 장과 질문을 보내 답과 왕복 시간 출력, `--memory` 로 기억 검색 결과를 넘겨 보기 |
 | `assistant.py` | 호출어 → 질문 → (기억 검색) → VLM → 음성 대답을 그래프로 도는 비서 — 턴마다 질문·의도·기억·대답·단계별 지연, 끝낼 때 중앙값 출력. 턴은 `data/assistant.db` |
 | `voice_loop.py` | Enter(또는 `--wake` 로 호출어) → STT → 에코 → TTS 음성 루프 — 턴마다 단계별 지연, 끝낼 때 중앙값 출력. `--wake` 는 읽는 중 "자비서"로 끼어들기(재생 중 최고 점수·못 넘은 점수 출력), `--long` 긴 대답, `--db` 턴을 DB 에 기록, `--playback-threshold` 재생 중 임계값 |

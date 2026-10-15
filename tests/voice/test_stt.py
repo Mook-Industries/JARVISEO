@@ -107,6 +107,26 @@ def test_listen_은_필러나_호출어뿐이면_None_을_준다(heard, raw):
     assert s.last_raw_text == raw
 
 
+@pytest.mark.parametrize(("raw", "want"), [("컵.", "컵."), ("자비서, 컵", "컵"), ("음...", None)])
+def test_listen_은_min_letters_를_주면_한_글자_대답도_받는다(heard, raw, want):
+    """되묻기("컵이요, 병이요?")의 대답은 "컵" 한 글자일 수 있다. 필러뿐이면 그래도 None."""
+    assert stt.SpeechToText(client=FakeClient(raw)).listen() is None
+
+    utterance = stt.SpeechToText(client=FakeClient(raw)).listen(min_letters=1)
+
+    assert (utterance and utterance.text) == want
+
+
+def test_listen_은_hints_를_호출어_대신_받아쓰기_힌트로_준다(heard):
+    """되묻기 대답을 들을 때 후보 이름을 주면 "컵"이 "컷"으로 받아써지는 일이 준다."""
+    client = FakeClient("컵.")
+
+    utterance = stt.SpeechToText(client=client).listen(min_letters=1, hints=["컵", "병"])
+
+    assert utterance.text == "컵."
+    assert client.requests[0]["prompt"] == "컵, 병"
+
+
 def test_listen_은_받아쓰기가_실패하면_None_을_준다(heard):
     s = stt.SpeechToText(client=FakeClient(error=OpenAIError("연결 실패")))
 
@@ -145,3 +165,5 @@ def test_비었거나_한_글자면_질문이_아니다():
     assert not is_question("")
     assert not is_question("뭐?")
     assert is_question("뭐야?")
+    assert is_question("컵", min_letters=1)
+    assert not is_question("", min_letters=1)

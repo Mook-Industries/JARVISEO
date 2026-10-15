@@ -8,16 +8,21 @@
     stt = FakeSpeechToText(["자비서, 저거 뭐야?"])
     picked = []
     utterance = stt.listen(on_speech_start=lambda t: picked.append(buffer.pick_best(around=t)))
+
+사진 폴더(``ImageFolderSource``)로 돌릴 때는 사진 시각이 0초, 0.033초…라서 말 시작 시각도
+그 시각으로 정해 줘야 그 근처 사진이 골린다.
+
+    stt = FakeSpeechToText(["자비서, 저거 뭐야?"], starts=[0.5])  # 0.5초에 말을 시작했다
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from typing import TYPE_CHECKING
 
 from jarviseo.types import Utterance
-from jarviseo.voice.transcript import clean, is_question
+from jarviseo.voice.transcript import MIN_LETTERS, clean, is_question
 
 if TYPE_CHECKING:
     import numpy as np
@@ -30,10 +35,16 @@ class FakeSpeechToText:
 
     listen() 은 실제처럼 호출어·필러를 뺀 질문을 주고, 비었거나 너무 짧으면 None 을 준다.
     원문은 last_raw_text 에 남는다.
+
+    starts 는 문장마다 말을 시작한 시각(초)이다. 차례로 쓰고, 없거나 다 쓰면 지금 시각
+    (``time.monotonic()``)이다. 말은 시작하고 1초 뒤에 끝난 것으로 친다.
     """
 
-    def __init__(self, texts: Iterable[str] = ("자비서, 저거 뭐야?",)) -> None:
+    def __init__(
+        self, texts: Iterable[str] = ("자비서, 저거 뭐야?",), starts: Iterable[float] = ()
+    ) -> None:
         self._texts = list(texts)
+        self._starts = list(starts)
         self.last_latency_ms: float | None = None
         self.last_raw_text: str | None = None
 
@@ -42,18 +53,24 @@ class FakeSpeechToText:
         on_speech_start: Callable[[float], None] | None = None,
         timeout: float = 5.0,
         since: float | None = None,
+        min_letters: int = MIN_LETTERS,
+        hints: Sequence[str] = (),
     ) -> Utterance | None:
         self.last_raw_text = self.last_latency_ms = None
         if not self._texts:
             return None
         self.last_raw_text, self.last_latency_ms = self._texts.pop(0), 0.0
-        started_at = time.monotonic()
+        started_at = self._starts.pop(0) if self._starts else time.monotonic()
         if on_speech_start is not None:
             on_speech_start(started_at)
         text = clean(self.last_raw_text)
-        return Utterance(text, started_at, started_at + 1.0) if is_question(text) else None
+        if not is_question(text, min_letters):
+            return None
+        return Utterance(text, started_at, started_at + 1.0)
 
-    def transcribe(self, audio: np.ndarray, started_at: float, ended_at: float) -> Utterance:
+    def transcribe(
+        self, audio: np.ndarray, started_at: float, ended_at: float, hints: Sequence[str] = ()
+    ) -> Utterance:
         self.last_raw_text, self.last_latency_ms = self._texts.pop(0) if self._texts else "", 0.0
         return Utterance(self.last_raw_text, started_at, ended_at)
 
@@ -67,6 +84,8 @@ class FakeTextToSpeech:
 
     def __init__(self) -> None:
         self.spoken: list[str] = []
+        # prefetch() 로 미리 합성하라고 받은 문장
+        self.prefetched: list[str] = []
         self.last_latency_ms: float | None = None
         self.last_interrupted = False
 
@@ -74,6 +93,9 @@ class FakeTextToSpeech:
         self.spoken.append(text)
         self.last_latency_ms, self.last_interrupted = 0.0, False
         return 0.0
+
+    def prefetch(self, text: str) -> None:
+        self.prefetched.append(text)
 
     def prepare(self, text: str) -> bytes:
         return text.encode()

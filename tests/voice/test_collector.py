@@ -67,3 +67,30 @@ def test_필러를_미리_못_만들었으면_기다리기만_한다():
     assert collector.collect(answer_after(0.2)) == "컵이에요."
     assert tts.spoken == []
     assert collector.filler_sent is False
+
+
+def test_답이_오면_바로_미리_합성을_시작한다():
+    tts = FakeTextToSpeech()
+    collector = ResponseCollector(tts, after_sec=0.05)
+
+    assert collector.collect(answer_after(0.2)) == "컵이에요."
+    assert tts.prefetched == ["컵이에요."]  # "잠깐만요"를 읽는 동안 대답 합성을 시작했다
+
+
+def test_답이_없으면_미리_합성하지_않는다():
+    tts = FakeTextToSpeech()
+
+    assert ResponseCollector(tts).collect(lambda: None) is None
+    assert tts.prefetched == []
+
+
+def test_버린_답은_다음_질문_중에_와도_미리_합성하지_않는다():
+    called_at = []
+    tts = FakeTextToSpeech()
+    collector = ResponseCollector(tts, called_since=lambda t: any(c > t for c in called_at))
+    threading.Timer(0.05, lambda: called_at.append(time.monotonic())).start()
+
+    assert collector.collect(answer_after(0.3, "버린 답")) is None  # 0.05초에 다시 불렀다
+    assert collector.collect(answer_after(0.5, "새 답")) == "새 답"  # 버린 답은 0.3초에 온다
+
+    assert tts.prefetched == ["새 답"]
