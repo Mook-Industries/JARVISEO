@@ -25,7 +25,7 @@ from jarviseo import config
 from jarviseo.types import Utterance
 from jarviseo.voice.gate import MIC_GATE
 from jarviseo.voice.mic import SAMPLE_RATE, Microphone, MicStream
-from jarviseo.voice.transcript import clean, is_question, is_wake_only
+from jarviseo.voice.transcript import MIN_LETTERS, clean, is_question, is_wake_only
 
 if TYPE_CHECKING:
     import numpy as np
@@ -84,6 +84,7 @@ class SpeechToText:
         on_speech_start: Callable[[float], None] | None = None,
         timeout: float = 5.0,
         since: float | None = None,
+        min_letters: int = MIN_LETTERS,
     ) -> Utterance | None:
         """마이크에서 발화 하나를 받아쓰고, 호출어·필러를 뺀 질문을 돌려준다.
 
@@ -97,7 +98,8 @@ class SpeechToText:
         이어서 한 번 더 듣는다(감지 ``WAKE_ONLY_SEC`` 안에 말이 끝났거나, 호출어만 받아써졌을 때).
 
         timeout 초 안에 말이 시작되지 않거나, 받아쓰기가 끝내 실패하거나,
-        정리하고 나니 비었거나 너무 짧으면 None.
+        정리하고 나니 비었거나 min_letters 글자보다 짧으면 None.
+        되묻기 대답("컵")을 들을 때는 min_letters=1 로 부른다.
         """
         # webrtcvad 는 여기서 읽는다. jarviseo.voice 를 import 만 하는 쪽(Fake 사용)은
         # 필요 없고, python -m jarviseo.voice.vad 도 미리 읽힌 모듈 경고 없이 돈다.
@@ -110,10 +112,11 @@ class SpeechToText:
             with Microphone(self.device) as mic:
                 blocks = MIC_GATE.mute(mic.blocks())
                 speech = record_speech(blocks, on_speech_start, timeout=timeout)
-            return self._question(speech)
+            return self._question(speech, min_letters)
         if since is None:
             blocks = MIC_GATE.mute(self.mic.blocks())
-            return self._question(record_speech(blocks, on_speech_start, timeout=timeout))
+            speech = record_speech(blocks, on_speech_start, timeout=timeout)
+            return self._question(speech, min_letters)
 
         floor = since - WAKE_LAG_SEC
 
@@ -127,15 +130,16 @@ class SpeechToText:
             # 호출어(와 그 앞 소리)에서 말이 끝났다. 받아쓰면 STT 가 호출어를 "자비다"처럼 잘못 써서
             # 질문으로 넘어갈 수 있다. 같은 마이크 줄에서 질문을 더 기다린다.
             speech = record_speech(blocks, started, timeout=timeout)
-        utterance = self._question(speech)
+        utterance = self._question(speech, min_letters)
         if utterance is None and speech is not None and is_wake_only(self.last_raw_text):
             # 늘여 말해서 감지 뒤에도 호출어가 이어졌다. 호출어만 받아써졌으면 한 번 더 듣는다.
-            utterance = self._question(record_speech(blocks, started, timeout=timeout))
+            speech = record_speech(blocks, started, timeout=timeout)
+            utterance = self._question(speech, min_letters)
         if utterance is None:
             return None
         return Utterance(utterance.text, max(utterance.started_at, floor), utterance.ended_at)
 
-    def _question(self, speech: Speech | None) -> Utterance | None:
+    def _question(self, speech: Speech | None, min_letters: int = MIN_LETTERS) -> Utterance | None:
         """녹음한 발화를 받아쓰고 정리한다. 질문으로 쓸 만하지 않으면 None."""
         if speech is None:
             return None
@@ -146,7 +150,7 @@ class SpeechToText:
             log.warning("받아쓰기 실패: %s", e)
             return None
         text = clean(raw.text)
-        if not is_question(text):
+        if not is_question(text, min_letters):
             return None
         return Utterance(text, raw.started_at, raw.ended_at)
 

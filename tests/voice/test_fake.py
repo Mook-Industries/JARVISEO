@@ -43,6 +43,11 @@ def test_fake_stt_는_돌려주기_전에_시작_콜백을_부른다():
     assert stt.listen() is None  # 문장을 다 쓰면 말이 없는 것으로 친다
 
 
+def test_fake_stt_도_min_letters_를_주면_한_글자_대답을_받는다():
+    assert FakeSpeechToText(["컵"]).listen() is None
+    assert FakeSpeechToText(["컵"]).listen(min_letters=1).text == "컵"
+
+
 def test_fake_tts_는_받은_문장을_모은다():
     tts = FakeTextToSpeech()
 

@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterable, Iterator
 from typing import TYPE_CHECKING
 
 from jarviseo.types import Utterance
-from jarviseo.voice.transcript import clean, is_question
+from jarviseo.voice.transcript import MIN_LETTERS, clean, is_question
 
 if TYPE_CHECKING:
     import numpy as np
@@ -42,6 +42,7 @@ class FakeSpeechToText:
         on_speech_start: Callable[[float], None] | None = None,
         timeout: float = 5.0,
         since: float | None = None,
+        min_letters: int = MIN_LETTERS,
     ) -> Utterance | None:
         self.last_raw_text = self.last_latency_ms = None
         if not self._texts:
@@ -51,7 +52,9 @@ class FakeSpeechToText:
         if on_speech_start is not None:
             on_speech_start(started_at)
         text = clean(self.last_raw_text)
-        return Utterance(text, started_at, started_at + 1.0) if is_question(text) else None
+        if not is_question(text, min_letters):
+            return None
+        return Utterance(text, started_at, started_at + 1.0)
 
     def transcribe(self, audio: np.ndarray, started_at: float, ended_at: float) -> Utterance:
         self.last_raw_text, self.last_latency_ms = self._texts.pop(0) if self._texts else "", 0.0

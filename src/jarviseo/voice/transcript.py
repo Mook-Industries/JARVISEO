@@ -21,8 +21,8 @@ _FILLER = re.compile(r"(?<!\w)(?:음+|으+음|어+|아+|에+|흠+)(?!\w)[.,!?…
 _LETTER = re.compile(r"[가-힣A-Za-z0-9]")
 
 # 질문으로 치려면 글자(한글·영문·숫자)가 이만큼은 있어야 한다. 잡음이 한 글자로
-# 받아써진 것을 거른다. 되묻기는 "왼쪽 컵이요, 오른쪽 컵이요?"처럼 골라 답하게 묻으므로
-# "네" 같은 한 글자 대답은 기대하지 않는다.
+# 받아써진 것을 거른다. 되묻기("컵이요, 병이요?")의 대답은 "컵"처럼 한 글자일 수 있어서,
+# 그때는 listen(min_letters=1) 로 듣는다.
 MIN_LETTERS = 2
 
 
@@ -42,9 +42,9 @@ def clean(text: str) -> str:
     return text.lstrip(",.!?…~ ").rstrip(", ")
 
 
-def is_question(text: str) -> bool:
-    """정리한 글자가 질문으로 쓸 만한지. 비었거나 너무 짧으면 False."""
-    return len(_LETTER.findall(text)) >= MIN_LETTERS
+def is_question(text: str, min_letters: int = MIN_LETTERS) -> bool:
+    """정리한 글자가 질문으로 쓸 만한지. 비었거나 min_letters 글자보다 짧으면 False."""
+    return len(_LETTER.findall(text)) >= min_letters
 
 
 def is_wake_only(text: str | None) -> bool:
