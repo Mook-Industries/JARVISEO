@@ -3,19 +3,24 @@
 녹음은 data/datasets/stt/<이름>/ 아래 16kHz 모노 wav 와 metadata.csv(file, text) 다.
 
 - --record 이름 : QUESTIONS 를 한 문장씩 띄우고 마이크로 녹음한다(사람 목소리)
-- --tts         : 같은 문장을 TTS 목소리 몇 개로 합성해 tts/ 에 둔다. --noise 를 주면 배경 소리를
-                  섞은 것도 tts_noise/ 에 만든다. 합성 목소리라 정확도는 사람보다 후하게 나온다
+- --tts         : 같은 문장을 TTS 목소리 몇 개로 합성해 tts/ 에 둔다.
+                  합성 목소리라 정확도는 사람보다 후하게 나온다
+- --mix 소리    : tts/ 에 배경 소리(16kHz 모노 wav)를 --snr dB 로 섞어 tts_noise<snr>/ 에 둔다
 - (기본) 비교   : 폴더의 wav 를 모델마다 받아쓴다. 지연 중앙값·p95, 맞은 문장 수, CER 을 낸다.
-                  문장마다 모델 순서를 돌려 가며 보내서, 그사이 API 속도가 바뀌어도 고르게 섞인다
+                  문장마다 모델 순서를 돌려 가며 보내서, 그사이 API 속도가 바뀌어도 고르게 섞인다.
+                  --hint 를 주면 모델마다 호출어 힌트와 그 힌트를 둘 다 잰다(되묻기 대답용).
+                  --questions 로 QUESTIONS 번호를 골라 그 문장만 잴 수 있다
 - --silence     : 말끝 대기(silence_sec)별로 VAD 가 말을 중간에 끊는지 센다. API 는 안 쓴다
 
 맞음은 clean() 으로 호출어·필러를 뺀 뒤 띄어쓰기·문장부호를 빼고 글자가 같은지로 본다.
 CER 은 그 글자 기준 편집 거리 / 정답 글자 수다. 결과 CSV 는 data/datasets/stt/results/ 에 남는다.
 
 실행:
-    python scripts/stt_compare.py --tts --noise data/datasets/wakeword/eval/background/x.wav
+    python scripts/stt_compare.py --tts
+    python scripts/stt_compare.py --mix data/datasets/wakeword/eval/background/x.wav --snr 10
     python scripts/stt_compare.py --record s01
-    python scripts/stt_compare.py tts tts_noise s01
+    python scripts/stt_compare.py tts tts_noise10 s01
+    python scripts/stt_compare.py tts --questions 15 16 17 18 --hint "컵, 병, 왼쪽, 오른쪽"
     python scripts/stt_compare.py s01 --silence 0.5 0.6 0.7
 """
 
@@ -122,35 +127,43 @@ def synth(tts, text: str) -> np.ndarray:
     raise RuntimeError(f"합성 실패: {text}")
 
 
-def make_tts(noise: Path | None, snr_db: float) -> None:
-    """QUESTIONS 를 VOICES 로 합성해 tts/ 에, 배경 소리를 섞은 것을 tts_noise/ 에 둔다."""
+def make_tts() -> None:
+    """QUESTIONS 를 VOICES 로 합성해 tts/ 에 둔다."""
     from scipy.signal import resample_poly
 
     from jarviseo.voice import TextToSpeech
 
-    background = load(noise).astype(np.float32) if noise else None
-    rng = np.random.default_rng(0)
-    clean_rows, noisy_rows = [], []
+    rows = []
     for voice in VOICES:
         tts = TextToSpeech(voice=voice)
         for i, text in enumerate(QUESTIONS, 1):
-            voice_only = resample_poly(synth(tts, text).astype(np.float32), 2, 3)  # 24k → 16k
-            audio = pad(voice_only)
+            audio = pad(resample_poly(synth(tts, text).astype(np.float32), 2, 3))  # 24k → 16k
             name = f"{voice}-{i:02d}.wav"
             save(ROOT / "tts" / name, audio)
-            clean_rows.append({"file": name, "text": text, "voice": voice})
-            if background is not None:
-                start = rng.integers(0, len(background) - len(audio))
-                noise_part = background[start : start + len(audio)]
-                # SNR 은 앞뒤 무음을 뺀 말소리 크기로 맞춘다
-                gain = np.sqrt(np.mean(voice_only**2) / (np.mean(noise_part**2) + 1e-9))
-                mixed = audio.astype(np.float32) + noise_part * gain / 10 ** (snr_db / 20)
-                save(ROOT / "tts_noise" / name, np.clip(mixed, -32768, 32767))
-                noisy_rows.append({"file": name, "text": text, "voice": f"{voice}+noise"})
+            rows.append({"file": name, "text": text, "voice": voice})
             print(f"  {name} {text}")
-    write_meta(ROOT / "tts", clean_rows)
-    if noisy_rows:
-        write_meta(ROOT / "tts_noise", noisy_rows)
+    write_meta(ROOT / "tts", rows)
+
+
+def mix(noise: Path, snr_db: float) -> None:
+    """tts/ 의 녹음마다 배경 소리의 다른 구간을 snr_db 로 섞어 tts_noise<snr>/ 에 둔다."""
+    background = load(noise).astype(np.float32)
+    rng = np.random.default_rng(0)
+    out = ROOT / f"tts_noise{snr_db:g}"
+    rows = []
+    for row in read_meta(ROOT / "tts"):
+        audio = load(ROOT / "tts" / row["file"]).astype(np.float32)
+        start = rng.integers(0, len(background) - len(audio))
+        noise_part = background[start : start + len(audio)]
+        # SNR 은 앞뒤에 붙인 무음을 뺀 말소리 크기로 맞춘다
+        lead, tail = round(LEAD_SEC * SAMPLE_RATE), round(TAIL_SEC * SAMPLE_RATE)
+        speech = audio[lead : len(audio) - tail]
+        gain = np.sqrt(np.mean(speech**2) / (np.mean(noise_part**2) + 1e-9))
+        mixed = audio + noise_part * gain / 10 ** (snr_db / 20)
+        save(out / row["file"], np.clip(mixed, -32768, 32767))
+        rows.append({**row, "voice": f"{row['voice']}+noise{snr_db:g}"})
+    write_meta(out, rows)
+    print(f"{out} {len(rows)}개")
 
 
 def record(name: str, device: int | None) -> None:
@@ -174,29 +187,38 @@ def record(name: str, device: int | None) -> None:
     write_meta(folder, rows)
 
 
-def compare(folders: list[str], models: list[str]) -> None:
+def compare(
+    folders: list[str], models: list[str], hint: str | None, questions: list[int] | None
+) -> None:
     clients = {m: SpeechToText(model=m) for m in models}
+    # (이름, 모델, 힌트). 힌트가 비면 transcribe() 가 호출어를 힌트로 준다
+    variants = [(m, m, []) for m in models]
+    if hint:
+        variants += [(f"{m}+힌트", m, [w.strip() for w in hint.split(",")]) for m in models]
     out = []
     for name in folders:
         folder = ROOT / name
         rows = read_meta(folder)
+        if questions:
+            rows = [r for r in rows if int(Path(r["file"]).stem[-2:]) in questions]
         print(f"\n== {name} ({len(rows)}개)")
         for i, row in enumerate(rows):
             audio = load(folder / row["file"])
             want = letters(row["text"])
-            for model in models[i % len(models) :] + models[: i % len(models)]:
+            k = i % len(variants)
+            for label, model, hints in variants[k:] + variants[:k]:
                 asked = time.perf_counter()
                 try:
-                    got = clients[model].transcribe(audio, 0.0, 0.0).text
+                    got = clients[model].transcribe(audio, 0.0, 0.0, hints).text
                 except Exception as e:  # 한 번 실패해도 나머지는 잰다
-                    print(f"  {model} {row['file']} 실패: {e}")
+                    print(f"  {label} {row['file']} 실패: {e}")
                     continue
                 ms = (time.perf_counter() - asked) * 1000
                 out.append(
                     {
                         "set": name,
                         "file": row["file"],
-                        "model": model,
+                        "model": label,
                         "ms": round(ms),
                         "ok": letters(got) == want,
                         "cer": round(cer(want, letters(got)), 3),
@@ -204,7 +226,7 @@ def compare(folders: list[str], models: list[str]) -> None:
                         "got": got,
                     }
                 )
-    report(out, folders, models)
+    report(out, folders, [label for label, _, _ in variants])
     results = ROOT / "results"
     results.mkdir(parents=True, exist_ok=True)
     path = results / f"compare-{datetime.now():%Y%m%d-%H%M%S}.csv"
@@ -242,7 +264,7 @@ def silence(folders: list[str], waits: list[float]) -> None:
     for name in folders:
         folder = ROOT / name
         rows = read_meta(folder)
-        cuts = []
+        cuts, cut_files = [], {}
         for wait in waits:
             n = 0
             for row in rows:
@@ -254,8 +276,11 @@ def silence(folders: list[str], waits: list[float]) -> None:
                 rest = audio[round(speech.ended_at * SAMPLE_RATE) :] if speech else audio
                 if speech is None or voiced_seconds(rest) >= 0.15:
                     n += 1
+                    cut_files.setdefault(wait, []).append(f"{row['file']} {row['text']}")
             cuts.append(n)
         print(f"{name:10} " + " ".join(f"{c:3}/{len(rows):<3}" for c in cuts))
+        for wait, files in cut_files.items():
+            print(f"  {wait:.1f}초에서 끊김: " + ", ".join(files))
 
 
 def main() -> None:
@@ -263,21 +288,25 @@ def main() -> None:
     parser.add_argument("sets", nargs="*", help="비교할 녹음 폴더 이름 (data/datasets/stt/ 아래)")
     parser.add_argument("--models", nargs="+", default=MODELS)
     parser.add_argument("--tts", action="store_true", help="QUESTIONS 를 TTS 로 합성")
-    parser.add_argument("--noise", type=Path, help="--tts 때 섞을 배경 소리 wav (16kHz 모노)")
+    parser.add_argument("--mix", type=Path, help="tts/ 에 섞을 배경 소리 wav (16kHz 모노)")
     parser.add_argument("--snr", type=float, default=10.0, help="배경 소리를 섞는 SNR(dB)")
+    parser.add_argument("--hint", help="받아쓰기 힌트도 따로 잰다 (예: 컵, 병, 왼쪽, 오른쪽)")
+    parser.add_argument("--questions", nargs="+", type=int, help="이 QUESTIONS 번호만 (1부터)")
     parser.add_argument("--record", metavar="이름", help="마이크로 QUESTIONS 녹음")
     parser.add_argument("--device", type=int, help="마이크 장치 번호")
     parser.add_argument("--silence", nargs="+", type=float, help="말끝 대기(초)별 끊김만 센다")
     args = parser.parse_args()
 
     if args.tts:
-        make_tts(args.noise, args.snr)
+        make_tts()
+    elif args.mix:
+        mix(args.mix, args.snr)
     elif args.record:
         record(args.record, args.device)
     elif args.silence:
         silence(args.sets, args.silence)
     else:
-        compare(args.sets, args.models)
+        compare(args.sets, args.models, args.hint, args.questions)
 
 
 if __name__ == "__main__":
