@@ -14,7 +14,7 @@ from openai import OpenAIError
 from jarviseo import config
 from jarviseo.types import Frame, MemoryHit
 from jarviseo.vlm import FakeVLMClient, VLMClient
-from jarviseo.vlm.client import SCENE_INSTRUCTIONS, encode_image
+from jarviseo.vlm.client import encode_image
 
 
 class FakeClient:
@@ -79,11 +79,14 @@ def test_기억_검색_결과가_있으면_기록과_지금_시각을_붙인다(
     client = FakeClient()
     vlm = VLMClient(client=client)
 
-    vlm.ask(frame(), "아까 본 가방 어디 있었지?", memories=[hit("책상 위에 검은 백팩", 0.0)])
+    record = "질문: 이거 뭐야?\n대답: 책상 위에 있는 검은 백팩이에요."
+    vlm.ask(frame(), "아까 본 가방 어디 있었지?", memories=[hit(record, 0.0)])
     text = sent(client)[0]
-    assert "책상 위에 검은 백팩" in text
+    assert "대화 기록" in text
+    # 기록 하나는 한 줄로 편다. 지금 질문과 헷갈리지 않게 지금 질문에는 "지금"을 붙인다.
+    assert " 질문: 이거 뭐야? / 대답: 책상 위에 있는 검은 백팩이에요.\n" in text
     assert "지금 시각" in text
-    assert text.endswith("질문: 아까 본 가방 어디 있었지?")
+    assert text.endswith("\n지금 질문: 아까 본 가방 어디 있었지?")
 
     # 찾았는데 없었으면 없다는 것을 알린다. 안 알리면 사진을 보고 지어낸다.
     vlm.ask(frame(), "아까 본 가방 어디 있었지?", memories=[])
@@ -99,19 +102,6 @@ def test_api_가_실패하면_none_을_주고_멈추지_않는다():
 
 def test_답이_비었으면_none():
     assert VLMClient(client=FakeClient(text="  ")).ask(frame(), "이거 뭐야?") is None
-
-
-def test_describe_는_장면_설명을_받고_지연_값은_건드리지_않는다():
-    client = FakeClient(text="책상 위에 검은 백팩이 있다.")
-    vlm = VLMClient(client=client)
-    vlm.ask(frame(), "이거 뭐야?")
-    asked_ms = vlm.last_latency_ms
-
-    assert vlm.describe(frame()) == "책상 위에 검은 백팩이 있다."
-    assert client.requests[-1]["instructions"] == SCENE_INSTRUCTIONS
-    assert len(sent(client)[1]) == 1  # 사진도 같이 보냈다
-    # 뒤에서 도는 describe 가 질문 지연을 덮으면 그래프가 엉뚱한 값을 기록한다
-    assert vlm.last_latency_ms == asked_ms
 
 
 def test_사진은_긴_변을_줄이고_비율은_그대로_둔다():
@@ -144,4 +134,3 @@ def test_fake_는_답을_차례로_주고_받은_질문을_모은다():
     assert vlm.ask(None, "셋") == "책이에요."
     assert vlm.ask(None, "넷") == "책이에요."  # 마지막 답을 계속 준다
     assert [question for _, question, _ in vlm.asked] == ["하나", "둘", "셋", "넷"]
-    assert vlm.describe(frame()) == "책상 위에 흰 컵이 있다."

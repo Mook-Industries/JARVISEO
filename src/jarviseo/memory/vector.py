@@ -5,10 +5,11 @@
 벡터 DB 를 따로 두지 않고 Postgres 의 pgvector 확장을 쓴다.
 임베딩을 기록과 같은 행에 두면, 벡터와 기록이 어긋날 일이 없고 백업도 하나로 끝난다.
 
-ERD 의 observation 테이블(과거에 본 장면의 설명 임베딩)을 검색한다. "아까 본 그거"
+ERD 의 observation 테이블(지난 질문·대답 기록의 임베딩, memory/dialog.py 가 넣는다)을
+검색한다. "아까 본 그거"
 
     memory = VectorMemory(store)
-    memory.remember_observation(user_id, turn_id, "책상 위에 검은 백팩이 있다")
+    memory.remember_observation(user_id, turn_id, "질문: 이거 뭐야?\n대답: 검은 백팩이에요.")
     hits = memory.search(user_id, "아까 본 가방 어디 있었지?")
 
 '근거율'이 무엇인가
@@ -44,7 +45,7 @@ log = logging.getLogger(__name__)
 
 
 class VectorMemory:
-    """observation 에 장면 설명을 임베딩과 함께 넣고, 질문과 뜻이 가까운 것을 찾는다."""
+    """observation 에 기록 글을 임베딩과 함께 넣고, 질문과 뜻이 가까운 것을 찾는다."""
 
     def __init__(
         self,
@@ -65,7 +66,7 @@ class VectorMemory:
     def remember_observation(
         self, user_id: int, turn_id: int, text: str, place: str | None = None
     ) -> int:
-        """지금 본 장면 설명을 기록하고 observation_id 를 돌려준다.
+        """기록 글(지난 질문·대답)을 넣고 observation_id 를 돌려준다.
 
         임베딩이 실패해도 설명은 남긴다(embedding 이 NULL). 그 행은 검색에 안 나온다.
         """

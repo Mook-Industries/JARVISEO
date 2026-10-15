@@ -20,7 +20,7 @@
     recall   : 기억을 찾는다 (memory/vector.py)
     generate : VLM 답을 받는다. 늦으면 "잠깐만요"를 먼저 읽는다 (voice/collector.py)
     speak    : 답을 읽는다 (voice/tts.py). 도중에 "자비서"가 들리면 바로 끊긴다
-    log      : 턴을 DB 에 남기고, 장면 설명 저장을 뒤에 맡긴다 (memory/store.py, scene.py)
+    log      : 턴을 DB 에 남기고, 질문·대답을 기억에 넣는 일을 뒤에 맡긴다 (store.py, dialog.py)
 
 호출어를 기다리는 일과 끼어들기는 그래프 밖(scripts/assistant.py)에서 한다.
 호출어가 들리면 graph.invoke({"wake_at": 감지 시각, ...}) 로 질문 한 번을 돌린다.
@@ -46,7 +46,7 @@ from jarviseo.types import AssistantResponse, Frame, Intent
 
 if TYPE_CHECKING:
     from jarviseo.capture import FrameBuffer
-    from jarviseo.memory import MemoryStore, SceneMemory, VectorMemory
+    from jarviseo.memory import DialogMemory, MemoryStore, VectorMemory
     from jarviseo.vlm import FakeVLMClient, VLMClient
     from jarviseo.voice import (
         FakeSpeechToText,
@@ -81,7 +81,7 @@ class Parts:
     frames: FrameBuffer | None = None
     store: MemoryStore | None = None
     memory: VectorMemory | None = None
-    scenes: SceneMemory | None = None
+    dialog: DialogMemory | None = None
     collector: ResponseCollector | None = None
     # 꺼져 있으면 기억을 묻는 질문도 GENERAL 로 보낸다(config 의 기능 플래그)
     recall_enabled: bool = config.ENABLE_RECALL
@@ -226,10 +226,22 @@ class _Nodes:
             interrupted=state.get("interrupted", False),
             filler_sent=state.get("filler_sent", False),
         )
-        scenes, frame, user_id = self.parts.scenes, state.get("frame"), state.get("user_id")
-        if scenes is not None and frame is not None and user_id is not None:
-            scenes.remember(user_id, turn_id, frame)  # 바로 돌아온다. 저장은 뒤에서 한다
+        dialog, user_id = self.parts.dialog, state.get("user_id")
+        if dialog is not None and user_id is not None and _worth_remembering(response):
+            # 바로 돌아온다. 임베딩·저장은 뒤에서 한다
+            dialog.remember(user_id, turn_id, state["utterance"].text, response.text)
         return {"turn_id": turn_id}
+
+
+def _worth_remembering(response: AssistantResponse) -> bool:
+    """기억에 넣을 대화인지.
+
+    답을 버렸거나(빈 대답) VLM 이 실패해 사과만 했으면 기억할 내용이 없다.
+    기억을 물은 턴(RECALL)도 넣지 않는다. 대답이 옛 기록을 다시 말한 것이라 새 내용이 없고,
+    넣으면 다음에 비슷한 질문을 할 때 원래 기록보다 이 턴이 먼저 찾힌다.
+    "기억에 없어요"로 답한 턴이 찾히면 다음에도 기억에 없다고 답하게 된다.
+    """
+    return bool(response.text) and response.text != SORRY and response.intent is not Intent.RECALL
 
 
 def _ms(since: float) -> float:
