@@ -12,10 +12,10 @@ from jarviseo.capture import FrameBuffer
 from jarviseo.graph import Parts, build_graph
 from jarviseo.graph.pipeline import REPROMPT, SORRY
 from jarviseo.memory import (
+    DialogMemory,
     FakeEmbedder,
     MemoryStore,
     Observation,
-    SceneMemory,
     SessionTurn,
     TurnInference,
     TurnVoice,
@@ -29,7 +29,7 @@ from jarviseo.voice.collector import FILLER
 
 @pytest.fixture
 def file_store(tmp_path):
-    """장면 저장이 다른 스레드에서 돈다. SQLite 인메모리는 스레드마다 다른 DB 라 파일로 둔다."""
+    """대화 기억은 다른 스레드에서 저장된다. 인메모리 SQLite 는 스레드마다 달라 파일로 둔다."""
     s = MemoryStore(database_url=f"sqlite:///{(tmp_path / 'graph.db').as_posix()}")
     s.init_schema()
     yield s
@@ -52,9 +52,9 @@ def turn_input(store):
 
 def test_일반_질문은_사진과_함께_묻고_답을_읽고_기록한다(file_store):
     tts = FakeTextToSpeech()
-    vlm = FakeVLMClient(["빨간 컵이에요."], scene="책상 위에 빨간 컵이 있다.")
+    vlm = FakeVLMClient(["빨간 컵이에요."])
     memory = VectorMemory(file_store, embedder=FakeEmbedder())
-    scenes = SceneMemory(memory, vlm.describe)
+    dialog = DialogMemory(memory)
     frames = camera()
     graph = build_graph(
         Parts(
@@ -64,12 +64,12 @@ def test_일반_질문은_사진과_함께_묻고_답을_읽고_기록한다(fil
             frames=frames,
             store=file_store,
             memory=memory,
-            scenes=scenes,
+            dialog=dialog,
         )
     )
 
     result = graph.invoke(turn_input(file_store) | {"trigger_type": "WAKEWORD"})
-    scenes.close()  # 뒤에서 하던 장면 저장을 마친다
+    dialog.close()  # 뒤에서 하던 대화 기억 저장을 마친다
 
     assert result["intent"] is Intent.GENERAL
     assert tts.spoken == ["빨간 컵이에요."]
@@ -82,7 +82,9 @@ def test_일반_질문은_사진과_함께_묻고_답을_읽고_기록한다(fil
         assert (turn.question_text, turn.answer_text) == ("이거 뭐야?", "빨간 컵이에요.")
         assert db.get(TurnVoice, turn.turn_id).stt_raw_text == "자비서, 이거 뭐야?"
         assert db.get(TurnInference, turn.turn_id).llm_ms == 0  # VLM 지연이 열에 들어갔다
-        assert db.query(Observation).one().description == "책상 위에 빨간 컵이 있다."
+        # 질문·대답이 기억에 들어갔다 (VLM 을 한 번 더 부르지 않는다)
+        assert db.query(Observation).one().description == "질문: 이거 뭐야?\n대답: 빨간 컵이에요."
+    assert len(vlm.asked) == 1
 
 
 def test_기억을_묻는_질문은_기억을_찾아_vlm_에_넘긴다(file_store):

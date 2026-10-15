@@ -30,7 +30,7 @@ import threading
 from jarviseo import config
 from jarviseo.capture import FrameBuffer, FrameSource, WebcamSource
 from jarviseo.graph import JarviseoState, Parts, build_graph
-from jarviseo.memory import MemoryStore, SceneMemory, VectorMemory
+from jarviseo.memory import DialogMemory, MemoryStore, VectorMemory
 from jarviseo.vlm import VLMClient
 from jarviseo.voice import BargeIn, ResponseCollector, SpeechToText, TextToSpeech, WakeWordDetector
 from jarviseo.voice.mic import MicStream
@@ -124,7 +124,7 @@ def main() -> None:
     user_id = store.ensure_user()
     session_id = store.start_session(user_id, title="assistant")
     vlm = VLMClient()
-    scenes = SceneMemory(VectorMemory(store), vlm.describe)
+    dialog = DialogMemory(VectorMemory(store))
     tts = TextToSpeech(device=args.speaker)
     barge = BargeIn(tts)
     collector = ResponseCollector(tts, called_since=barge.called_since)  # "잠깐만요"를 미리 합성
@@ -138,8 +138,8 @@ def main() -> None:
             vlm=vlm,
             frames=frames,
             store=store,
-            memory=scenes.memory,
-            scenes=scenes,
+            memory=dialog.memory,
+            dialog=dialog,
             collector=collector,
         )
         graph = build_graph(parts)
@@ -155,9 +155,9 @@ def main() -> None:
         finally:
             detector.stop()
 
-    print("\n마무리하는 중 (받던 답·장면 저장)...")
+    print("\n마무리하는 중 (받던 답·대화 기억 저장)...")
     collector.close()
-    scenes.close()
+    dialog.close()
     store.end_session(session_id)
     if turns:
         print(f"\n중앙값 ({len(turns)}턴, ms)")

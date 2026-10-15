@@ -37,13 +37,11 @@ from jarviseo.memory.models import (
     UserAllergen,
     UserSetting,
 )
-from jarviseo.memory.scene import SceneMemory
 from jarviseo.memory.store import MemoryStore
 from jarviseo.memory.vector import VectorMemory
 
 __all__ = [
     "MemoryStore",
-    "SceneMemory",
     "DialogMemory",
     "VectorMemory",
     "TextEmbedder",
