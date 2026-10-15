@@ -241,14 +241,15 @@ HACCP 공공데이터 / OCR 결과 캐시.
 
 ### 관찰 기록 · `observation`
 
-"아까 본 그거"를 찾을 때 검색하는 기록.
+"아까 본 그거"를 찾을 때 검색하는 기록. 10/15(#66)부터 `description` 에는 그 턴의 질문과 대답을
+"질문: …" / "대답: …" 두 줄 한 글로 넣는다(전에는 VLM 이 쓴 장면 설명). 테이블과 열은 그대로다.
 
 | 논리명 | 물리명 | 타입 | 설명 |
 |---|---|---|---|
 | 관찰 ID | `observation_id` | BIGSERIAL **PK** | |
 | 사용자 ID | `user_id` | BIGINT **FK → users** | |
 | 턴 ID | `turn_id` | BIGINT **FK → session_turn** | |
-| 장면 설명 | `description` | TEXT NULL | |
+| 장면 설명 | `description` | TEXT NULL | 지난 대화 "질문: … / 대답: …" (#66) |
 | 장소 | `place` | VARCHAR(100) NULL | |
 | 텍스트 임베딩 | `embedding` | VECTOR(1536) NULL | text-embedding-3-small |
 | 임베딩 모델 | `embed_model` | VARCHAR(50) NULL | |

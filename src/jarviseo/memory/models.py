@@ -483,7 +483,10 @@ class TurnIngredient(Base):
 
 
 class Observation(Base):
-    """과거에 본 장면 하나. "아까 본 그거"를 찾을 때 검색하는 기록."""
+    """지난 대화 한 번(질문과 대답). "아까 본 그거"를 찾을 때 검색하는 기록.
+
+    10/15(#66) 전에는 VLM 이 쓴 장면 설명을 넣었다. 테이블과 열 이름은 ERD 그대로 둔다.
+    """
 
     __tablename__ = "observation"
 
@@ -494,9 +497,9 @@ class Observation(Base):
     turn_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("session_turn.turn_id", ondelete="CASCADE"), index=True
     )
-    description: Mapped[str | None] = mapped_column(Text)  # 장면 설명
+    description: Mapped[str | None] = mapped_column(Text)  # 질문·대답 (memory/dialog.py)
     place: Mapped[str | None] = mapped_column(String(100))
-    # 장면 설명의 텍스트 임베딩(text-embedding-3-small, 1536차원).
+    # description 의 텍스트 임베딩(text-embedding-3-small, 1536차원).
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536))
     embed_model: Mapped[str | None] = mapped_column(String(50))
     observed_at: Mapped[datetime | None] = mapped_column(
