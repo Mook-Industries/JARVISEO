@@ -2,13 +2,19 @@
 
 답변 문장을 OpenAI TTS 로 합성한다. 모델 이름은 ``config.TTS_MODEL`` 하나만 본다.
 ``synthesize()`` 가 PCM 조각을 받는 대로 내고, ``speak()`` 는 그 조각을 받는 대로 재생한다.
+
+답이 늦어 "잠깐만요"를 읽는 동안 답이 오면, ``prefetch()`` 로 대답 합성을 바로 시작해 둔다.
+필러가 끝나고 speak() 를 부를 때는 받아 둔 조각부터 읽어서, 첫 조각 왕복(약 0.9초)을
+필러 뒤에 다시 기다리지 않는다.
 """
 
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Generator, Iterator
 
 import httpx2
 import numpy as np
@@ -59,21 +65,39 @@ class TextToSpeech:
         self.client = client or OpenAI(
             api_key=config.OPENAI_API_KEY or None, timeout=TIMEOUT_SEC, max_retries=RETRIES
         )
-        # 마지막 합성에서 첫 조각을 받기까지 걸린 시간(ms, TTFB). 아직 못 받았으면 None.
+        # 마지막 speak() 에서 첫 조각이 나오기까지 기다린 시간(ms). 아직 못 받았으면 None.
+        # synthesize() 만 불렀으면 그 합성의 첫 조각 왕복(TTFB)이다.
         # 그래프가 latency_ms["tts"] 로 넘기면 log_turn 이 turn_voice.tts_ms 에 적는다.
         self.last_latency_ms: float | None = None
         # 마지막 speak() 이 stop() 으로 중간에 끊겼으면 True (turn_voice.is_interrupted).
         self.last_interrupted = False
+        # prefetch() 로 미리 합성하기 시작한 것. 답을 받는 스레드가 넣고 speak() 가 꺼낸다.
+        self._prefetched: _Prefetch | None = None
+        self._lock = threading.Lock()
 
     def speak(self, text: str) -> float | None:
         """text 를 합성하면서 받는 대로 읽어 준다. 재생이 끝나거나 stop() 으로 끊길 때까지 기다린다.
 
-        첫 오디오 청크를 받기까지 걸린 시간(ms)을 돌려준다. 이 값이 ``turn_voice.tts_ms`` 다.
+        speak() 를 부른 뒤 첫 오디오 조각이 나오기까지 기다린 시간(ms)을 돌려준다. 이 값이
+        ``turn_voice.tts_ms`` 다. 보통은 합성 첫 조각 왕복이고, 같은 text 를 prefetch() 해
+        두었으면 미리 받은 만큼 짧다(다 받아 두었으면 거의 0).
         합성이 도중에 실패하면 그때까지 받은 소리만 내고 멈춘다. 소리를 하나도 못 냈으면 None.
         끝까지 읽었는지는 ``last_interrupted`` 로 본다.
         """
         self.last_interrupted = False
-        chunks = self.synthesize(text)
+        self.last_latency_ms = None
+        asked_at = time.monotonic()
+        with self._lock:
+            prefetched, self._prefetched = self._prefetched, None
+        if prefetched is not None and prefetched.text != text:
+            prefetched.cancel()  # 다른 글자(버린 답)를 미리 받던 것이다
+            prefetched = None
+
+        def first() -> None:
+            self.last_latency_ms = (time.monotonic() - asked_at) * 1000
+
+        source = prefetched.chunks() if prefetched is not None else self._stream(text)
+        chunks = _on_first(source, first)
         try:
             self.speaker.play(chunks)
         except (OpenAIError, httpx2.HTTPError) as e:
@@ -85,6 +109,19 @@ class TextToSpeech:
             chunks.close()
         self.last_interrupted = self.speaker.interrupted
         return self.last_latency_ms
+
+    def prefetch(self, text: str) -> None:
+        """text 합성을 다른 스레드에서 지금 시작해 둔다. 바로 돌아온다.
+
+        곧 같은 text 로 speak() 를 부르면 새로 요청하지 않고 받아 둔 조각부터 읽는다.
+        ResponseCollector 가 답을 받자마자 부른다. 다른 text 로 speak() 하거나 다시
+        prefetch() 하면 받던 것은 버린다(버린 답의 합성).
+        """
+        new = _Prefetch(text, self._stream(text))
+        with self._lock:
+            old, self._prefetched = self._prefetched, new
+        if old is not None:
+            old.cancel()
 
     def prepare(self, text: str) -> bytes:
         """text 를 미리 끝까지 합성해 PCM 을 통째로 돌려준다. 실패하면 빈 바이트.
@@ -119,9 +156,20 @@ class TextToSpeech:
 
         첫 조각을 받기까지 걸린 시간(ms)을 ``last_latency_ms`` 에 남긴다.
         """
-        speed = SPEEDS.get(self.speed.upper(), 1.0)
         self.last_latency_ms = None
         asked_at = time.monotonic()
+
+        def first() -> None:
+            self.last_latency_ms = (time.monotonic() - asked_at) * 1000
+
+        return _on_first(self._stream(text), first)
+
+    def _stream(self, text: str) -> Generator[bytes]:
+        """합성 요청 하나를 보내고 PCM 조각을 받는 대로 낸다. 닫으면 응답 스트림도 닫는다.
+
+        객체의 상태(last_latency_ms 등)는 건드리지 않는다. prefetch() 가 다른 스레드에서 쓴다.
+        """
+        speed = SPEEDS.get(self.speed.upper(), 1.0)
         with self.client.audio.speech.with_streaming_response.create(
             model=self.model,
             voice=self.voice,
@@ -131,10 +179,59 @@ class TextToSpeech:
             **({} if speed == 1.0 else {"speed": speed}),
             response_format="pcm",
         ) as response:
-            for chunk in response.iter_bytes(CHUNK_BYTES):
-                if self.last_latency_ms is None:
-                    self.last_latency_ms = (time.monotonic() - asked_at) * 1000
-                yield chunk
+            yield from response.iter_bytes(CHUNK_BYTES)
+
+
+def _on_first(chunks: Generator[bytes], first: Callable[[], None]) -> Generator[bytes]:
+    """chunks 를 그대로 내면서 첫 조각이 나올 때 first() 를 부른다. 닫으면 chunks 도 닫는다."""
+    try:
+        for i, chunk in enumerate(chunks):
+            if i == 0:
+                first()
+            yield chunk
+    finally:
+        chunks.close()
+
+
+class _Prefetch:
+    """합성 조각을 다른 스레드에서 미리 받아 쌓아 두고, speak() 가 chunks() 로 꺼내 읽는다."""
+
+    def __init__(self, text: str, stream: Generator[bytes]) -> None:
+        self.text = text
+        self._stream = stream
+        # 조각(bytes), 받다가 난 예외, 끝 표시(None) 가 차례로 들어간다
+        self._queue: queue.SimpleQueue[bytes | Exception | None] = queue.SimpleQueue()
+        self._cancelled = threading.Event()
+        threading.Thread(target=self._receive, name="tts-prefetch", daemon=True).start()
+
+    def _receive(self) -> None:
+        try:
+            for chunk in self._stream:
+                if self._cancelled.is_set():
+                    break
+                self._queue.put(chunk)
+        except Exception as e:  # speak() 쪽에서 다시 올려 평소 실패처럼 다룬다
+            self._queue.put(e)
+        finally:
+            self._stream.close()  # 응답 스트림을 닫는다
+            self._queue.put(None)
+
+    def chunks(self) -> Generator[bytes]:
+        """받아 둔 조각부터 차례로 낸다. 아직 안 온 조각은 올 때까지 기다린다.
+
+        받다가 예외가 났으면 그 자리에서 올린다. 닫으면(끼어들기) 남은 합성을 그만 받는다.
+        """
+        try:
+            while (item := self._queue.get()) is not None:
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+        finally:
+            self.cancel()
+
+    def cancel(self) -> None:
+        """남은 조각을 그만 받게 한다. 받는 중인 조각 하나가 끝나면 스트림을 닫는다."""
+        self._cancelled.set()
 
 
 def trim_silence(pcm: bytes) -> bytes:

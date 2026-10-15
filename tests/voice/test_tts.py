@@ -4,6 +4,7 @@ OpenAI API 와 스피커는 부르지 않는다.
 """
 
 import sys
+import time
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -135,6 +136,59 @@ def test_첫_조각도_못_받으면_아무것도_재생하지_않고_None(playe
         yield
 
     assert TextToSpeech(client=FakeClient(dead)).speak("안녕하세요.") is None
+    assert played == []
+
+
+def slow_chunks(delay):
+    """첫 조각이 delay 초 뒤에 오는 합성. 실제 TTS 의 첫 조각 왕복(약 0.9초)을 흉내 낸다."""
+
+    def chunks(size):
+        time.sleep(delay)
+        yield from two_chunks(size)
+
+    return chunks
+
+
+def test_prefetch_해_두면_speak_가_새로_요청하지_않고_받아_둔_조각을_바로_읽는다(played):
+    client = FakeClient(slow_chunks(0.2))
+    tts = TextToSpeech(client=client)
+
+    tts.prefetch("컵이에요.")
+    time.sleep(0.4)  # "잠깐만요"를 읽는 동안 첫 조각이 왔다
+    took = tts.speak("컵이에요.")
+
+    assert len(client.requests) == 1
+    assert b"".join(played) == b"" * CHUNK_BYTES + b"" * CHUNK_BYTES
+    assert took == tts.last_latency_ms < 100  # 첫 조각 왕복(200ms)을 다시 기다리지 않았다
+    assert client.closed
+
+
+def test_prefetch_없이_speak_하면_첫_조각_왕복을_그대로_기다린다(played):
+    took = TextToSpeech(client=FakeClient(slow_chunks(0.2))).speak("컵이에요.")
+
+    assert took >= 150  # 윈도우의 time.monotonic() 은 15.6ms 단위라 200 보다 조금 작게 나온다
+
+
+def test_다른_글자로_speak_하면_미리_받던_것은_버리고_새로_합성한다(played):
+    client = FakeClient()
+    tts = TextToSpeech(client=client)
+
+    tts.prefetch("버린 답이에요.")
+    tts.speak("새 답이에요.")
+
+    assert sorted(r["input"] for r in client.requests) == ["버린 답이에요.", "새 답이에요."]
+    assert b"".join(played) == b"" * CHUNK_BYTES + b"" * CHUNK_BYTES  # 한 번만 읽었다
+
+
+def test_미리_합성이_실패하면_speak_도_소리_없이_None(played):
+    def dead(size):
+        raise httpx2.ReadTimeout("끊김")
+        yield
+
+    tts = TextToSpeech(client=FakeClient(dead))
+    tts.prefetch("컵이에요.")
+
+    assert tts.speak("컵이에요.") is None
     assert played == []
 
 

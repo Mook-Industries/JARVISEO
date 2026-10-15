@@ -81,6 +81,8 @@ class FakeTextToSpeech:
 
     def __init__(self) -> None:
         self.spoken: list[str] = []
+        # prefetch() 로 미리 합성하라고 받은 문장
+        self.prefetched: list[str] = []
         self.last_latency_ms: float | None = None
         self.last_interrupted = False
 
@@ -88,6 +90,9 @@ class FakeTextToSpeech:
         self.spoken.append(text)
         self.last_latency_ms, self.last_interrupted = 0.0, False
         return 0.0
+
+    def prefetch(self, text: str) -> None:
+        self.prefetched.append(text)
 
     def prepare(self, text: str) -> bytes:
         return text.encode()
