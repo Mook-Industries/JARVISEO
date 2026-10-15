@@ -10,8 +10,6 @@ import time
 import numpy as np
 
 from jarviseo.capture import FrameBuffer
-from jarviseo.graph import GraphDeps, build_graph
-from jarviseo.graph.nodes import INGREDIENT_UNAVAILABLE
 from jarviseo.memory import TurnIngredient
 from jarviseo.nutrition.service import IngredientCheck
 from jarviseo.types import (
@@ -26,6 +24,8 @@ from jarviseo.types import (
 )
 from jarviseo.vlm import FakeVLMClient
 from jarviseo.voice import FakeSpeechToText, FakeTextToSpeech
+from jarviseo.workflow import GraphDeps, build_graph
+from jarviseo.workflow.messages import INGREDIENT_UNAVAILABLE
 
 FULL = (1080, 1920, 3)
 CROP = (400, 300, 3)  # 아래 과자 박스 (400,500)-(700,900)

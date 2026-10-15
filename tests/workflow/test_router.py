@@ -2,8 +2,8 @@
 
 import pytest
 
-from jarviseo.graph.router import classify_intent
 from jarviseo.types import Intent
+from jarviseo.workflow.router import classify_intent
 
 
 @pytest.mark.parametrize("text", ["이거 먹어도 돼?", "성분 알려줘", "이거 뭐 들어갔어?"])

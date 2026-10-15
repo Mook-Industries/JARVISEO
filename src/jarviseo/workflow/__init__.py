@@ -12,8 +12,8 @@
 이 두 분기가 있다는 것이 단순 파이프라인과의 차이이고, LangGraph 를 쓰는 이유이기도 하다.
 """
 
-from jarviseo.graph.nodes import GraphDeps
-from jarviseo.graph.pipeline import build_graph
-from jarviseo.graph.state import JarviseoState
+from jarviseo.workflow.deps import GraphDeps
+from jarviseo.workflow.graph import build_graph
+from jarviseo.workflow.state import JarviseoState
 
 __all__ = ["GraphDeps", "JarviseoState", "build_graph"]

@@ -25,7 +25,7 @@ flowchart TD
     W[웨이크워드 감지<br/>voice/wakeword.py] --> C[프레임 고르기<br/>capture/quality.py]
     C -->|흐림 & 3회 미만| C
     C --> S[받아쓰기 STT<br/>voice/stt.py]
-    S --> R{의도 분류<br/>graph/pipeline.py}
+    S --> R{의도 분류<br/>workflow/router.py}
     R -->|POINTING| D[물체·손끝 검출<br/>pointing/detector.py]
     R -->|INGREDIENT| O[성분표 검출·OCR·판정<br/>nutrition/]
     R -->|RECALL| M[기억 검색<br/>memory/vector.py]
@@ -62,7 +62,7 @@ flowchart TD
 음성을 글자로 바꾼다. 결과는 `Utterance`에 담긴다.
 여기서 가장 중요한 값은 글자가 아니라 **`started_at`(말을 시작한 시각)**이다. ②의 사진 고르기가 이 값을 기준으로 움직인다. VAD(음성 구간 검출, 소리 중에서 사람이 말하는 구간만 잘라내는 기능)가 이 시각을 알려준다.
 
-### ④ 의도 분류 — `graph/pipeline.py` (최홍묵)
+### ④ 의도 분류 — `workflow/router.py` (최홍묵)
 
 "무슨 종류의 질문인가"를 4가지 중 하나로 정한다. `types.py`의 `Intent`다.
 
@@ -143,9 +143,10 @@ VLM(이미지와 글을 같이 이해하는 언어 모델)에게 **사진 1장 +
 src/jarviseo/
 ├── types.py          ★ 세 사람의 계약. 주고받는 데이터 모양 전부
 ├── config.py         ★ 환경변수·경로를 읽는 유일한 곳
-├── graph/            LangGraph로 전체 흐름 엮기           최홍묵
+├── workflow/         LangGraph로 전체 흐름 엮기           최홍묵
 │   ├── state.py        노드 사이에 넘기는 상태
-│   └── pipeline.py     노드·분기 구성
+│   ├── graph.py        노드·분기 잇기
+│   └── nodes/          기능별 노드 (듣기·의도·가리킴·성분·답·기억)
 ├── capture/          카메라 입력·선명도                  공용   ✅ 구현됨
 ├── pointing/         ① 지시 대상 특정                    최홍묵
 ├── nutrition/        ② 식품 성분 판정                    권용현
@@ -167,7 +168,7 @@ tests/                자동 테스트 (계약 6개 + DB 7개)
 | 상태 | 무엇 |
 |---|---|
 | ✅ 돌아감 | `types.py`, `config.py`, `capture/` 전체, `memory/models.py`, `memory/store.py`, `api/main.py`의 `/health`, `tools/device_check/`, `scripts/spike/spike_01_capture.py` |
-| ⬜ 이름·설명만 있음 | `graph/pipeline.py`, `pointing/` 전체, `nutrition/` 전체, `voice/` 전체, `vlm/client.py`, `memory/vector.py`, 스파이크 2~5 |
+| ⬜ 이름·설명만 있음 | `pointing/` 전체, `nutrition/` 전체, `voice/` 전체, `vlm/client.py`, `memory/vector.py`, 스파이크 2~5 |
 
 ⬜ 파일을 열면 함수 이름, 인자, 반환 타입, 그리고 **"어떻게 만들어야 하는지"를 적은 설명(docstring)**까지 들어 있다. 몸통만 비어 있다. 각자 할 일은 **이 설명을 읽고 몸통을 채우는 것**이다.
 
@@ -207,7 +208,7 @@ tests/                자동 테스트 (계약 6개 + DB 7개)
 **바꿀 때 규칙:** 필드 하나만 바뀌어도 남의 코드가 조용히 깨진다. 그래서 혼자 고치지 않는다. 팀 채널에 먼저 공지하고, 커밋 타입 뒤에 `!`를 붙인다(`feat(types)!: ...`).
 `tests/test_types_contract.py`가 필드 이름을 검사하고 있어서, 모르고 바꾸면 테스트가 먼저 빨간불을 켠다.
 
-### `graph/state.py` — 노드 사이의 계약
+### `workflow/state.py` — 노드 사이의 계약
 
 LangGraph는 **노드**(일 하나를 하는 함수)들을 **엣지**(다음에 어디로 갈지)로 잇는 방식이다. 노드끼리는 `JarviseoState`라는 딕셔너리 하나를 계속 넘겨받으며 채워 간다.
 

@@ -23,11 +23,11 @@ DB 테스트는 여기에 더해 db job 이 pgvector 컨테이너를 띄워 실�
 | `voice/test_collector.py` | 답이 늦으면 "잠깐만요"를 먼저 읽고, 기다리는 동안 다시 부르면 늦은 답을 버리는지 |
 | `memory/test_dialog.py` | 질문·대답이 뒤에서 observation 에 들어가고 기억 검색으로 찾히는지, 빈 대답은 안 넣고 실패해도 안 멈추는지 |
 | `vlm/test_client.py` | VLM 요청 모양(사진·질문·기억)·실패하면 None·사진 줄이기, Fake VLM 이 실제와 같은 모양인지 (API 는 가짜로) |
-| `graph/test_state.py` | 단계별 지연·되묻기 대답이 덮이지 않고 합쳐지는지, 같은 단계는 시간을 더하는지 |
-| `graph/test_router.py` | 성분 → 기억 → 가리킴 → 나머지 순으로 의도를 정하는지, 띄어쓰기를 붙여 써도 같은지 |
-| `graph/test_pipeline.py` | 질문 한 번이 그래프를 끝까지 도는지 — 사진·기억·호출어만 부르기·사과 문장·"잠깐만요"·답 버리기·대화 기억과 DB 기록 (Fake 로) |
-| `graph/test_pointing.py` | 가리킴 길(검출 → 대상 결정 ⇄ 되묻기 → 크롭)과 재촬영 — 크롭이 VLM 에 가는지, 되묻기 상한·한 글자 대답, 가리킴 기록 |
-| `graph/test_ingredient.py` | 성분 질문이 VLM 없이 성분 판정 문장으로 끝나는지 — 크롭·알레르기 전달, 부품·사진 없음, 재촬영 안내 |
+| `workflow/test_state.py` | 단계별 지연·되묻기 대답이 덮이지 않고 합쳐지는지, 같은 단계는 시간을 더하는지 |
+| `workflow/test_router.py` | 성분 → 기억 → 가리킴 → 나머지 순으로 의도를 정하는지, 띄어쓰기를 붙여 써도 같은지 |
+| `workflow/test_graph.py` | 질문 한 번이 그래프를 끝까지 도는지 — 사진·기억·호출어만 부르기·사과 문장·"잠깐만요"·답 버리기·대화 기억과 DB 기록 (Fake 로) |
+| `workflow/nodes/test_pointing.py` | 가리킴 길(검출 → 대상 결정 ⇄ 되묻기 → 크롭)과 재촬영 — 크롭이 VLM 에 가는지, 되묻기 상한·한 글자 대답, 가리킴 기록 |
+| `workflow/nodes/test_ingredient.py` | 성분 질문이 VLM 없이 성분 판정 문장으로 끝나는지 — 크롭·알레르기 전달, 부품·사진 없음, 재촬영 안내 |
 | `pointing/test_crop.py` | 대상 크롭이 사진 경계를 넘거나 비어도 보낼 사진이 나오는지 |
 
 ## 로컬에서 돌리는 법

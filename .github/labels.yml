@@ -39,7 +39,7 @@
 # ── 상태 ──────────────────────────────────────────────────────────────
 - name: "breaking"
   color: "b60205"
-  description: "types.py / graph/state.py 변경 — 세 사람 코드가 전부 영향받음"
+  description: "types.py / workflow/state.py 변경 — 세 사람 코드가 전부 영향받음"
 
 - name: "blocked"
   color: "d93f0b"
