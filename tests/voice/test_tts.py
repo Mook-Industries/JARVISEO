@@ -12,7 +12,14 @@ import httpx2
 import pytest
 
 from jarviseo import config
-from jarviseo.voice.tts import CHUNK_BYTES, SAMPLE_RATE, TRIM_PAD_SEC, TextToSpeech
+from jarviseo.voice.tts import (
+    CHUNK_BYTES,
+    READ_TIMEOUT_SEC,
+    RETRIES,
+    SAMPLE_RATE,
+    TRIM_PAD_SEC,
+    TextToSpeech,
+)
 from jarviseo.voice.tts_text import normalize, split_sentences
 
 
@@ -135,8 +142,36 @@ def test_첫_조각도_못_받으면_아무것도_재생하지_않고_None(playe
         raise httpx2.ReadTimeout("끊김")
         yield
 
-    assert TextToSpeech(client=FakeClient(dead)).speak("안녕하세요.") is None
+    client = FakeClient(dead)
+
+    assert TextToSpeech(client=client).speak("안녕하세요.") is None
     assert played == []
+    assert len(client.requests) == 2  # 한 번 더 요청해 보고 포기했다
+
+
+def test_첫_조각_전에_멈췄으면_새로_요청해서_읽는다(played):
+    def stalled_once(size):
+        client.chunks = two_chunks  # 다음 요청은 정상
+        raise httpx2.ReadTimeout("응답을 받기 시작한 뒤 서버가 멈췄다")
+        yield
+
+    client = FakeClient(stalled_once)
+    tts = TextToSpeech(client=client)
+
+    took = tts.speak("안녕하세요.")
+
+    assert len(client.requests) == 2
+    assert b"".join(played) == b"" * CHUNK_BYTES + b"" * CHUNK_BYTES
+    assert took == tts.last_latency_ms >= 0
+
+
+def test_첫_조각을_기다리는_시간은_짧게_걸고_한_번만_다시_보낸다(monkeypatch):
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-test")  # 요청은 보내지 않는다
+
+    client = TextToSpeech().client
+
+    assert client.timeout.read == READ_TIMEOUT_SEC == 4.0
+    assert client.max_retries == RETRIES == 1
 
 
 def slow_chunks(delay):

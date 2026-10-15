@@ -33,7 +33,12 @@ CHUNK_BYTES = SAMPLE_RATE * 2 // 10  # 100ms 씩 받는다
 # 길이가 ±0.6초씩 흔들려 효과가 안 보였고, speed 는 0.8 → 1.31배, 1.25 → 0.79배로 일정했다.
 SPEEDS = {"SLOW": 0.85, "NORMAL": 1.0, "FAST": 1.2}
 # 한 번 기다리는 최대 시간(초)과 다시 보내는 횟수.
-TIMEOUT_SEC, RETRIES = 10.0, 1
+# 받는 쪽(read)은 따로 짧게 건다. 첫 조각은 보통 0.6~1.5초에 오는데(D12 21턴), 서버가 느릴 때
+# 10초를 다 기다리고 다시 보내서 첫 소리까지 18.4초가 걸린 적이 있다(D5). 응답이 없는 서버로
+# 재 보면 10초는 20.6초 만에, read 4초는 8.5초 만에 포기한다. 3초 걸리는 응답은 둘 다 받는다.
+# 응답을 받기 시작한 뒤 멈춘 것은 openai 가 다시 보내지 않아서 speak() 가 한 번 더 요청한다.
+TIMEOUT_SEC, READ_TIMEOUT_SEC, RETRIES = 10.0, 4.0, 1
+TIMEOUT = httpx2.Timeout(TIMEOUT_SEC, read=READ_TIMEOUT_SEC)
 # 미리 만든 소리의 앞뒤 무음을 자를 때, 샘플 크기(16비트 절댓값)가 이 값 이하면 무음으로 본다.
 # "잠깐만요." 합성은 2.25~2.65초인데 말소리는 0.11~1.21초뿐이었다. 뒤 무음은 최대 7,
 # 말소리는 최대 1만쯤이다(10/14). 자르지 않으면 대답이 그 무음이 끝날 때까지 1초 넘게 기다린다.
@@ -63,7 +68,7 @@ class TextToSpeech:
         self.speed = speed
         self.speaker = Speaker(device)
         self.client = client or OpenAI(
-            api_key=config.OPENAI_API_KEY or None, timeout=TIMEOUT_SEC, max_retries=RETRIES
+            api_key=config.OPENAI_API_KEY or None, timeout=TIMEOUT, max_retries=RETRIES
         )
         # 마지막 speak() 에서 첫 조각이 나오기까지 기다린 시간(ms). 아직 못 받았으면 None.
         # synthesize() 만 불렀으면 그 합성의 첫 조각 왕복(TTFB)이다.
@@ -97,16 +102,27 @@ class TextToSpeech:
             self.last_latency_ms = (time.monotonic() - asked_at) * 1000
 
         source = prefetched.chunks() if prefetched is not None else self._stream(text)
-        chunks = _on_first(source, first)
-        try:
-            self.speaker.play(chunks)
-        except (OpenAIError, httpx2.HTTPError) as e:
-            # 요청이 실패하면 OpenAIError 로 오지만, 받는 도중에 끊기면 openai 가 감싸지 않은
-            # httpx2.ReadTimeout 같은 것이 그대로 올라온다. 어느 쪽이든 음성 루프는 멈추지 않는다.
-            log.warning("합성 실패, 재생을 멈춘다: %s", e)
-        finally:
-            # 끊겨서 덜 읽은 응답 스트림을 바로 닫는다. 그냥 두면 GC 될 때까지 연결이 남는다.
-            chunks.close()
+        for can_retry in (True, False):
+            chunks = _on_first(source, first)
+            try:
+                self.speaker.play(chunks)
+            except httpx2.HTTPError as e:
+                # 응답을 받기 시작한 뒤 서버가 멈추면 openai 가 감싸지 않은 httpx2.ReadTimeout 이
+                # 그대로 올라오고, openai 도 다시 보내 주지 않는다. 첫 조각도 못 받았으면 새로
+                # 한 번 더 요청한다. 이미 읽던 중이면 받은 만큼만 읽고 멈춘다.
+                if can_retry and self.last_latency_ms is None:
+                    log.warning("합성이 멈춰서 한 번 더 요청한다: %s", e)
+                    source = self._stream(text)
+                    continue
+                log.warning("합성 실패, 재생을 멈춘다: %s", e)
+            except OpenAIError as e:
+                # 요청 자체가 실패했다(openai 가 이미 RETRIES 만큼 다시 보낸 뒤).
+                # 음성 루프는 멈추지 않는다.
+                log.warning("합성 실패, 재생을 멈춘다: %s", e)
+            finally:
+                # 끊겨서 덜 읽은 응답 스트림을 바로 닫는다. 그냥 두면 GC 될 때까지 연결이 남는다.
+                chunks.close()
+            break
         self.last_interrupted = self.speaker.interrupted
         return self.last_latency_ms
 
