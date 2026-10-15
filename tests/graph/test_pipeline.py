@@ -4,6 +4,7 @@ STT·TTS·VLM·임베딩은 Fake 를 끼워서 API 키 없이 CI 에서 돈다.
 """
 
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -22,7 +23,7 @@ from jarviseo.memory import (
     VectorMemory,
 )
 from jarviseo.types import Frame, Intent
-from jarviseo.vlm import FakeVLMClient
+from jarviseo.vlm import FakeVLMClient, VLMClient
 from jarviseo.voice import FakeSpeechToText, FakeTextToSpeech, ResponseCollector
 from jarviseo.voice.collector import FILLER
 
@@ -84,7 +85,94 @@ def test_일반_질문은_사진과_함께_묻고_답을_읽고_기록한다(fil
         assert db.get(TurnInference, turn.turn_id).llm_ms == 0  # VLM 지연이 열에 들어갔다
         # 질문·대답이 기억에 들어갔다 (VLM 을 한 번 더 부르지 않는다)
         assert db.query(Observation).one().description == "질문: 이거 뭐야?\n대답: 빨간 컵이에요."
-    assert len(vlm.asked) == 1
+
+
+def test_턴마다_vlm_을_한_번만_부른다(file_store):
+    """대답 한 번만 부른다. 기억에 넣으려고 장면 설명을 또 받지 않는다(#66)."""
+    requests = []
+
+    def create(**kwargs):
+        requests.append(kwargs)
+        return SimpleNamespace(output_text="검은 백팩이에요.")
+
+    vlm = VLMClient(client=SimpleNamespace(responses=SimpleNamespace(create=create)))
+    dialog = DialogMemory(VectorMemory(file_store, embedder=FakeEmbedder()))
+    parts = Parts(
+        stt=FakeSpeechToText(["이거 뭐야?", "저건 뭐야?"]),
+        tts=FakeTextToSpeech(),
+        vlm=vlm,
+        frames=camera(),
+        store=file_store,
+        memory=dialog.memory,
+        dialog=dialog,
+    )
+    graph = build_graph(parts)
+    turn = turn_input(file_store)
+
+    graph.invoke(turn)
+    graph.invoke(turn)
+    dialog.close()  # 뒤에서 하는 저장까지 끝난 뒤에 센다
+
+    assert len(requests) == 2
+    with file_store.session() as db:
+        assert db.query(Observation).count() == 2
+
+
+def test_지난_대화를_기억해_두었다가_나중에_묻으면_근거로_넘긴다(file_store):
+    vlm = FakeVLMClient(["검은 백팩이에요.", "검은 백팩이었어요."])
+    # 가짜 임베딩(글자 두 개 묶음) 점수는 실제와 달라서 문턱을 끈다
+    dialog = DialogMemory(VectorMemory(file_store, embedder=FakeEmbedder(), min_score=0.0))
+    parts = Parts(
+        stt=FakeSpeechToText(["이거 뭐야?", "아까 본 백팩 뭐였지?"]),
+        tts=FakeTextToSpeech(),
+        vlm=vlm,
+        store=file_store,
+        memory=dialog.memory,
+        dialog=dialog,
+        recall_enabled=True,
+    )
+    graph = build_graph(parts)
+    turn = turn_input(file_store)
+
+    graph.invoke(turn)
+    dialog.close()  # 첫 턴의 대화가 기억에 다 들어간 뒤 묻는다
+    result = graph.invoke(turn)
+
+    assert result["intent"] is Intent.RECALL
+    (hit,) = vlm.asked[-1][2]
+    assert hit.text == "질문: 이거 뭐야?\n대답: 검은 백팩이에요."
+
+
+@pytest.mark.parametrize(
+    ("question", "vlm", "called_since"),
+    [
+        ("아까 본 거 뭐였지?", FakeVLMClient(["기억에 없어요."]), None),  # 기억을 물은 턴
+        ("이거 뭐야?", FakeVLMClient([None]), None),  # VLM 실패 → 사과 문장
+        ("이거 뭐야?", FakeVLMClient(["늦은 답"], delay=0.3), lambda t: True),  # 다시 불러 버린 답
+    ],
+    ids=["recall", "sorry", "dropped"],
+)
+def test_기억할_내용이_없는_턴은_기억에_넣지_않는다(file_store, question, vlm, called_since):
+    tts = FakeTextToSpeech()
+    dialog = DialogMemory(VectorMemory(file_store, embedder=FakeEmbedder()))
+    collector = ResponseCollector(tts, called_since=called_since) if called_since else None
+    parts = Parts(
+        stt=FakeSpeechToText([question]),
+        tts=tts,
+        vlm=vlm,
+        store=file_store,
+        memory=dialog.memory,
+        dialog=dialog,
+        collector=collector,
+        recall_enabled=True,
+    )
+
+    result = build_graph(parts).invoke(turn_input(file_store))
+    dialog.close()
+
+    assert "turn_id" in result  # 턴 기록은 남는다
+    with file_store.session() as db:
+        assert db.query(Observation).count() == 0
 
 
 def test_기억을_묻는_질문은_기억을_찾아_vlm_에_넘긴다(file_store):
