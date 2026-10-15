@@ -29,7 +29,7 @@ import threading
 
 from jarviseo import config
 from jarviseo.capture import FrameBuffer, FrameSource, WebcamSource
-from jarviseo.graph import JarviseoState, Parts, build_graph
+from jarviseo.graph import GraphDeps, JarviseoState, build_graph
 from jarviseo.memory import DialogMemory, MemoryStore, VectorMemory
 from jarviseo.vlm import VLMClient
 from jarviseo.voice import BargeIn, ResponseCollector, SpeechToText, TextToSpeech, WakeWordDetector
@@ -71,7 +71,8 @@ def show(state: JarviseoState) -> None:
         print("  질문 없음")
         return
     raw = state.get("stt_raw_text")
-    print(f"  질문 {utterance.text!r} (원문 {raw!r}) → {state['intent']}")
+    # 재촬영을 포기한 턴은 의도를 정하기 전에 끝나서 intent 가 없다
+    print(f"  질문 {utterance.text!r} (원문 {raw!r}) → {state.get('intent')}")
     memories = state.get("memories")
     if memories is not None:
         found = ", ".join(f"{hit.text} ({hit.score:.2f})" for hit in memories) or "없음"
@@ -132,7 +133,7 @@ def main() -> None:
     turns: list[dict[str, float]] = []
 
     with MicStream(args.mic) as mic, Camera(WebcamSource(args.camera), frames):
-        parts = Parts(
+        deps = GraphDeps(
             stt=SpeechToText(mic=mic),
             tts=tts,
             vlm=vlm,
@@ -142,11 +143,11 @@ def main() -> None:
             dialog=dialog,
             collector=collector,
         )
-        graph = build_graph(parts)
+        graph = build_graph(deps)
         detector = WakeWordDetector(mic, on_detect=barge.on_detect)
         detector.start()
         print(f"기록 {args.db} (session_id {session_id}), VLM {vlm.model}")
-        print(f"기억 검색 {'켜짐' if parts.recall_enabled else '꺼짐 (JARVISEO_ENABLE_RECALL)'}")
+        print(f"기억 검색 {'켜짐' if deps.recall_enabled else '꺼짐 (JARVISEO_ENABLE_RECALL)'}")
         print("\n'자비서'를 부르고 이어서 말하세요. 끝내려면 Ctrl+C")
         try:
             run(graph, barge, session_id, user_id, turns)

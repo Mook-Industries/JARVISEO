@@ -1,249 +1,139 @@
-"""LangGraph 그래프 구성.  담당: 최홍묵 (D12 최소 그래프: 문태현)
+"""LangGraph 그래프 조립.  담당: 최홍묵
 
-노드와 분기를 여기서 엮는다.
-개별 노드는 각 모듈의 함수를 부르기만 하고, 로직을 여기 넣지 않는다.
-그래야 팀원이 자기 모듈만 고쳐도 되고 이 파일에서 충돌이 나지 않는다.
+이 파일은 노드(nodes.py)와 분기(edges.py)를 잇기만 한다. 질문 한 번이 graph.invoke() 한 번이다.
 
-질문 한 번이 graph.invoke() 한 번이다.
+    listen ─(질문 없음)─▶ END
+      │ └─(사진 없음·흐림)─▶ recapture ↺ ─(포기)─────────────────────▶ speak
+      ▼                         │
+    route ◀─────────────────────┘
+      ├─(RECALL)───────────────▶ recall ────────────────────────────▶ generate
+      ├─(POINTING·INGREDIENT)──▶ detect ─▶ resolve ⇄ clarify ─(포기)▶ speak
+      │                                      └─▶ crop_target
+      │                                            ├─(INGREDIENT)───▶ check_ingredient
+      │                                            └─(그 밖)────────▶ generate
+      ├─(INGREDIENT, 가리킬 부품 없음)────────────────────────────────▶ check_ingredient
+      └─(GENERAL)─────────────────────────────────────────────────────▶ generate
 
-    listen ──(질문 없음)──────────────────────────────────────────▶ END
-      │
-      ▼
-    route ──(RECALL)──▶ recall ──┐
-      │                          ▼
-      └──(GENERAL)──────────▶ generate ──(다시 불러 답을 버림)──▶ log ──▶ END
-                                 │                               ▲
-                                 └──────────▶ speak ─────────────┘
+    check_ingredient ─▶ speak ─▶ log ─▶ END
+    generate ─▶ speak ─▶ log ─▶ END  (기다리는 동안 다시 불러 답을 버렸으면 generate ─▶ log)
 
-    listen   : 받아쓴다. 말을 시작한 순간 그 시각 근처에서 가장 선명한 사진을 고른다
-    route    : 의도를 정한다 (router.py, 지금은 RECALL / GENERAL)
-    recall   : 기억을 찾는다 (memory/vector.py)
-    generate : VLM 답을 받는다. 늦으면 "잠깐만요"를 먼저 읽는다 (voice/collector.py)
-    speak    : 답을 읽는다 (voice/tts.py). 도중에 "자비서"가 들리면 바로 끊긴다
-    log      : 턴을 DB 에 남기고, 질문·대답을 기억에 넣는 일을 뒤에 맡긴다 (store.py, dialog.py)
+    listen           : 받아쓰고, 말을 시작한 순간 그 시각 근처에서 가장 선명한 사진을 고른다
+    recapture        : 버퍼에서 다시 고른다. 2번 넘으면 안내하고 끝낸다
+    route            : 의도를 정한다 (router.py, 키워드 규칙)
+    recall           : 기억을 찾는다 (memory/vector.py)
+    detect           : 물체 후보를 찾는다 (pointing/detector.py)
+    resolve          : 후보 중 가리킨 대상을 고른다 (pointing/resolver.py)
+    clarify          : 1·2위가 비슷하면 되묻고 대답을 듣는다. 사진은 다시 고르지 않는다
+    crop_target      : 고른 대상만 잘라낸다 (pointing/crop.py)
+    check_ingredient : 성분을 판정한다. VLM 을 부르지 않는다 (nutrition/service.py)
+    generate         : VLM 답을 받는다. 늦으면 "잠깐만요"를 먼저 읽는다 (voice/collector.py)
+    speak            : 답을 읽는다 (voice/tts.py)
+    log              : 턴·성분 판정을 DB 에 남기고 질문·대답을 기억에 맡긴다 (store.py, dialog.py)
 
-호출어를 기다리는 일과 끼어들기는 그래프 밖(scripts/assistant.py)에서 한다.
-호출어가 들리면 graph.invoke({"wake_at": 감지 시각, ...}) 로 질문 한 번을 돌린다.
-
-아직 없는 것 (이 위에 붙일 자리)
-    detect · resolve · clarify : POINTING 이 붙으면 route 뒤에 (가리킴 담당)
-    ocr                        : INGREDIENT 가 붙으면 route 뒤에 (성분 담당)
-    recapture                  : listen 이 고른 사진이 흐리면(is_too_blurry) 다시 고르기
+호출어 기다리기와 끼어들기는 그래프 밖(scripts/assistant.py)에서 한다.
 """
 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from functools import partial
+from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
-from jarviseo import config
-from jarviseo.graph.router import route as decide_intent
+from jarviseo.graph import edges, nodes
+from jarviseo.graph.nodes import GraphDeps
 from jarviseo.graph.state import JarviseoState
-from jarviseo.types import AssistantResponse, Frame, Intent
 
-if TYPE_CHECKING:
-    from jarviseo.capture import FrameBuffer
-    from jarviseo.memory import DialogMemory, MemoryStore, VectorMemory
-    from jarviseo.vlm import FakeVLMClient, VLMClient
-    from jarviseo.voice import (
-        FakeSpeechToText,
-        FakeTextToSpeech,
-        ResponseCollector,
-        SpeechToText,
-        TextToSpeech,
-    )
+__all__ = ["build_graph"]
 
-__all__ = ["Parts", "build_graph"]
-
-# 호출어 뒤 질문을 기다리는 시간(초). 보통 호출어에 바로 이어 말한다.
-LISTEN_SEC = 2.0
-# 호출어만 부르고 멈췄을 때 되묻는 말과, 되물은 뒤 기다리는 시간(초)
-REPROMPT = "네, 말씀하세요."
-REPROMPT_SEC = 5.0
-# VLM 이 답을 못 줬을 때 대신 읽는 말
-SORRY = "죄송해요, 지금은 대답을 못 드려요. 잠시 뒤에 다시 물어봐 주세요."
+# langgraph 1.2 의 기본 재귀 한도(10007)로는 루프 버그가 있어도 사실상 안 멈춘다.
+# 가장 긴 경로(재촬영 2번 + 되묻기 2번)가 14단계라 30 을 넘으면 버그다.
+RECURSION_LIMIT = 30
 
 
-@dataclass
-class Parts:
-    """노드가 부르는 부품. 실행 스크립트는 실제 것을, 테스트는 Fake 를 넣는다.
-
-    없어도 되는 것은 None 으로 둔다. frames 가 없으면 사진 없이 묻고, memory 가 없으면
-    기억 검색을 건너뛰고, store 가 없으면 기록을 남기지 않는다.
-    """
-
-    stt: SpeechToText | FakeSpeechToText
-    tts: TextToSpeech | FakeTextToSpeech
-    vlm: VLMClient | FakeVLMClient
-    frames: FrameBuffer | None = None
-    store: MemoryStore | None = None
-    memory: VectorMemory | None = None
-    dialog: DialogMemory | None = None
-    collector: ResponseCollector | None = None
-    # 꺼져 있으면 기억을 묻는 질문도 GENERAL 로 보낸다(config 의 기능 플래그)
-    recall_enabled: bool = config.ENABLE_RECALL
-
-
-def build_graph(parts: Parts):  # -> CompiledStateGraph
-    """그래프를 만들어 컴파일해서 반환한다.
+def build_graph(deps: GraphDeps):  # -> CompiledStateGraph
+    """그래프를 만들어 컴파일해서 돌려준다.
 
     graph.invoke({"session_id": ..., "user_id": ..., "wake_at": ..., "trigger_type": ...})
     처럼 턴 정보를 넣어 부르면, 끝난 뒤의 상태(답·지연·turn_id 등)를 돌려준다.
+    부품은 상태가 아니라 partial 로 노드에 묶는다. 상태에는 이번 질문에서 바뀌는 값만 둔다.
     """
-    nodes = _Nodes(parts)
+
+    def bind(fn: Callable[..., Any]) -> Callable[[JarviseoState], Any]:
+        """(state, deps) 함수를 LangGraph 가 부르는 (state) 함수로 만든다."""
+        return partial(fn, deps=deps)
+
     graph = StateGraph(JarviseoState)
-    graph.add_node("listen", nodes.listen)
-    graph.add_node("route", nodes.route)
-    graph.add_node("recall", nodes.recall)
-    graph.add_node("generate", nodes.generate)
-    graph.add_node("speak", nodes.speak)
-    graph.add_node("log", nodes.log)
+    graph.add_node("listen", bind(nodes.listen))
+    graph.add_node("recapture", bind(nodes.recapture))
+    graph.add_node("route", _timed("route", bind(nodes.route)))
+    graph.add_node("recall", bind(nodes.recall))
+    graph.add_node("detect", _timed("detect", bind(nodes.detect)))
+    graph.add_node("resolve", _timed("resolve", bind(nodes.resolve)))
+    graph.add_node("clarify", bind(nodes.clarify))
+    # 노드 이름은 상태 키(crop·ingredient)와 다르게 짓는다. langgraph 1.2 는 같아도 받아 주지만
+    # 그림·로그에서 노드인지 값인지 헷갈린다. 그래서 crop_target · check_ingredient 다.
+    graph.add_node("crop_target", _timed("crop", bind(nodes.crop_target)))
+    graph.add_node("check_ingredient", _timed("ingredient", bind(nodes.check_ingredient)))
+    graph.add_node("generate", bind(nodes.generate))
+    graph.add_node("speak", bind(nodes.speak))
+    graph.add_node("log", bind(nodes.log))
 
     graph.add_edge(START, "listen")
-    graph.add_conditional_edges("listen", _after_listen, ["route", END])
-    graph.add_conditional_edges("route", _after_route, ["recall", "generate"])
+    # 매핑에는 분기 함수가 돌려줄 수 있는 값이 전부 있어야 한다. 빠지면 실행 중에 에러가 난다.
+    graph.add_conditional_edges(
+        "listen",
+        bind(edges.after_listen),
+        {"end": END, "recapture": "recapture", "route": "route"},
+    )
+    graph.add_conditional_edges(
+        "recapture",
+        bind(edges.after_recapture),
+        {"speak": "speak", "recapture": "recapture", "route": "route"},
+    )
+    graph.add_conditional_edges(
+        "route",
+        bind(edges.after_route),
+        {
+            "recall": "recall",
+            "detect": "detect",
+            "check_ingredient": "check_ingredient",
+            "generate": "generate",
+        },
+    )
     graph.add_edge("recall", "generate")
-    graph.add_conditional_edges("generate", _after_generate, ["speak", "log"])
+    graph.add_edge("detect", "resolve")
+    graph.add_conditional_edges(
+        "resolve", edges.after_resolve, {"clarify": "clarify", "crop_target": "crop_target"}
+    )
+    graph.add_conditional_edges(
+        "clarify", edges.after_clarify, {"speak": "speak", "resolve": "resolve"}
+    )
+    graph.add_conditional_edges(
+        "crop_target",
+        edges.after_crop,
+        {"check_ingredient": "check_ingredient", "generate": "generate"},
+    )
+    graph.add_edge("check_ingredient", "speak")
+    graph.add_conditional_edges("generate", edges.after_generate, {"speak": "speak", "log": "log"})
     graph.add_edge("speak", "log")
     graph.add_edge("log", END)
-    return graph.compile()
+    return graph.compile().with_config(recursion_limit=RECURSION_LIMIT)
 
 
-def _after_listen(state: JarviseoState) -> str:
-    """질문을 못 받았으면 끝낸다. 남길 기록도 없다."""
-    return "route" if state.get("utterance") is not None else END
+def _timed(stage: str, node: Callable[[JarviseoState], dict]) -> Callable[[JarviseoState], dict]:
+    """노드에 걸린 시간을 재서 {"latency_ms": {stage: ms}} 를 결과에 붙인다.
 
-
-def _after_route(state: JarviseoState) -> str:
-    return "recall" if state["intent"] is Intent.RECALL else "generate"
-
-
-def _after_generate(state: JarviseoState) -> str:
-    """답을 기다리는 동안 다시 불러서 답을 버렸으면, 읽지 않고 기록만 남긴다."""
-    return "log" if state.get("interrupted") else "speak"
-
-
-class _Nodes:
-    """노드 함수 묶음. 노드는 상태를 받아 자기가 채운 키만 돌려준다."""
-
-    def __init__(self, parts: Parts) -> None:
-        self.parts = parts
-
-    def listen(self, state: JarviseoState) -> dict:
-        stt, frames = self.parts.stt, self.parts.frames
-        picked: list[Frame] = []
-
-        def pick(started_at: float) -> None:
-            # 말을 시작한 순간에 고른다. 받아쓰기가 끝난 뒤(1초 넘게 뒤)에는
-            # 버퍼(약 1초)에 그 시각 사진이 남아 있지 않다.
-            frame = frames.pick_best(around=started_at) if frames is not None else None
-            if frame is not None:
-                picked.append(frame)
-
-        wake_at = state.get("wake_at")
-        utterance = stt.listen(on_speech_start=pick, timeout=LISTEN_SEC, since=wake_at)
-        if utterance is None and wake_at is not None:
-            # 호출어만 부르고 멈췄다. 되묻고 다시 듣는다(읽은 뒤 0.3초는 게이트가 막는다).
-            self.parts.tts.speak(REPROMPT)
-            utterance = stt.listen(on_speech_start=pick, timeout=REPROMPT_SEC)
-        if utterance is None:
-            return {}
-
-        update: dict = {"utterance": utterance, "stt_raw_text": stt.last_raw_text}
-        if stt.last_latency_ms is not None:
-            update["latency_ms"] = {"stt": stt.last_latency_ms}
-        if picked:
-            update["frame"] = picked[-1]  # 되물었으면 두 번째 질문의 사진
-        return update
-
-    def route(self, state: JarviseoState) -> dict:
-        started = time.perf_counter()
-        intent = decide_intent(state["utterance"].text)
-        if intent is Intent.RECALL and not self.parts.recall_enabled:
-            intent = Intent.GENERAL
-        return {"intent": intent, "latency_ms": {"route": _ms(started)}}
-
-    def recall(self, state: JarviseoState) -> dict:
-        memory, user_id = self.parts.memory, state.get("user_id")
-        if memory is None or user_id is None:
-            return {"memories": []}
-        update: dict = {"memories": memory.search(user_id, state["utterance"].text)}
-        if memory.last_latency_ms is not None:
-            update["latency_ms"] = {"recall": memory.last_latency_ms}
-        return update
-
-    def generate(self, state: JarviseoState) -> dict:
-        vlm, collector = self.parts.vlm, self.parts.collector
-        question, frame = state["utterance"].text, state.get("frame")
-        memories = state.get("memories")  # 키가 없으면 None: 기억을 안 찾은 질문
-
-        def ask() -> str | None:
-            return vlm.ask(frame, question, memories)
-
-        answer = collector.collect(ask) if collector is not None else ask()
-        dropped = collector is not None and collector.dropped
-        response = AssistantResponse(
-            text="" if dropped else (answer or SORRY),
-            intent=state["intent"],
-            used_frame=frame,
-            memories=memories or [],
-        )
-        update: dict = {
-            "response": response,
-            "filler_sent": collector is not None and collector.filler_sent,
-            "interrupted": dropped,
-        }
-        # 버린 답은 아직 받는 중이라 last_latency_ms 가 이번 값이 아니다
-        if not dropped and vlm.last_latency_ms is not None:
-            update["latency_ms"] = {"vlm": vlm.last_latency_ms}
-        return update
-
-    def speak(self, state: JarviseoState) -> dict:
-        tts = self.parts.tts
-        asked = time.monotonic()
-        tts.speak(state["response"].text)
-        update: dict = {"interrupted": tts.last_interrupted}
-        if tts.last_latency_ms is not None:
-            # 말이 끝나고 대답 첫 소리가 나오기까지. "잠깐만요"를 읽었어도 대답 기준으로 잰다.
-            total = (asked - state["utterance"].ended_at) * 1000 + tts.last_latency_ms
-            update["latency_ms"] = {"tts": tts.last_latency_ms, "total": total}
-        return update
-
-    def log(self, state: JarviseoState) -> dict:
-        store, session_id = self.parts.store, state.get("session_id")
-        if store is None or session_id is None:
-            return {}
-        response = replace(state["response"], latency_ms=dict(state.get("latency_ms", {})))
-        turn_id = store.log_turn(
-            session_id,
-            state["utterance"],
-            response,
-            trigger_type=state.get("trigger_type", "WAKEWORD"),
-            stt_raw_text=state.get("stt_raw_text"),
-            interrupted=state.get("interrupted", False),
-            filler_sent=state.get("filler_sent", False),
-        )
-        dialog, user_id = self.parts.dialog, state.get("user_id")
-        if dialog is not None and user_id is not None and _worth_remembering(response):
-            # 바로 돌아온다. 임베딩·저장은 뒤에서 한다
-            dialog.remember(user_id, turn_id, state["utterance"].text, response.text)
-        return {"turn_id": turn_id}
-
-
-def _worth_remembering(response: AssistantResponse) -> bool:
-    """기억에 넣을 대화인지.
-
-    답을 버렸거나(빈 대답) VLM 이 실패해 사과만 했으면 기억할 내용이 없다.
-    기억을 물은 턴(RECALL)도 넣지 않는다. 대답이 옛 기록을 다시 말한 것이라 새 내용이 없고,
-    넣으면 다음에 비슷한 질문을 할 때 원래 기록보다 이 턴이 먼저 찾힌다.
-    "기억에 없어요"로 답한 턴이 찾히면 다음에도 기억에 없다고 답하게 된다.
+    사람이 말하거나 듣는 시간이 안 섞이는 노드(route·detect·resolve·crop·ingredient)에만
+    씌운다. 듣기·기억 검색·답 생성·읽기는 벽시계 시간에 말하는 시간이나 "잠깐만요" 재생이
+    섞여서, 부품이 직접 잰 값(last_latency_ms)을 노드가 넣는다.
     """
-    return bool(response.text) and response.text != SORRY and response.intent is not Intent.RECALL
 
+    def timed(state: JarviseoState) -> dict:
+        started = time.perf_counter()
+        update = node(state)
+        return {**update, "latency_ms": {stage: (time.perf_counter() - started) * 1000}}
 
-def _ms(since: float) -> float:
-    """perf_counter 로 잰 since 부터 지금까지(ms)."""
-    return (time.perf_counter() - since) * 1000
+    return timed
