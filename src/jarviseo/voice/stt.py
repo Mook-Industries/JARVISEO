@@ -16,7 +16,7 @@ import io
 import logging
 import time
 import wave
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
 from openai import OpenAI, OpenAIError
@@ -85,6 +85,7 @@ class SpeechToText:
         timeout: float = 5.0,
         since: float | None = None,
         min_letters: int = MIN_LETTERS,
+        hints: Sequence[str] = (),
     ) -> Utterance | None:
         """마이크에서 발화 하나를 받아쓰고, 호출어·필러를 뺀 질문을 돌려준다.
 
@@ -100,23 +101,31 @@ class SpeechToText:
         timeout 초 안에 말이 시작되지 않거나, 받아쓰기가 끝내 실패하거나,
         정리하고 나니 비었거나 min_letters 글자보다 짧으면 None.
         되묻기 대답("컵")을 들을 때는 min_letters=1 로 부른다.
+
+        hints 는 받아쓰기에 힌트로 줄 낱말이다. 주면 호출어 힌트 대신 쓴다. 되묻기 대답을 들을 때
+        후보 이름("컵", "병", "왼쪽", "오른쪽")을 주면 짧은 대답이 덜 틀린다(합성 대답 16개에서
+        gpt-transcribe 맞음 6 → 12, "컵"을 "컷"으로 쓰던 것이 준다).
         """
         # webrtcvad 는 여기서 읽는다. jarviseo.voice 를 import 만 하는 쪽(Fake 사용)은
         # 필요 없고, python -m jarviseo.voice.vad 도 미리 읽힌 모듈 경고 없이 돈다.
         from jarviseo.voice.vad import record_speech
 
         self.last_raw_text = self.last_latency_ms = None
+
+        def question(speech: Speech | None) -> Utterance | None:
+            return self._question(speech, min_letters, hints)
+
         # TTS 가 재생 중이거나 막 끝났으면 그동안 들어온 소리는 무음으로 바뀐다(gate.py).
         if self.mic is None:
             # 받아쓰는 동안 마이크를 붙잡고 있지 않게, 녹음이 끝나면 바로 닫는다.
             with Microphone(self.device) as mic:
                 blocks = MIC_GATE.mute(mic.blocks())
                 speech = record_speech(blocks, on_speech_start, timeout=timeout)
-            return self._question(speech, min_letters)
+            return question(speech)
         if since is None:
             blocks = MIC_GATE.mute(self.mic.blocks())
             speech = record_speech(blocks, on_speech_start, timeout=timeout)
-            return self._question(speech, min_letters)
+            return question(speech)
 
         floor = since - WAKE_LAG_SEC
 
@@ -130,21 +139,23 @@ class SpeechToText:
             # 호출어(와 그 앞 소리)에서 말이 끝났다. 받아쓰면 STT 가 호출어를 "자비다"처럼 잘못 써서
             # 질문으로 넘어갈 수 있다. 같은 마이크 줄에서 질문을 더 기다린다.
             speech = record_speech(blocks, started, timeout=timeout)
-        utterance = self._question(speech, min_letters)
+        utterance = question(speech)
         if utterance is None and speech is not None and is_wake_only(self.last_raw_text):
             # 늘여 말해서 감지 뒤에도 호출어가 이어졌다. 호출어만 받아써졌으면 한 번 더 듣는다.
             speech = record_speech(blocks, started, timeout=timeout)
-            utterance = self._question(speech, min_letters)
+            utterance = question(speech)
         if utterance is None:
             return None
         return Utterance(utterance.text, max(utterance.started_at, floor), utterance.ended_at)
 
-    def _question(self, speech: Speech | None, min_letters: int = MIN_LETTERS) -> Utterance | None:
+    def _question(
+        self, speech: Speech | None, min_letters: int, hints: Sequence[str]
+    ) -> Utterance | None:
         """녹음한 발화를 받아쓰고 정리한다. 질문으로 쓸 만하지 않으면 None."""
         if speech is None:
             return None
         try:
-            raw = self.transcribe(speech.audio, speech.started_at, speech.ended_at)
+            raw = self.transcribe(speech.audio, speech.started_at, speech.ended_at, hints)
         except OpenAIError as e:
             # 말이 없던 것과 같이 다룬다. 그래프는 호출어 대기로 돌아가면 된다.
             log.warning("받아쓰기 실패: %s", e)
@@ -154,8 +165,13 @@ class SpeechToText:
             return None
         return Utterance(text, raw.started_at, raw.ended_at)
 
-    def transcribe(self, audio: np.ndarray, started_at: float, ended_at: float) -> Utterance:
-        """이미 녹음된 발화(16kHz 모노 int16)를 받아쓴다. 받아쓴 원문을 그대로 담아 돌려준다."""
+    def transcribe(
+        self, audio: np.ndarray, started_at: float, ended_at: float, hints: Sequence[str] = ()
+    ) -> Utterance:
+        """이미 녹음된 발화(16kHz 모노 int16)를 받아쓴다. 받아쓴 원문을 그대로 담아 돌려준다.
+
+        hints 가 없으면 호출어를 힌트로 준다.
+        """
         self.last_latency_ms = None
         sent_at = time.monotonic()
         result = self.client.audio.transcriptions.create(
@@ -163,7 +179,7 @@ class SpeechToText:
             file=("speech.wav", _to_wav(audio)),
             language=self.language,
             # 힌트가 없으면 호출어 "자비서"가 "자비스"로 받아써졌다(스파이크 02).
-            prompt=config.WAKE_WORD,
+            prompt=", ".join(hints) if hints else config.WAKE_WORD,
         )
         self.last_latency_ms = (time.monotonic() - sent_at) * 1000
         self.last_raw_text = result.text

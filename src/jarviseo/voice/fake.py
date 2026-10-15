@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from typing import TYPE_CHECKING
 
 from jarviseo.types import Utterance
@@ -54,6 +54,7 @@ class FakeSpeechToText:
         timeout: float = 5.0,
         since: float | None = None,
         min_letters: int = MIN_LETTERS,
+        hints: Sequence[str] = (),
     ) -> Utterance | None:
         self.last_raw_text = self.last_latency_ms = None
         if not self._texts:
@@ -67,7 +68,9 @@ class FakeSpeechToText:
             return None
         return Utterance(text, started_at, started_at + 1.0)
 
-    def transcribe(self, audio: np.ndarray, started_at: float, ended_at: float) -> Utterance:
+    def transcribe(
+        self, audio: np.ndarray, started_at: float, ended_at: float, hints: Sequence[str] = ()
+    ) -> Utterance:
         self.last_raw_text, self.last_latency_ms = self._texts.pop(0) if self._texts else "", 0.0
         return Utterance(self.last_raw_text, started_at, ended_at)
 
