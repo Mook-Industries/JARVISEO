@@ -28,7 +28,7 @@ import tempfile
 from pathlib import Path
 
 from jarviseo import config
-from jarviseo.graph.router import route
+from jarviseo.graph.router import classify_intent
 from jarviseo.memory import MemoryStore, TextEmbedder, VectorMemory
 from jarviseo.memory.dialog import dialog_text
 from jarviseo.types import AssistantResponse, Intent, Utterance
@@ -92,7 +92,7 @@ def main() -> None:
                     "score": ranked[rank - 1][1] if rank else None,
                     "top": ranked[0],
                     "top_scores": [score for _, score in ranked[:TOP_K]],
-                    "recall": route(q["text"]) is Intent.RECALL,
+                    "recall": classify_intent(q["text"]) is Intent.RECALL,
                     "grounded": any(has_keyword(records[a], q["keyword"]) for a in answers),
                 }
             )

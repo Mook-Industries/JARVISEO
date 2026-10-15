@@ -1,35 +1,38 @@
-"""의도 라우터 (규칙).  담당: 최홍묵 (D12 최소판: 문태현)
+"""의도 라우터 (키워드 규칙).  담당: 최홍묵
 
-받아쓴 질문을 보고 어느 길로 보낼지 정한다. 모델을 부르지 않고 낱말로만 정해서 0ms 에 끝난다.
+받아쓴 질문을 보고 그래프의 어느 길로 보낼지 정한다. 모델을 부르지 않아 0ms 에 끝난다.
+음성 워크플로의 Router Agent 규칙(키워드 사전 매칭)을 따른다.
 
-지금은 두 갈래뿐이다.
-- RECALL  : 전에 본 것을 묻는 말("아까", "어디 뒀지")이면 기억을 찾은 뒤 VLM 에 넘긴다.
-- GENERAL : 그 밖의 전부. 지금 보이는 사진으로 VLM 이 답한다.
-
-POINTING("저거 뭐야")·INGREDIENT("뭐 들어갔어")는 그 노드가 그래프에 붙을 때 여기에 규칙을
-더한다. 갈 곳이 없는 지금 보내면 답이 안 나가므로 GENERAL 로 둔다. 그래도 VLM 이 사진을 보고 답한다.
-"내 가방 어디 있어?"처럼 지금 찾는 말도 GENERAL 이다(10/7 소지품 기능을 빼면서 정함).
+위에서부터 먼저 걸리는 쪽으로 간다.
+- INGREDIENT : 먹어도·성분·알레르기. "이거 먹어도 돼?"에 지시어도 있어서 가리킴보다 먼저 본다
+- RECALL     : 지난 일을 묻는 말. "아까 본 그거"에 지시어도 있어서 가리킴보다 먼저 본다
+- POINTING   : 지시어(저거·이거·그거)
+- GENERAL    : 그 밖의 전부
 """
 
 from __future__ import annotations
 
 from jarviseo.types import Intent
 
-__all__ = ["RECALL_CUES", "route"]
+__all__ = ["classify_intent"]
 
-# 하나라도 들어 있으면 기억을 묻는 질문으로 본다. 지금 일("어디 있어")이 아니라
-# 지난 일("어디 있었지", "어디 뒀지")을 묻는 말만 넣는다.
-RECALL_CUES = (
+# 띄어쓰기를 지운 글자와 맞춰 보므로 낱말도 띄어쓰기 없이 적는다.
+_INGREDIENT = ("먹어도", "성분", "알레르기", "원재료", "들어갔")
+# 지난 일만 넣는다. "어디 있어"(지금 찾기)는 10/7 소지품 기능을 빼면서 GENERAL 로 정했다.
+# 기억 질문 평가셋(data/eval/recall_set.csv, 질문 30개)으로 잰다: scripts/eval_recall.py
+_RECALL = (
     "아까",
-    "조금 전",
+    "조금전",
+    "전에본",
     "예전에",
     "지난번",
     "어제",
     "봤던",
     "봤었",
-    "본 거",
-    "본 게",
+    "본거",
+    "본게",
     "기억나",
+    "어디뒀",
     "뒀지",
     "두었지",
     "놨지",
@@ -37,10 +40,18 @@ RECALL_CUES = (
     "있었지",
     "있었더라",
 )
+# "뭐야"는 넣지 않는다. 넣으면 "오늘 날씨 뭐야?"까지 가리킴으로 빠진다.
+_POINTING = ("저거", "이거", "그거", "저것", "이것", "그것", "저게", "이게", "그게")
 
 
-def route(text: str) -> Intent:
+def classify_intent(text: str) -> Intent:
     """질문 글자로 의도를 정한다."""
-    if any(cue in text for cue in RECALL_CUES):
+    # STT 는 "어디 뒀지"를 "어디뒀지"로 붙여 줄 때가 있어서 띄어쓰기를 지우고 본다.
+    compact = "".join(text.split())
+    if any(word in compact for word in _INGREDIENT):
+        return Intent.INGREDIENT
+    if any(word in compact for word in _RECALL):
         return Intent.RECALL
+    if any(word in compact for word in _POINTING):
+        return Intent.POINTING
     return Intent.GENERAL

@@ -1,20 +1,19 @@
 """LangGraph 오케스트레이션 — 담당: 최홍묵.
 
-전체 흐름을 그래프로 묶는다.
+질문 한 번을 그래프 한 번으로 돌린다.
 
-    호출어 감지 -> 발화 시작 시점 프레임 캡처 -> OpenAI STT -> 의도 라우팅
-    -> (병렬) 객체 검출 / OCR / 기억 검색 -> 지시 대상 특정
-    -> VLM 응답 생성 -> TTS
+    듣기(STT + 말을 시작한 순간의 사진) -> 의도 분류(키워드 규칙)
+    -> 기억 검색 | 물체 검출 -> 대상 결정 -> 크롭 -> (성분 판정 | VLM 답) -> 읽기 -> 기록
 
 되돌아가는 분기가 두 개 있다.
-- recapture : 프레임이 흐리면 다시 찍는다.
-- clarify   : 지시 대상이 모호하면 사용자에게 되묻는다.
+- recapture : 사진이 없거나 흐리면 버퍼에서 다시 고른다.
+- clarify   : 지시 대상이 모호하면 되묻고 대답을 들어 다시 고른다.
 
-이 두 분기가 있다는 것이 단순 파이프라인과의 차이이고,
-LangGraph 를 쓰는 이유이기도 하다.
+이 두 분기가 있다는 것이 단순 파이프라인과의 차이이고, LangGraph 를 쓰는 이유이기도 하다.
 """
 
-from jarviseo.graph.pipeline import Parts, build_graph
+from jarviseo.graph.nodes import GraphDeps
+from jarviseo.graph.pipeline import build_graph
 from jarviseo.graph.state import JarviseoState
 
-__all__ = ["Parts", "build_graph", "JarviseoState"]
+__all__ = ["GraphDeps", "JarviseoState", "build_graph"]
