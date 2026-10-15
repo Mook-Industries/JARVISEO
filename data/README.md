@@ -9,6 +9,7 @@
 | `datasets/wakeword/` | 웨이크워드 녹음과 평가 결과 (`scripts/wakeword/`) |
 | `models/` | 학습된 가중치 (`.pt`, `.onnx`) |
 | `videos/` | 촬영한 원본 영상 |
+| `eval/` | 작은 평가셋 CSV. 이것만 커밋한다 (`recall_set.csv`: 기억 질문, `scripts/eval_recall.py`) |
 
 ## 알아둘 것
 
