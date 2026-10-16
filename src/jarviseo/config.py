@@ -112,6 +112,12 @@ MFDS_API_KEY = _get("JARVISEO_MFDS_API_KEY") or "sample"
 MFDS_BASE_URL = _get("JARVISEO_MFDS_BASE_URL", "http://openapi.foodsafetykorea.go.kr/api")
 # 외부 API 가 느리면 사용자는 그동안 침묵을 듣는다. 짧게 끊고 OCR 로 넘어간다.
 MFDS_TIMEOUT_SEC = _get_float("JARVISEO_MFDS_TIMEOUT_SEC", 3.0)
+# 푸드QR 알레르기정보 (식약처). 바코드로 포장에 표시된 알레르기 유발물질 목록을 그대로 준다.
+# 식품안전나라 원재료는 '면류, 분말스프'처럼 상위 분류만 오는 제품이 많아 알레르겐을 못 찾는다.
+# 그래서 캐시 다음 첫 번째로 묻는다. 키가 없으면 건너뛴다. (portal.foodqr.kr 에서 발급)
+FOOD_QR_API_KEY = _get("JARVISEO_FOOD_QR_API_KEY") or _get("FOOD_QR_API_KEY")
+FOOD_QR_BASE_URL = _get("JARVISEO_FOOD_QR_BASE_URL", "https://foodqr.kr/openapi/service")
+FOOD_QR_TIMEOUT_SEC = _get_float("JARVISEO_FOOD_QR_TIMEOUT_SEC", 3.0)
 
 # OCR 평균 신뢰도가 이보다 낮으면 검증 실패로 본다 (Validate Agent).
 OCR_CONF_THRESHOLD = _get_float("JARVISEO_OCR_CONF_THRESHOLD", 0.8)

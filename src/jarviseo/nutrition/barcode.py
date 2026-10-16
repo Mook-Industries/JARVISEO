@@ -1,6 +1,6 @@
 """바코드 → 제품 정보 조회.  (Barcode Lookup Agent)
 
-흐름: 크롭 이미지 → 바코드 번호 읽기 → product 캐시 → 식품안전나라 API → 캐시 저장
+흐름: 크롭 이미지 → 바코드 번호 읽기 → product 캐시 → 푸드QR → 식품안전나라 API → 캐시 저장
       여기서 원재료명을 못 얻으면 호출한 쪽이 성분표 OCR 로 넘어간다.
 
 바코드 읽기에 pyzbar 대신 OpenCV 내장 검출기를 쓰는 이유
@@ -26,11 +26,15 @@ from jarviseo import config
 from jarviseo.types import BarcodeRead, BBox, IngredientSource, ProductInfo
 
 __all__ = [
+    "NO_ALLERGEN_NOTICE",
     "BarcodeLookup",
+    "FoodQrClient",
+    "FoodQrError",
     "MfdsClient",
     "MfdsError",
     "is_valid_gtin",
     "lookup_product",
+    "make_food_qr_client",
     "read_barcodes",
 ]
 
@@ -205,7 +209,107 @@ class MfdsClient:
 
 
 # --------------------------------------------------------------------------
-# 3. 캐시 우선 조회 (Barcode Lookup Agent 본체)
+# 3. 푸드QR 알레르기정보 (식약처, portal.foodqr.kr)
+# --------------------------------------------------------------------------
+
+
+# 푸드QR 에 등록됐지만 알레르기 표시가 없는 제품. 판정 쪽은 이 칸이 비었는지만 본다.
+NO_ALLERGEN_NOTICE = "알레르기 유발물질 표시 없음"
+
+
+class FoodQrError(RuntimeError):
+    """푸드QR 이 정상 응답 코드가 아닌 것을 돌려줬다(인증 실패·트래픽 초과 등)."""
+
+
+class FoodQrClient:
+    """푸드QR 알레르기정보(qr1009/F009) 조회.
+
+    포장에 표시된 알레르기 유발물질을 한 줄에 하나씩 준다("대두", "밀", "조개류(굴)").
+    식품안전나라 원재료처럼 상위 분류로 뭉개지지 않아서 판정 근거로 바로 쓴다.
+    바코드는 앞에 0을 붙인 14자리(GTIN-14)로 등록돼 있다("08801045121086").
+
+    알레르기(F009)와 영양표시(F008)만 받는다. 원재료(F007)·주의사항(F004, 혼입 문구)은
+    인증키 권한이 따로라 지금 키로는 401 이 난다. 그래서 혼입 가능 물질은 알 수 없다.
+    """
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        timeout: float | None = None,
+        transport: httpx.BaseTransport | None = None,  # 테스트에서 가짜 응답을 끼운다
+    ) -> None:
+        self.api_key = api_key or config.FOOD_QR_API_KEY
+        self.base_url = (base_url or config.FOOD_QR_BASE_URL).rstrip("/")
+        self._http = httpx.Client(
+            timeout=timeout or config.FOOD_QR_TIMEOUT_SEC, transport=transport
+        )
+
+    def close(self) -> None:
+        self._http.close()
+
+    def __enter__(self) -> FoodQrClient:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def _items(self, path: str, code: str) -> list[dict]:
+        resp = self._http.get(
+            f"{self.base_url}/{path}",
+            params={"accessKey": self.api_key, "_type": "json", "numOfRows": 100, "brcdNo": code},
+        )
+        resp.raise_for_status()  # 401: 권한 없는 키
+        data = resp.json().get("response") or {}
+        header = data.get("header") or {}
+        if str(header.get("resultCode")) != "0000":
+            raise FoodQrError(f"{path}: {header.get('resultCode')} {header.get('resultMsg')}")
+        items = (data.get("body") or {}).get("items") or []
+        if isinstance(items, dict):
+            items = items.get("item") or []
+        if isinstance(items, dict):  # 한 건이면 목록이 아니라 dict 로 온다
+            items = [items]
+        # 다른 바코드가 섞여 오지 않게 한 번 더 거른다(검색 조건을 무시하는 경우 대비).
+        return [i for i in items if str(i.get("brcdNo", "")).zfill(14) == code]
+
+    def lookup(self, barcode: str) -> ProductInfo | None:
+        """바코드 → 제품 정보. 푸드QR 에 등록이 없는 제품이면 None.
+
+        알레르기 목록이 비면 영양표시(qr1008/F008)로 등록 여부를 한 번 더 본다.
+        등록돼 있으면 '알레르기 표시가 없는 제품'이다. 이걸 미등록과 구별하지 않으면
+        다음 조회로 넘어가 결국 성분표 OCR 까지 돌게 된다(사진당 수 초~수십 초).
+        """
+        code = barcode.zfill(14)
+        items = self._items("qr1009/F009", code)
+        names: list[str] = []
+        for item in items:
+            name = str(item.get("algCsgMtrNm") or "").strip()
+            if name and name not in names:
+                names.append(name)
+        if names:
+            notice = ", ".join(names)
+        else:
+            items = self._items("qr1008/F008", code)
+            if not items:
+                return None
+            notice = NO_ALLERGEN_NOTICE
+        return ProductInfo(
+            barcode=barcode,
+            product_name=str(items[0].get("prdctNm") or "").strip(),
+            # 원재료는 받지 못하므로 알레르기 목록을 원재료 칸에도 둔다(비면 미스로 본다).
+            raw_ingredients=notice,
+            allergen_notice=notice,
+            source=IngredientSource.API,
+        )
+
+
+def make_food_qr_client() -> FoodQrClient | None:
+    """인증키(``config.FOOD_QR_API_KEY``)가 있으면 FoodQrClient, 없으면 None."""
+    return FoodQrClient() if config.FOOD_QR_API_KEY else None
+
+
+# --------------------------------------------------------------------------
+# 4. 캐시 우선 조회 (Barcode Lookup Agent 본체)
 # --------------------------------------------------------------------------
 
 
@@ -228,14 +332,18 @@ class BarcodeLookup:
 
 
 def lookup_product(
-    image: np.ndarray, store=None, client: MfdsClient | None = None
+    image: np.ndarray,
+    store=None,
+    client: MfdsClient | None = None,
+    food_qr: FoodQrClient | None = None,
 ) -> BarcodeLookup:
-    """크롭 이미지 → 제품 정보. 캐시 → API 순서로 찾는다.
+    """크롭 이미지 → 제품 정보. 캐시 → 푸드QR → 식품안전나라 순서로 찾는다.
 
     Args:
         image: 타깃 크롭 (BGR).
         store: ``MemoryStore``. 없으면 캐시를 건너뛴다(테스트·오프라인).
-        client: ``MfdsClient``. 없으면 API 를 건너뛴다.
+        client: ``MfdsClient``. 없으면 식품안전나라를 건너뛴다.
+        food_qr: ``FoodQrClient``. 없으면(인증키 없음) 푸드QR 을 건너뛴다.
 
     외부 API 장애는 예외로 올리지 않는다. 사용자는 OCR 로 답을 받을 수 있어야 한다.
     """
@@ -258,21 +366,23 @@ def lookup_product(
             if cached is not None and cached.raw_ingredients:
                 return done(read, cached)
 
-        if client is None:
-            continue
-        try:
-            product = client.lookup(read.code)
-        except (httpx.HTTPError, MfdsError, ValueError) as e:  # ValueError: JSON 깨짐
-            log.warning("식품안전나라 조회 실패 (%s): %s", read.code, e)
-            reason = "api_error"
-            continue
-        if product is None:
-            continue
-        if not product.raw_ingredients:
-            reason = "no_ingredients"
-            continue
-        if store is not None:
-            store.save_product(product, status="verified")
-        return done(read, product)
+        apis = (("푸드QR", food_qr), ("식품안전나라", client))
+        for name, api in apis:
+            if api is None:
+                continue
+            try:
+                product = api.lookup(read.code)
+            except (httpx.HTTPError, MfdsError, FoodQrError, ValueError) as e:  # ValueError: JSON
+                log.warning("%s 조회 실패 (%s): %s", name, read.code, e)
+                reason = "api_error"
+                continue
+            if product is None:
+                continue
+            if not product.raw_ingredients:
+                reason = "no_ingredients"
+                continue
+            if store is not None:
+                store.save_product(product, status="verified")
+            return done(read, product)
 
     return done(reads[0], None, reason)

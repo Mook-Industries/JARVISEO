@@ -14,6 +14,8 @@ import pytest
 
 from jarviseo.memory.store import MemoryStore
 from jarviseo.nutrition.barcode import (
+    NO_ALLERGEN_NOTICE,
+    FoodQrClient,
     MfdsClient,
     MfdsError,
     is_valid_gtin,
@@ -210,3 +212,101 @@ def test_invalid_캐시는_무시한다(store):
         info = client.lookup(CODE)
     store.save_product(info, status="invalid")
     assert store.get_product(CODE) is None
+
+
+# --- 푸드QR ---------------------------------------------------------------
+
+QR_CODE = "0" + CODE  # 푸드QR 은 14자리로 등록돼 있다
+
+
+def qr_row(name: str, code: str = QR_CODE) -> dict:
+    """foodqr.kr qr1009/F009 실제 응답 한 줄 모양."""
+    return {"algCsgMtrNm": name, "brcdNo": code, "prdctNm": "오늘밥상 파채양념", "verNo": 1}
+
+
+def fake_qr(
+    rows: list[dict],
+    calls: list | None = None,
+    status: int = 200,
+    code: str = "0000",
+    nutrition: list[dict] | None = None,  # 영양표시(F008) 응답. 등록 여부 확인용
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if calls is not None:
+            calls.append((request.url.path, dict(request.url.params)))
+        if status != 200:
+            return httpx.Response(status, json={"response": {"header": {"resultCode": 101}}})
+        found = (nutrition or []) if request.url.path.endswith("F008") else rows
+        items = {"item": found[0] if len(found) == 1 else found} if found else ""
+        body = {"header": {"resultCode": code, "resultMsg": "OK"}, "body": {"items": items}}
+        return httpx.Response(200, json={"response": body})
+
+    return FoodQrClient(api_key="test", transport=httpx.MockTransport(handler))
+
+
+def test_푸드qr_알레르기_목록을_옮긴다():
+    calls: list = []
+    rows = [qr_row(n) for n in ("대두", "밀", "조개류(굴)", "대두")]
+    with fake_qr(rows, calls) as qr:
+        info = qr.lookup(CODE)
+    assert info.product_name == "오늘밥상 파채양념"
+    assert info.allergen_notice == "대두, 밀, 조개류(굴)"  # 같은 이름은 한 번만
+    assert info.raw_ingredients == info.allergen_notice  # 원재료 대신 판정에 쓴다
+    path, params = calls[0]
+    assert path.endswith("/qr1009/F009")
+    assert params["brcdNo"] == QR_CODE and params["accessKey"] == "test"
+
+
+def test_푸드qr_한_건이면_dict로_와도_받는다():
+    with fake_qr([qr_row("우유")]) as qr:
+        assert qr.lookup(CODE).allergen_notice == "우유"
+
+
+@pytest.mark.parametrize("rows", [[], [{}]])
+def test_푸드qr_등록이_없으면_none(rows):
+    with fake_qr(rows) as qr:
+        assert qr.lookup(CODE) is None
+
+
+def test_푸드qr_등록됐지만_알레르기_표시가_없는_제품():
+    calls: list = []
+    nutrition = [{"brcdNo": QR_CODE, "prdctNm": "생수", "cta": 0}]
+    with fake_qr([], calls, nutrition=nutrition) as qr:
+        info = qr.lookup(CODE)
+    assert info.product_name == "생수"
+    assert info.allergen_notice == NO_ALLERGEN_NOTICE  # 비우지 않는다 → OCR 로 넘어가지 않는다
+    assert [c[0].rsplit("/", 1)[-1] for c in calls] == ["F009", "F008"]
+
+
+def test_푸드qr_알레르기가_있으면_영양표시는_안_묻는다():
+    calls: list = []
+    with fake_qr([qr_row("밀")], calls) as qr:
+        qr.lookup(CODE)
+    assert len(calls) == 1
+
+
+def test_푸드qr_다른_바코드는_버린다():
+    with fake_qr([qr_row("땅콩", code="08800000000000")]) as qr:
+        assert qr.lookup(CODE) is None
+
+
+def test_푸드qr이_먼저고_찾으면_다른_api는_안_부른다(store):
+    mfds_calls: list[str] = []
+    with (
+        fake_mfds({"C005": [C005_ROW], "C002": C002_ROWS}, mfds_calls) as client,
+        fake_qr([qr_row("밀")]) as qr,
+    ):
+        result = lookup_product(draw_ean13(CODE), store=store, client=client, food_qr=qr)
+    assert result.hit and result.product.allergen_notice == "밀"
+    assert mfds_calls == []
+    assert store.get_product(CODE).allergen_notice == "밀"  # 캐시에 남는다
+
+
+@pytest.mark.parametrize(("status", "code"), [(401, "0000"), (200, "9999")])
+def test_푸드qr_오류면_다음_api로(store, status, code):
+    with (
+        fake_qr([], status=status, code=code) as qr,
+        fake_mfds({"C005": [C005_ROW], "C002": C002_ROWS}) as client,
+    ):
+        result = lookup_product(draw_ean13(CODE), store=store, client=client, food_qr=qr)
+    assert result.hit and result.product.product_name == "테스트 과자"

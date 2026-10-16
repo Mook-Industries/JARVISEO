@@ -26,7 +26,12 @@ import numpy as np
 
 from jarviseo import config
 from jarviseo.nutrition.allergen import judge_allergens, judge_product, load_synonyms
-from jarviseo.nutrition.barcode import BarcodeLookup, MfdsClient, lookup_product
+from jarviseo.nutrition.barcode import (
+    BarcodeLookup,
+    FoodQrClient,
+    MfdsClient,
+    lookup_product,
+)
 from jarviseo.nutrition.ocr import (
     OcrReader,
     PanelSections,
@@ -101,6 +106,8 @@ class IngredientChecker:
     Args:
         store: ``MemoryStore``. 제품 캐시를 쓴다. 없으면 캐시 없이 동작한다.
         client: ``MfdsClient``. 없으면 식품안전나라를 부르지 않는다(오프라인·테스트).
+        food_qr: ``FoodQrClient``. 캐시 다음 가장 먼저 묻는다(포장 알레르기 표시 그대로).
+            앱에서는 ``barcode.make_food_qr_client()`` 로 만든다(인증키가 없으면 None).
         synonyms: 동의어 사전. 없으면 ``config.ALLERGEN_SYNONYMS_PATH`` 에서 읽는다.
         reader: OCR 엔진. 없으면 EasyOCR. 테스트에서 가짜를 끼운다.
         quality_check: OCR 전 품질 검사. None 이면 검사하지 않는다(테스트용 단색 이미지 등).
@@ -118,10 +125,12 @@ class IngredientChecker:
         max_retake: int = config.OCR_MAX_RETAKE,
         quality_check: Callable[[np.ndarray], ImageQuality] | None = assess_quality,
         try_rotation: bool = config.OCR_TRY_ROTATION,
+        food_qr: FoodQrClient | None = None,
     ) -> None:
         self.try_rotation = try_rotation
         self.store = store
         self.client = client
+        self.food_qr = food_qr
         self.synonyms = synonyms or load_synonyms(config.ALLERGEN_SYNONYMS_PATH)
         self.reader = reader
         self.quality_check = quality_check
@@ -149,7 +158,12 @@ class IngredientChecker:
         timings: dict[str, int] = {}
 
         t0 = time.perf_counter()
-        lookup = lookup_product(crop, store=self.store, client=self.client)
+        lookup = lookup_product(
+            crop,
+            store=self.store,
+            client=self.client,
+            food_qr=self.food_qr,
+        )
         timings["barcode"] = _ms(t0)
 
         if lookup.hit:
