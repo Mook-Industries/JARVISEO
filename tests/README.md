@@ -54,5 +54,7 @@ pytest -q
   JARVISEO_TEST_DATABASE_URL=postgresql+psycopg://jarviseo:jarviseo@localhost:5433/jarviseo_test     pytest -q -m postgres
   docker stop jarviseo-test-pg
   ```
-- 테스트 이름은 한글로 쓴다. 실패했을 때 무엇이 깨졌는지 바로 읽히게.
+- 테스트 함수 이름은 영어 snake_case `test_<대상>_<상황이나 기대>` 로 쓰고, 무엇을 확인하는지는 바로 아래 한글 독스트링에 쓴다.
+  예: `test_filter_drops_person` + `"""사용자 손·팔이 person 으로 잡혀도 후보에 들어가지 않는다."""`.
+  실패 화면에 함수 소스가 독스트링째 나와서 무엇이 깨졌는지 바로 읽힌다. 한 파일 안에 같은 이름이 두 번 나오면 앞의 테스트가 조용히 사라지니 ruff `F811` 을 지킨다.
 - 테스트 데이터(`tests/data/`)는 하위 폴더에서 `Path(__file__).parents[1] / "data"` 로 찾는다. 폴더가 한 단계 깊어서 `.parent` 로는 못 찾는다.
