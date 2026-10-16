@@ -265,7 +265,7 @@ RAMEN = ProductInfo(
 
 def found(info: ProductInfo, code: str = CODE):
     read = BarcodeRead(code=code, symbology="EAN_13")
-    return lambda image, store=None, client=None: BarcodeLookup(read, info)
+    return lambda image, **_: BarcodeLookup(read, info)  # 조회 인자가 늘어도 그대로 쓴다
 
 
 def test_알레르기_표시_없는_조회_정보로는_미검출이라_하지_않고_성분표를_읽는다(monkeypatch):
