@@ -274,7 +274,7 @@ def test_알레르기_표시_없는_조회_정보로는_미검출이라_하지_�
     r = checker(reader).check(CROP, ["밀"])
     assert reader.calls == 1  # 성분표를 읽었다
     assert r.judgement.verdict is V.CONTAINS and r.judgement.source is IngredientSource.OCR
-    assert "신라면" in r.message  # 조회한 제품명을 문장에 쓴다
+    assert r.judgement.product.product_name == "신라면"  # 조회한 제품명을 이어 쓴다
 
 
 def test_성분표도_못_읽으면_재촬영을_요청한다(monkeypatch):
