@@ -33,7 +33,8 @@ def remote(handler, **kw) -> RemoteOcrReader:
     return RemoteOcrReader("https://ocr.test", transport=httpx.MockTransport(handler), **kw)
 
 
-def test_jpeg로_보내고_readtext_모양으로_돌려준다():
+def test_sends_jpeg_and_returns_readtext_shape():
+    """JPEG 로 보내고 `readtext` 모양으로 돌려준다."""
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -46,7 +47,9 @@ def test_jpeg로_보내고_readtext_모양으로_돌려준다():
     assert seen == {"path": "/ocr", "type": "image/jpeg", "token": "abc", "head": b"\xff\xd8"}
 
 
-def test_read_panel_에_그대로_끼울_수_있다():
+def test_plugs_into_read_panel():
+    """`read_panel` 에 그대로 끼울 수 있다."""
+
     def handler(request):
         return httpx.Response(200, json={"lines": [[BOX, "원재료명: 밀가루", 0.97]]})
 
@@ -62,7 +65,9 @@ def test_read_panel_에_그대로_끼울_수_있다():
         httpx.Response(200, json={"error": "?"}),
     ],
 )
-def test_서버가_안_되면_이_pc에서_읽는다(response):
+def test_falls_back_to_local_when_server_down(response):
+    """서버가 안 되면 이 PC 에서 읽는다."""
+
     def handler(request):
         if isinstance(response, Exception):
             raise response
@@ -76,7 +81,9 @@ def test_서버가_안_되면_이_pc에서_읽는다(response):
     assert local.calls == 2 and made == [1]  # 대체 OCR 은 한 번만 만든다
 
 
-def test_대체_ocr이_없으면_예외():
+def test_raises_without_fallback_ocr():
+    """대체 OCR 이 없으면 예외다."""
+
     def handler(request):
         return httpx.Response(200, json={})
 
@@ -113,7 +120,8 @@ def server():
     httpd.shutdown()
 
 
-def test_서버와_클라이언트가_맞물린다(server):
+def test_server_and_client_work_together(server):
+    """서버와 클라이언트가 맞물린다."""
     mod, url = server
     reader = RemoteOcrReader(url, token=mod.TOKEN)
     try:
@@ -123,7 +131,8 @@ def test_서버와_클라이언트가_맞물린다(server):
     assert httpx.get(f"{url}/health").json() == {"ok": True, "device": "cpu"}
 
 
-def test_토큰이_틀리면_서버가_거절한다(server):
+def test_server_rejects_wrong_token(server):
+    """토큰이 틀리면 서버가 거절한다."""
     _, url = server
     reader = RemoteOcrReader(url, token="wrong")
     with pytest.raises(httpx.HTTPStatusError) as e:

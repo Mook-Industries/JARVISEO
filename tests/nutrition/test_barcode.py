@@ -97,14 +97,16 @@ def store() -> MemoryStore:
         ("12345", False),
     ],
 )
-def test_gtin_체크섬(code, ok):
+def test_gtin_checksum(code, ok):
+    """GTIN 체크섬."""
     assert is_valid_gtin(code) is ok
 
 
 # --- 이미지에서 읽기 --------------------------------------------------------
 
 
-def test_그린_바코드를_읽는다():
+def test_reads_drawn_barcode():
+    """그린 바코드를 읽는다."""
     reads = read_barcodes(draw_ean13(CODE))
     assert [r.code for r in reads] == [CODE]
     assert reads[0].symbology == "EAN_13"
@@ -112,13 +114,15 @@ def test_그린_바코드를_읽는다():
 
 
 @pytest.mark.parametrize(("module", "height"), [(1, 40), (3, 150), (6, 300), (12, 600)])
-def test_막대_굵기와_상관없이_읽는다(module, height):
+def test_reads_regardless_of_bar_width(module, height):
+    """막대 굵기와 상관없이 읽는다."""
     # 크롭이 바코드에 딱 맞게 잘려 막대가 아주 가늘거나 굵어도 읽어야 한다.
     reads = read_barcodes(draw_ean13(CODE, module=module, height=height))
     assert [r.code for r in reads] == [CODE]
 
 
-def test_큰_크롭_속_작은_바코드도_읽는다():
+def test_reads_small_barcode_in_large_crop():
+    """큰 크롭 속 작은 바코드도 읽는다."""
     scene = np.full((900, 1200, 3), 200, np.uint8)
     bc = draw_ean13(CODE, module=3, height=150)
     scene[300 : 300 + bc.shape[0], 400 : 400 + bc.shape[1]] = bc
@@ -129,7 +133,8 @@ def test_큰_크롭_속_작은_바코드도_읽는다():
     assert 380 <= box.x1 <= 480 and 280 <= box.y1 <= 340
 
 
-def test_바코드가_없으면_빈_목록():
+def test_no_barcode_returns_empty_list():
+    """바코드가 없으면 빈 목록이다."""
     assert read_barcodes(np.full((300, 400, 3), 255, np.uint8)) == []
     assert read_barcodes(np.zeros((0, 0, 3), np.uint8)) == []
 
@@ -137,7 +142,8 @@ def test_바코드가_없으면_빈_목록():
 # --- API 클라이언트 ---------------------------------------------------------
 
 
-def test_api_바코드로_원재료까지_가져온다():
+def test_api_fetches_ingredients_by_barcode():
+    """API 로 바코드에서 원재료까지 가져온다."""
     with fake_mfds({"C005": [C005_ROW], "C002": C002_ROWS}) as client:
         info = client.lookup(CODE)
     assert info is not None
@@ -147,18 +153,22 @@ def test_api_바코드로_원재료까지_가져온다():
     assert info.source is IngredientSource.API
 
 
-def test_api_c002에_없으면_c006을_본다():
+def test_api_falls_back_to_c006_when_not_in_c002():
+    """API 가 C002 에 없으면 C006 을 본다."""
     rows = {"C005": [C005_ROW], "C006": [{"RAWMTRL_NM": "돼지고기"}]}
     with fake_mfds(rows) as client:
         assert client.lookup(CODE).raw_ingredients == "돼지고기"
 
 
-def test_api_등록이_없으면_none():
+def test_api_returns_none_when_not_registered():
+    """API 에 등록이 없으면 None 이다."""
     with fake_mfds({}) as client:
         assert client.lookup(CODE) is None
 
 
-def test_api_에러코드는_예외():
+def test_api_error_code_raises():
+    """API 에러 코드는 예외다."""
+
     def handler(request):
         return httpx.Response(200, json={"C005": {"RESULT": {"CODE": "ERROR-300"}}})
 
@@ -170,7 +180,8 @@ def test_api_에러코드는_예외():
 # --- 캐시 우선 조회 ----------------------------------------------------------
 
 
-def test_첫_조회는_api_두번째는_캐시(store):
+def test_first_lookup_api_second_cache(store):
+    """첫 조회는 API, 두 번째는 캐시다."""
     calls: list[str] = []
     image = draw_ean13(CODE)
     with fake_mfds({"C005": [C005_ROW], "C002": C002_ROWS}, calls) as client:
@@ -184,7 +195,9 @@ def test_첫_조회는_api_두번째는_캐시(store):
     assert second.product.raw_ingredients == "밀가루, 탈지분유, 설탕"
 
 
-def test_api_장애여도_예외없이_ocr로_넘긴다(store):
+def test_api_outage_falls_back_to_ocr(store):
+    """API 장애여도 예외 없이 OCR 로 넘긴다."""
+
     def handler(request):
         raise httpx.ConnectTimeout("timeout", request=request)
 
@@ -195,19 +208,22 @@ def test_api_장애여도_예외없이_ocr로_넘긴다(store):
     assert result.barcode.code == CODE  # OCR 결과를 이 번호로 저장할 수 있게 남긴다
 
 
-def test_원재료가_비면_미스(store):
+def test_empty_ingredients_is_miss(store):
+    """원재료가 비면 미스다."""
     with fake_mfds({"C005": [C005_ROW]}) as client:
         result = lookup_product(draw_ean13(CODE), store=store, client=client)
     assert not result.hit and result.reason == "no_ingredients"
     assert store.get_product(CODE) is None  # 빈 정보는 캐시에 남기지 않는다
 
 
-def test_바코드가_없으면_바로_미스():
+def test_no_barcode_is_immediate_miss():
+    """바코드가 없으면 바로 미스다."""
     result = lookup_product(np.full((300, 400, 3), 255, np.uint8))
     assert not result.hit and result.reason == "no_barcode" and result.barcode is None
 
 
-def test_invalid_캐시는_무시한다(store):
+def test_invalid_cache_is_ignored(store):
+    """`invalid` 캐시는 무시한다."""
     with fake_mfds({"C005": [C005_ROW], "C002": C002_ROWS}) as client:
         info = client.lookup(CODE)
     store.save_product(info, status="invalid")
@@ -269,7 +285,8 @@ RAW = [
 ]  # fmt: skip
 
 
-def test_푸드qr_알레르기_혼입_원재료를_모두_옮긴다():
+def test_foodqr_copies_allergens_cross_contact_and_ingredients():
+    """푸드QR 의 알레르기 · 혼입 · 원재료를 모두 옮긴다."""
     calls: list = []
     rows = [qr_row(n) for n in ("대두", "밀", "조개류(굴)", "대두")]
     with fake_qr(rows, calls, caution=CAUTION, raw=RAW) as qr:
@@ -283,25 +300,29 @@ def test_푸드qr_알레르기_혼입_원재료를_모두_옮긴다():
     assert all(c[1]["brcdNo"] == QR_CODE and c[1]["accessKey"] == "test" for c in calls)
 
 
-def test_푸드qr_주의사항_원재료_권한이_없어도_알레르기로_답한다():
+def test_foodqr_answers_with_allergens_without_caution_permission():
+    """푸드QR 주의사항 · 원재료 권한이 없어도 알레르기로 답한다."""
     with fake_qr([qr_row("밀")], denied=("F004", "F007")) as qr:
         info = qr.lookup(CODE)
     assert info.allergen_notice == "밀" and info.raw_ingredients == "밀"
     assert info.cross_contamination == ""
 
 
-def test_푸드qr_한_건이면_dict로_와도_받는다():
+def test_foodqr_accepts_single_dict():
+    """푸드QR 결과가 한 건이면 dict 로 와도 받는다."""
     with fake_qr([qr_row("우유")]) as qr:
         assert qr.lookup(CODE).allergen_notice == "우유"
 
 
 @pytest.mark.parametrize("rows", [[], [{}]])
-def test_푸드qr_등록이_없으면_none(rows):
+def test_foodqr_returns_none_when_not_registered(rows):
+    """푸드QR 에 등록이 없으면 None 이다."""
     with fake_qr(rows) as qr:
         assert qr.lookup(CODE) is None
 
 
-def test_푸드qr_등록됐지만_알레르기_표시가_없는_제품():
+def test_foodqr_registered_without_allergen_label():
+    """푸드QR 에 등록됐지만 알레르기 표시가 없는 제품."""
     calls: list = []
     nutrition = [{"brcdNo": QR_CODE, "prdctNm": "생수", "cta": 0}]
     with fake_qr([], calls, nutrition=nutrition) as qr:
@@ -311,7 +332,8 @@ def test_푸드qr_등록됐지만_알레르기_표시가_없는_제품():
     assert {c[0] for c in calls} == {"F009", "F004", "F007", "F008"}
 
 
-def test_푸드qr_원재료만_있어도_등록된_제품이다():
+def test_foodqr_ingredients_only_counts_as_registered():
+    """푸드QR 에 원재료만 있어도 등록된 제품이다."""
     calls: list = []
     with fake_qr([], calls, raw=RAW) as qr:
         info = qr.lookup(CODE)
@@ -319,12 +341,14 @@ def test_푸드qr_원재료만_있어도_등록된_제품이다():
     assert "F008" not in {c[0] for c in calls}
 
 
-def test_푸드qr_다른_바코드는_버린다():
+def test_foodqr_drops_other_barcodes():
+    """푸드QR 결과의 다른 바코드는 버린다."""
     with fake_qr([qr_row("땅콩", code="08800000000000")]) as qr:
         assert qr.lookup(CODE) is None
 
 
-def test_푸드qr이_먼저고_찾으면_다른_api는_안_부른다(store):
+def test_foodqr_first_skips_other_apis_when_found(store):
+    """푸드QR 이 먼저고, 찾으면 다른 API 는 안 부른다."""
     mfds_calls: list[str] = []
     with (
         fake_mfds({"C005": [C005_ROW], "C002": C002_ROWS}, mfds_calls) as client,
@@ -338,7 +362,8 @@ def test_푸드qr이_먼저고_찾으면_다른_api는_안_부른다(store):
 
 
 @pytest.mark.parametrize(("status", "code"), [(401, "0000"), (200, "9999")])
-def test_푸드qr_오류면_다음_api로(store, status, code):
+def test_foodqr_error_falls_back_to_next_api(store, status, code):
+    """푸드QR 이 오류면 다음 API 로 넘어간다."""
     with (
         fake_qr([], status=status, code=code) as qr,
         fake_mfds({"C005": [C005_ROW], "C002": C002_ROWS}) as client,

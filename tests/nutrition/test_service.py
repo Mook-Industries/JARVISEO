@@ -57,7 +57,8 @@ def checker(reader, **kw) -> IngredientChecker:
 # --- 바코드로 찾은 경우 ----------------------------------------------------------
 
 
-def test_바코드로_찾으면_ocr_없이_판정한다(monkeypatch):
+def test_barcode_hit_judges_without_ocr(monkeypatch):
+    """바코드로 찾으면 OCR 없이 판정한다."""
     info = ProductInfo(
         barcode=CODE,
         product_name="버터쿠키",
@@ -81,7 +82,8 @@ def test_바코드로_찾으면_ocr_없이_판정한다(monkeypatch):
 # --- 성분표 OCR ----------------------------------------------------------------
 
 
-def test_ocr_한_번에_읽히면_바로_판정한다(monkeypatch):
+def test_judges_after_single_ocr_read(monkeypatch):
+    """OCR 한 번에 읽히면 바로 판정한다."""
     monkeypatch.setattr(service, "lookup_product", miss())
     reader = FakeReader((LABEL, 0.9))
     r = checker(reader).check(CROP, ["땅콩"])
@@ -92,7 +94,8 @@ def test_ocr_한_번에_읽히면_바로_판정한다(monkeypatch):
     assert set(r.timings_ms) == {"barcode", "ocr", "match"}
 
 
-def test_신뢰도가_낮으면_같은_사진을_재처리한다(monkeypatch):
+def test_low_confidence_reprocesses_same_photo(monkeypatch):
+    """신뢰도가 낮으면 같은 사진을 재처리한다."""
     monkeypatch.setattr(service, "lookup_product", miss())
     reader = FakeReader((LABEL, 0.4), (LABEL, 0.9))
     r = checker(reader).check(CROP, ["땅콩"])
@@ -100,20 +103,23 @@ def test_신뢰도가_낮으면_같은_사진을_재처리한다(monkeypatch):
     assert r.ocr_conf == pytest.approx(0.9) and r.retake is None
 
 
-def test_재처리도_실패하면_더_가까이_재촬영을_요청한다(monkeypatch):
+def test_failed_reprocess_asks_closer_retake(monkeypatch):
+    """재처리도 실패하면 더 가까이 재촬영을 요청한다."""
     monkeypatch.setattr(service, "lookup_product", miss())
     r = checker(FakeReader((LABEL, 0.4))).check(CROP, ["땅콩"])
     assert r.retake == RETAKE_CLOSER and r.message == RETAKE_CLOSER
     assert r.judgement.verdict is V.UNDETERMINED and r.judgement.reason == "low_ocr_conf"
 
 
-def test_원재료명이_안_보이면_전체가_보이게_재촬영을_요청한다(monkeypatch):
+def test_missing_header_asks_full_view_retake(monkeypatch):
+    """원재료명이 안 보이면 전체가 보이게 재촬영을 요청한다."""
     monkeypatch.setattr(service, "lookup_product", miss())
     r = checker(FakeReader((["밀가루, 설탕"], 0.95))).check(CROP, ["땅콩"])
     assert r.retake == RETAKE_WHOLE and r.judgement.reason == "no_ingredients"
 
 
-def test_재촬영_상한이면_확인_불가로_끝낸다(monkeypatch):
+def test_retake_limit_ends_undetermined(monkeypatch):
+    """재촬영 상한이면 확인 불가로 끝낸다."""
     monkeypatch.setattr(service, "lookup_product", miss())
     r = checker(FakeReader((LABEL, 0.4))).check(CROP, ["땅콩"], retake_count=2)
     assert r.retake is None and r.retake_count == 2
@@ -121,14 +127,16 @@ def test_재촬영_상한이면_확인_불가로_끝낸다(monkeypatch):
     assert "정확히 읽지 못했어요" in r.message
 
 
-def test_판독이_불완전해도_함유를_찾으면_바로_경고한다(monkeypatch):
+def test_partial_read_with_contains_warns_now(monkeypatch):
+    """판독이 불완전해도 함유를 찾으면 바로 경고한다."""
     monkeypatch.setattr(service, "lookup_product", miss())
     r = checker(FakeReader((LABEL, 0.4))).check(CROP, ["우유"])
     assert r.judgement.verdict is V.CONTAINS and r.retake is None
     assert r.message.startswith("주의하세요.")
 
 
-def test_재처리를_끄면_한_번만_읽는다(monkeypatch):
+def test_reprocess_off_reads_once(monkeypatch):
+    """재처리를 끄면 한 번만 읽는다."""
     monkeypatch.setattr(service, "lookup_product", miss())
     reader = FakeReader((LABEL, 0.4))
     checker(reader, max_reprocess=0).check(CROP, ["땅콩"])
@@ -145,7 +153,8 @@ def store() -> MemoryStore:
     return s
 
 
-def test_바코드는_읽었는데_못_찾은_제품은_ocr_결과를_확인_전으로_캐시한다(monkeypatch, store):
+def test_unknown_barcode_caches_ocr_as_unverified(monkeypatch, store):
+    """바코드는 읽었는데 못 찾은 제품은 OCR 결과를 확인 전으로 캐시한다."""
     monkeypatch.setattr(service, "lookup_product", miss(CODE, "not_found"))
     checker(FakeReader((LABEL, 0.9)), store=store).check(CROP, ["땅콩"])
     cached = store.get_product(CODE)
@@ -153,7 +162,8 @@ def test_바코드는_읽었는데_못_찾은_제품은_ocr_결과를_확인_전
     assert "땅콩" in cached.cross_contamination
 
 
-def test_판독이_불확실하면_캐시하지_않는다(monkeypatch, store):
+def test_uncertain_read_is_not_cached(monkeypatch, store):
+    """판독이 불확실하면 캐시하지 않는다."""
     monkeypatch.setattr(service, "lookup_product", miss(CODE, "not_found"))
     checker(FakeReader((LABEL, 0.4)), store=store).check(CROP, ["우유"])
     assert store.get_product(CODE) is None
@@ -174,7 +184,8 @@ def bad(reason: str):
     return lambda image: ImageQuality(sharpness=1.0, edge=1.0, glare=0.0, reason=reason)
 
 
-def test_흐린_사진은_ocr_없이_재촬영을_안내한다(monkeypatch):
+def test_blurry_photo_asks_retake_without_ocr(monkeypatch):
+    """흐린 사진은 OCR 없이 재촬영을 안내한다."""
     monkeypatch.setattr(service, "lookup_product", miss())
     reader = FakeReader((LABEL, 0.9))
     r = checker(reader, quality_check=bad("blurry")).check(CROP, ["땅콩"])
@@ -184,13 +195,15 @@ def test_흐린_사진은_ocr_없이_재촬영을_안내한다(monkeypatch):
     assert "quality" in r.timings_ms and "ocr" not in r.timings_ms
 
 
-def test_반사가_심하면_포장을_돌려_달라고_한다(monkeypatch):
+def test_glare_asks_to_turn_package(monkeypatch):
+    """반사가 심하면 포장을 돌려 달라고 한다."""
     monkeypatch.setattr(service, "lookup_product", miss())
     r = checker(FakeReader((LABEL, 0.9)), quality_check=bad("glare")).check(CROP, ["땅콩"])
     assert r.retake == RETAKE_GLARE
 
 
-def test_재촬영_상한을_넘으면_확인_불가로_끝낸다(monkeypatch):
+def test_over_retake_limit_ends_undetermined(monkeypatch):
+    """재촬영 상한을 넘으면 확인 불가로 끝낸다."""
     monkeypatch.setattr(service, "lookup_product", miss())
     r = checker(FakeReader((LABEL, 0.9)), quality_check=bad("blurry")).check(
         CROP, ["땅콩"], retake_count=2
@@ -200,7 +213,8 @@ def test_재촬영_상한을_넘으면_확인_불가로_끝낸다(monkeypatch):
     assert "흐려서" in r.message and "포장지" in r.message
 
 
-def test_바코드로_찾으면_품질이_나빠도_판정한다(monkeypatch):
+def test_barcode_hit_judges_despite_bad_quality(monkeypatch):
+    """바코드로 찾으면 품질이 나빠도 판정한다."""
     info = ProductInfo(barcode=CODE, product_name="쿠키", raw_ingredients="밀가루, 버터")
     monkeypatch.setattr(
         service,
@@ -211,7 +225,8 @@ def test_바코드로_찾으면_품질이_나빠도_판정한다(monkeypatch):
     assert r.judgement.verdict is V.CONTAINS and r.quality is None
 
 
-def test_여러_프레임이면_가장_선명한_것으로_확인한다(monkeypatch):
+def test_multiple_frames_use_sharpest(monkeypatch):
+    """여러 프레임이면 가장 선명한 것으로 확인한다."""
     seen = []
 
     def lookup(image, store=None, client=None, food_qr=None):
@@ -242,7 +257,8 @@ class SidewaysReader:
                 for i, t in enumerate(texts)]  # fmt: skip
 
 
-def test_성분표가_돌아가_있으면_돌려서_읽는다(monkeypatch):
+def test_rotated_panel_is_read_upright(monkeypatch):
+    """성분표가 돌아가 있으면 돌려서 읽는다."""
     monkeypatch.setattr(service, "lookup_product", miss())
     reader = SidewaysReader()
     r = checker(reader, try_rotation=True).check(CROP, ["땅콩"])  # CROP 은 가로로 긴 이미지
@@ -251,7 +267,8 @@ def test_성분표가_돌아가_있으면_돌려서_읽는다(monkeypatch):
     assert len(reader.shapes) == 3  # 그대로 1번 + 90°·270°
 
 
-def test_정방향이면_돌리지_않는다(monkeypatch):
+def test_upright_panel_is_not_rotated(monkeypatch):
+    """정방향이면 돌리지 않는다."""
     monkeypatch.setattr(service, "lookup_product", miss())
     reader = FakeReader((LABEL, 0.9))
     r = checker(reader, try_rotation=True).check(CROP, ["땅콩"])
@@ -274,7 +291,8 @@ def found(info: ProductInfo, code: str = CODE):
     return lambda image, **_: BarcodeLookup(read, info)  # 조회 인자가 늘어도 그대로 쓴다
 
 
-def test_알레르기_표시_없는_조회_정보로는_미검출이라_하지_않고_성분표를_읽는다(monkeypatch):
+def test_lookup_without_allergen_label_reads_panel(monkeypatch):
+    """알레르기 표시 없는 조회 정보로는 미검출이라 하지 않고 성분표를 읽는다."""
     monkeypatch.setattr(service, "lookup_product", found(RAMEN))
     reader = FakeReader((["원재료명: 소맥분(밀), 대두유, 정제염"], 0.9))
     r = checker(reader).check(CROP, ["밀"])
@@ -283,14 +301,16 @@ def test_알레르기_표시_없는_조회_정보로는_미검출이라_하지_�
     assert r.judgement.product.product_name == "신라면"  # 조회한 제품명을 이어 쓴다
 
 
-def test_성분표도_못_읽으면_재촬영을_요청한다(monkeypatch):
+def test_unreadable_panel_asks_retake(monkeypatch):
+    """성분표도 못 읽으면 재촬영을 요청한다."""
     monkeypatch.setattr(service, "lookup_product", found(RAMEN))
     r = checker(FakeReader((["설탕, 정제수"], 0.95))).check(CROP, ["밀"])  # 원재료명 머리말 없음
     assert r.retake == RETAKE_WHOLE
     assert r.judgement.verdict is V.UNDETERMINED
 
 
-def test_알레르기_표시가_있으면_조회_정보대로_답한다(monkeypatch):
+def test_lookup_with_allergen_label_answers_from_lookup(monkeypatch):
+    """알레르기 표시가 있으면 조회 정보대로 답한다."""
     info = ProductInfo(barcode=CODE, product_name="사이다", raw_ingredients="정제수, 설탕",
                        allergen_notice="알레르기 유발물질 표시 없음")  # fmt: skip
     monkeypatch.setattr(service, "lookup_product", found(info))
@@ -299,7 +319,8 @@ def test_알레르기_표시가_있으면_조회_정보대로_답한다(monkeypa
     assert reader.calls == 0 and r.judgement.verdict is V.NOT_DETECTED
 
 
-def test_조회_정보에서_찾으면_표시가_없어도_바로_경고한다(monkeypatch):
+def test_lookup_hit_warns_without_label(monkeypatch):
+    """조회 정보에서 찾으면 표시가 없어도 바로 경고한다."""
     info = ProductInfo(barcode=CODE, product_name="쿠키", raw_ingredients="밀가루, 버터")
     monkeypatch.setattr(service, "lookup_product", found(info))
     reader = FakeReader((LABEL, 0.9))
@@ -307,14 +328,16 @@ def test_조회_정보에서_찾으면_표시가_없어도_바로_경고한다(m
     assert reader.calls == 0 and r.judgement.verdict is V.CONTAINS
 
 
-def test_등록한_알레르기가_없으면_성분표를_읽지_않는다(monkeypatch):
+def test_no_registered_allergen_skips_panel(monkeypatch):
+    """등록한 알레르기가 없으면 성분표를 읽지 않는다."""
     monkeypatch.setattr(service, "lookup_product", found(RAMEN))
     reader = FakeReader((LABEL, 0.9))
     checker(reader).check(CROP, [])
     assert reader.calls == 0
 
 
-def test_한_번_성분표로_확인한_제품은_다음에_ocr을_다시_돌리지_않는다(monkeypatch, store):
+def test_verified_product_skips_ocr_next_time(monkeypatch, store):
+    """한 번 성분표로 확인한 제품은 다음에 OCR 을 다시 돌리지 않는다."""
     # 첫 번째: 바코드는 읽었지만 어디에도 없어서 성분표를 읽는다(알레르기 표시 없는 제품).
     monkeypatch.setattr(service, "lookup_product", miss(CODE, "not_found"))
     plain = ["원재료명: 정제수, 설탕, 구연산"]

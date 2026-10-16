@@ -28,7 +28,8 @@ def inside(outer: BBox, inner: BBox) -> bool:
     )
 
 
-def test_원재료_덩어리만_잡고_제품명과_영양성분표는_뺀다():
+def test_keeps_ingredient_block_only():
+    """원재료 덩어리만 잡고 제품명과 영양성분표는 뺀다."""
     region, names = find_region([TITLE, *INGREDIENTS, *NUTRITION], SHAPE)
     assert all(inside(region, b) for b, _ in INGREDIENTS)
     assert region.y1 > TITLE[0].y2  # 제품명 제외
@@ -36,17 +37,20 @@ def test_원재료_덩어리만_잡고_제품명과_영양성분표는_뺀다():
     assert names == ["함유", "원재료", "원산지"]
 
 
-def test_단서가_없으면_사진_전체():
+def test_no_cue_uses_whole_photo():
+    """단서가 없으면 사진 전체를 쓴다."""
     region, names = find_region([TITLE, *NUTRITION], SHAPE)
     assert region == BBox(0, 0, 600, 800) and names == []
 
 
-def test_함유량은_단서가_아니다():
+def test_content_amount_is_not_a_cue():
+    """함유량은 단서가 아니다."""
     _, names = find_region([(BBox(50, 200, 300, 220), "단백질 함유량 3g")], SHAPE)
     assert names == []
 
 
-def test_같은_단의_알레르기_표시는_조금_떨어져도_붙인다():
+def test_joins_nearby_allergen_label_in_same_column():
+    """같은 단의 알레르기 표시는 조금 떨어져도 붙인다."""
     notice = (BBox(60, 340, 400, 360), "알레르기 유발물질: 우유, 대두")  # 원재료 끝에서 70px(3.5줄)
     side = (BBox(540, 340, 600, 360), "뒷면참조")  # 같은 거리지만 원재료 단과 거의 안 겹친다
     region, names = find_region([*INGREDIENTS, notice, side], SHAPE)
@@ -55,7 +59,8 @@ def test_같은_단의_알레르기_표시는_조금_떨어져도_붙인다():
     assert "알레르기" in names
 
 
-def test_빈_사진에서도_멈추지_않는다():
+def test_empty_photo_does_not_crash():
+    """빈 사진에서도 멈추지 않는다."""
     region, names = find_region([], SHAPE)
     assert region == BBox(0, 0, 600, 800) and names == []
 
@@ -85,7 +90,8 @@ class ScaledReader:
         ]
 
 
-def test_작은_사진은_키워_읽고_좌표는_원래_크기로_돌린다():
+def test_upscales_small_photo_and_maps_coords_back():
+    """작은 사진은 키워 읽고 좌표는 원래 크기로 돌린다."""
     reader = ScaledReader([*INGREDIENTS, (BBox(0, 0, 10, 10), "  ")])
     boxes = word_boxes(np.zeros(SHAPE, np.uint8), reader)
     assert reader.shape[0] == 1600  # 긴 변 800 → 1600
@@ -94,7 +100,8 @@ def test_작은_사진은_키워_읽고_좌표는_원래_크기로_돌린다():
         assert abs(got.x1 - want.x1) < 1e-6 and abs(got.y2 - want.y2) < 1e-6
 
 
-def test_locate_panel은_ocr부터_영역까지_한번에():
+def test_locate_panel_runs_ocr_to_region():
+    """`locate_panel` 은 OCR 부터 영역까지 한 번에 한다."""
     reader = ScaledReader([TITLE, *INGREDIENTS, *NUTRITION])
     region, names = locate_panel(np.zeros(SHAPE, np.uint8), reader)
     assert all(inside(region, b) for b, _ in INGREDIENTS) and "함유" in names
