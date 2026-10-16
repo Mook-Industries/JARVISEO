@@ -124,6 +124,13 @@ OCR_MAX_RETAKE = _get_int("JARVISEO_OCR_MAX_RETAKE", 2)
 # 원재료명을 못 찾으면 90°·270° 로 돌려서도 읽는다. 캔·병은 성분표를 옆으로 인쇄하는 일이 있다.
 # 그런 사진에서만 OCR 이 최대 3번 돈다. 정방향 사진은 추가 비용이 없다.
 OCR_TRY_ROTATION = _get_bool("JARVISEO_OCR_TRY_ROTATION", True)
+# 성분표 OCR 을 Colab GPU 서버(scripts/colab_ocr_server.py)에 맡긴다. 비우면 이 PC 의 EasyOCR(CPU).
+# 노트북 CPU 로는 한 장에 수십 초가 걸린다. Colab T4 + PaddleOCR 이 훨씬 빠르고 정확하다.
+# 서버를 띄울 때 출력되는 주소와 토큰을 그대로 적는다. Colab 세션이 바뀌면 주소도 바뀐다.
+OCR_REMOTE_URL = _get("JARVISEO_OCR_REMOTE_URL")
+OCR_REMOTE_TOKEN = _get("JARVISEO_OCR_REMOTE_TOKEN")
+# 첫 요청은 모델을 데우느라 느릴 수 있어 넉넉히 둔다. 넘기면 이 PC 에서 대신 읽는다.
+OCR_REMOTE_TIMEOUT_SEC = _get_float("JARVISEO_OCR_REMOTE_TIMEOUT_SEC", 15.0)
 
 # OCR 전 사진 품질 검사 (nutrition/quality.py). 흐리거나 반사가 심하면 OCR 을 돌리지 않고
 # 다시 보여 달라고 한다. 평가 세트 21장으로 정한 임시값 — 실제 카메라 프레임으로 다시 맞춘다.

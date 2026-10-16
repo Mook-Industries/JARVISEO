@@ -34,6 +34,7 @@ from typing import Protocol
 import cv2
 import numpy as np
 
+from jarviseo import config
 from jarviseo.nutrition.allergen import KNOWN_ALLERGENS
 from jarviseo.types import BBox, OCRLine
 
@@ -409,12 +410,24 @@ class OcrReader(Protocol):
     def readtext(self, image: np.ndarray, **kwargs) -> list: ...
 
 
+def _local_reader() -> OcrReader:
+    import easyocr  # torch 를 끌고 와서 무겁다. 쓸 때만 불러온다(CI 에는 설치하지 않음)
+
+    return easyocr.Reader(["ko", "en"], gpu=False, verbose=False)
+
+
 def _get_reader() -> OcrReader:
+    """OCR 엔진. Colab 서버 주소가 설정돼 있으면 그쪽(GPU), 아니면 이 PC 의 EasyOCR(CPU)."""
     global _reader
     if _reader is None:
-        import easyocr  # torch 를 끌고 와서 무겁다. 쓸 때만 불러온다(CI 에는 설치하지 않음)
+        if config.OCR_REMOTE_URL:
+            from jarviseo.nutrition.ocr_remote import RemoteOcrReader
 
-        _reader = easyocr.Reader(["ko", "en"], gpu=False, verbose=False)
+            _reader = RemoteOcrReader(
+                config.OCR_REMOTE_URL, config.OCR_REMOTE_TOKEN, fallback=_local_reader
+            )
+        else:
+            _reader = _local_reader()
     return _reader
 
 
