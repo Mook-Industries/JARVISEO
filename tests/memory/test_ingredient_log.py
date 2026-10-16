@@ -60,7 +60,8 @@ def _lookup(code: str) -> BarcodeLookup:
     return BarcodeLookup(barcode=read, product=None, elapsed_ms=40, reason="not_found")
 
 
-def test_판정_결과가_턴에_붙는다(store: MemoryStore):
+def test_judgement_is_attached_to_turn(store: MemoryStore):
+    """판정 결과가 턴에 붙는다."""
     turn_id = _turn(store)
     store.log_ingredient(turn_id, _check())
 
@@ -78,7 +79,7 @@ def test_판정_결과가_턴에_붙는다(store: MemoryStore):
         assert db.get(SessionTurn, turn_id).ocr_text.startswith("원재료명")
 
 
-def test_제품이_DB에_없으면_바코드를_비운다(store: MemoryStore):
+def test_barcode_is_empty_when_product_not_in_db(store: MemoryStore):
     """외래키라서, 캐시에 없는 바코드를 적으면 Postgres 에서 저장이 깨진다."""
     turn_id = _turn(store)
     store.log_ingredient(turn_id, _check(barcode=_lookup(CODE)))
@@ -86,7 +87,8 @@ def test_제품이_DB에_없으면_바코드를_비운다(store: MemoryStore):
         assert db.get(TurnIngredient, turn_id).barcode is None
 
 
-def test_제품이_DB에_있으면_바코드를_남긴다(store: MemoryStore):
+def test_barcode_is_kept_when_product_in_db(store: MemoryStore):
+    """제품이 DB 에 있으면 바코드를 남긴다."""
     store.save_product(
         ProductInfo(
             barcode=CODE,
@@ -102,7 +104,8 @@ def test_제품이_DB에_있으면_바코드를_남긴다(store: MemoryStore):
         assert db.get(TurnIngredient, turn_id).barcode == CODE
 
 
-def test_재촬영하면_같은_턴의_기록을_덮어쓴다(store: MemoryStore):
+def test_retake_overwrites_same_turn_record(store: MemoryStore):
+    """재촬영하면 같은 턴의 기록을 덮어쓴다."""
     turn_id = _turn(store)
     store.log_ingredient(turn_id, _check(retake_count=0, ocr_conf=0.4))
     store.log_ingredient(turn_id, _check(retake_count=1, ocr_conf=0.9))
@@ -112,7 +115,7 @@ def test_재촬영하면_같은_턴의_기록을_덮어쓴다(store: MemoryStore
         assert rows[0].retry_count == 1
 
 
-def test_OCR_신뢰도가_없어도_저장된다(store: MemoryStore):
+def test_saved_without_ocr_confidence(store: MemoryStore):
     """바코드로 찾은 경우엔 OCR 을 안 돌려서 신뢰도·원문이 없다."""
     turn_id = _turn(store)
     store.log_ingredient(turn_id, _check(ocr_conf=None, ocr_text=""))

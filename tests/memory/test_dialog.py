@@ -31,7 +31,8 @@ def a_turn(store):
     return user_id, store.log_turn(session_id, utterance, response)
 
 
-def test_질문과_대답을_뒤에서_저장하고_나중에_찾는다(file_store):
+def test_saves_in_background_and_finds_later(file_store):
+    """질문과 대답을 뒤에서 저장하고 나중에 찾는다."""
     memory = VectorMemory(file_store, embedder=FakeEmbedder(), min_score=0.0)
     dialog = DialogMemory(memory)
     user_id, turn_id = a_turn(file_store)
@@ -49,7 +50,8 @@ def test_질문과_대답을_뒤에서_저장하고_나중에_찾는다(file_sto
 @pytest.mark.parametrize(
     ("question", "answer"), [("이거 뭐야?", ""), ("", "컵이에요."), (" ", " ")]
 )
-def test_질문이나_대답이_비었으면_넣지_않는다(file_store, question, answer):
+def test_skips_empty_question_or_answer(file_store, question, answer):
+    """질문이나 대답이 비었으면 넣지 않는다."""
     dialog = DialogMemory(VectorMemory(file_store, embedder=FakeEmbedder()))
     user_id, turn_id = a_turn(file_store)
 
@@ -58,7 +60,9 @@ def test_질문이나_대답이_비었으면_넣지_않는다(file_store, questi
         assert db.query(Observation).count() == 0
 
 
-def test_저장이_실패해도_예외를_올리지_않는다(file_store, caplog):
+def test_save_failure_does_not_raise(file_store, caplog):
+    """저장이 실패해도 예외를 올리지 않는다."""
+
     def broken(*args, **kwargs):
         raise RuntimeError("DB 연결이 끊겼다")
 
@@ -71,7 +75,9 @@ def test_저장이_실패해도_예외를_올리지_않는다(file_store, caplog
     assert "대화 기억 저장 실패" in caplog.text
 
 
-def test_close_는_밀린_저장을_마저_한다(file_store):
+def test_close_flushes_pending_saves(file_store):
+    """`close()` 는 밀린 저장을 마저 한다."""
+
     class Slow(FakeEmbedder):
         def embed(self, text):
             time.sleep(0.2)

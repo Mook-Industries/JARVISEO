@@ -6,28 +6,33 @@ from jarviseo.pointing import crop_target
 from jarviseo.types import BBox
 
 
-def test_박스_영역만_잘라낸다():
+def test_crops_only_box_area():
+    """박스 영역만 잘라낸다."""
     image = np.zeros((1080, 1920, 3), np.uint8)
     assert crop_target(image, BBox(400, 500, 700, 900)).shape == (400, 300, 3)
 
 
-def test_소수_좌표는_물체가_잘리지_않게_넓힌다():
+def test_fractional_coords_round_outward():
+    """소수 좌표는 물체가 잘리지 않게 넓힌다."""
     image = np.zeros((100, 100, 3), np.uint8)
     assert crop_target(image, BBox(10.6, 10.6, 20.2, 20.2)).shape == (11, 11, 3)
 
 
-def test_사진_밖으로_나간_부분은_버린다():
+def test_clips_outside_part():
+    """사진 밖으로 나간 부분은 버린다."""
     image = np.zeros((100, 100, 3), np.uint8)
     # 음수 좌표를 그대로 쓰면 numpy 가 '뒤에서부터'로 읽어 엉뚱한 곳을 자른다.
     assert crop_target(image, BBox(-20, -20, 30, 30)).shape == (30, 30, 3)
 
 
-def test_박스가_사진_밖에_있으면_원본을_준다():
+def test_box_outside_returns_original():
+    """박스가 사진 밖에 있으면 원본을 준다."""
     image = np.zeros((100, 100, 3), np.uint8)
     assert crop_target(image, BBox(200, 200, 300, 300)) is image
 
 
-def test_크롭은_원본과_메모리를_나누지_않는다():
+def test_crop_does_not_share_memory():
+    """크롭은 원본과 메모리를 나누지 않는다."""
     image = np.zeros((100, 100, 3), np.uint8)
     crop = crop_target(image, BBox(0, 0, 10, 10))
     image[:] = 255

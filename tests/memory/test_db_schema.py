@@ -37,7 +37,8 @@ from jarviseo.types import (
 )
 
 
-def test_테이블이_전부_만들어진다(store: MemoryStore):
+def test_all_tables_are_created(store: MemoryStore):
+    """테이블이 전부 만들어진다."""
     from sqlalchemy import inspect
 
     tables = set(inspect(store.engine).get_table_names())
@@ -62,7 +63,8 @@ def test_테이블이_전부_만들어진다(store: MemoryStore):
     assert tables == expected, f"빠진 것: {expected - tables} / ERD 에 없는 것: {tables - expected}"
 
 
-def test_사용자와_알레르기(store: MemoryStore):
+def test_user_and_allergens(store: MemoryStore):
+    """사용자와 알레르기."""
     user_id = store.ensure_user()
 
     # 같은 이메일로 다시 불러도 새로 만들지 않는다.
@@ -76,7 +78,7 @@ def test_사용자와_알레르기(store: MemoryStore):
     assert store.get_user_allergens(user_id) == ["땅콩"]
 
 
-def test_알레르기는_지우지_않고_표시만_한다(store: MemoryStore):
+def test_allergen_is_soft_deleted(store: MemoryStore):
     """소프트 삭제. 과거 판정 기록이 "그때는 등록돼 있었다"를 설명할 수 있어야 한다."""
     user_id = store.ensure_user()
     store.set_user_allergens(user_id, ["우유"])
@@ -133,7 +135,8 @@ def _sample_response() -> tuple[Utterance, AssistantResponse]:
     return utterance, response
 
 
-def test_대화_한_건을_기록한다(store: MemoryStore):
+def test_logs_one_turn(store: MemoryStore):
+    """대화 한 건을 기록한다."""
     user_id = store.ensure_user()
     session_id = store.start_session(user_id, title="데모")
     utterance, response = _sample_response()
@@ -176,7 +179,7 @@ def test_대화_한_건을_기록한다(store: MemoryStore):
         assert inf.detected_count == 2
 
 
-def test_후보와_단서별_점수가_남는다(store: MemoryStore):
+def test_candidates_keep_cue_scores(store: MemoryStore):
     """ablation 결과를 해석하려면 합산 점수만으로는 부족하다."""
     session_id = store.start_session(store.ensure_user())
     utterance, response = _sample_response()
@@ -196,7 +199,7 @@ def test_후보와_단서별_점수가_남는다(store: MemoryStore):
         assert rows[0].bbox == {"x1": 10, "y1": 20, "x2": 110, "y2": 220}
 
 
-def test_되물은_턴은_정답_라벨로_남지_않는다(store: MemoryStore):
+def test_clarified_turn_is_not_labeled(store: MemoryStore):
     """resolved_by=USER 는 정답 라벨로 쓴다. 되물은 턴에 USER 가 찍히면 라벨이 오염된다."""
     session_id = store.start_session(store.ensure_user())
     utterance, response = _sample_response()
@@ -219,7 +222,8 @@ def _utc(t: datetime) -> datetime:
     return t if t.tzinfo is not None else t.replace(tzinfo=UTC)
 
 
-def test_끼어들기로_끊긴_턴과_다음_턴의_음성_기록(store: MemoryStore):
+def test_voice_logs_for_barged_in_turn_and_next_turn(store: MemoryStore):
+    """끼어들기로 끊긴 턴과 다음 턴의 음성 기록."""
     session_id = store.start_session(store.ensure_user())
     now = time.monotonic()
     first = Utterance(text="오늘 일정 알려 줘", started_at=now - 5.0, ended_at=now - 3.5)
@@ -248,7 +252,8 @@ def test_끼어들기로_끊긴_턴과_다음_턴의_음성_기록(store: Memory
         assert _utc(barged_voice.speech_started_at) > ended
 
 
-def test_지연_백분위(store: MemoryStore):
+def test_latency_percentiles(store: MemoryStore):
+    """지연 백분위."""
     session_id = store.start_session(store.ensure_user())
 
     with store.session() as db:
@@ -271,7 +276,7 @@ def test_지연_백분위(store: MemoryStore):
     assert store.latency_percentiles("없는단계") == {"p50": 0.0, "p95": 0.0, "count": 0}
 
 
-def test_사용자를_지우면_딸린_기록도_지워진다(store: MemoryStore):
+def test_deleting_user_cascades(store: MemoryStore):
     """cascade 설정이 실제로 걸려 있는지 확인한다."""
     user_id = store.ensure_user()
     store.set_user_allergens(user_id, ["땅콩"])
@@ -285,7 +290,7 @@ def test_사용자를_지우면_딸린_기록도_지워진다(store: MemoryStore
         assert db.query(ChatSession).count() == 0
 
 
-def test_관찰_기록에_임베딩이_남는다(store: MemoryStore):
+def test_observation_keeps_embedding(store: MemoryStore):
     """④ 기능의 테이블. 임베딩은 같은 행의 VECTOR 열에 둔다."""
     user_id = store.ensure_user()
     session_id = store.start_session(user_id)
@@ -313,7 +318,8 @@ def test_관찰_기록에_임베딩이_남는다(store: MemoryStore):
         assert db.query(Observation).count() == 0
 
 
-def test_잠깐만요를_먼저_읽은_턴은_필러로_남는다(store: MemoryStore):
+def test_turn_with_filler_is_marked(store: MemoryStore):
+    """먼저 "잠깐만요"를 읽은 턴은 필러로 남는다."""
     session_id = store.start_session(store.ensure_user())
     utterance, response = _sample_response()
 

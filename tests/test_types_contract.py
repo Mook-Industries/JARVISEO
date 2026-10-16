@@ -18,7 +18,8 @@ from jarviseo.types import (
 )
 
 
-def test_bbox_기본_계산():
+def test_bbox_basic_math():
+    """`BBox` 기본 계산."""
     box = BBox(10, 20, 110, 220)
     assert box.width == 100
     assert box.height == 200
@@ -26,7 +27,8 @@ def test_bbox_기본_계산():
     assert box.center == (60, 120)
 
 
-def test_bbox_겹침():
+def test_bbox_iou():
+    """`BBox` 겹침(IoU)."""
     a = BBox(0, 0, 10, 10)
     b = BBox(5, 5, 15, 15)
     assert 0 < a.iou(b) < 1
@@ -34,7 +36,8 @@ def test_bbox_겹침():
     assert a.iou(BBox(100, 100, 110, 110)) == 0.0
 
 
-def test_frame_크기는_width_height_순서():
+def test_frame_size_is_width_height():
+    """`Frame.size` 는 (width, height) 순서다."""
     # OpenCV 의 shape 는 (H, W, C) 지만 size 는 (W, H) 로 뒤집어 돌려준다.
     # 이 순서를 헷갈리면 좌표 계산이 통째로 틀어진다.
     image = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -42,13 +45,15 @@ def test_frame_크기는_width_height_순서():
     assert frame.size == (640, 480)
 
 
-def test_detection_필드_이름():
+def test_detection_field_names():
+    """`Detection` 필드 이름."""
     det = Detection(label="fingertip", confidence=0.9, bbox=BBox(0, 0, 1, 1))
     assert det.label == "fingertip"
     assert det.track_id is None
 
 
-def test_알레르기_판정_값은_네_가지다():
+def test_allergen_verdict_has_four_values():
+    """알레르기 판정 값은 네 가지다."""
     # 2026-10-06 합의: 함유 / 혼입 가능 / 미검출 / 확인 불가.
     # DB turn_ingredient.verdict 에 이 value 가 그대로 저장된다.
     assert {v.value for v in AllergenVerdict} == {
@@ -60,12 +65,14 @@ def test_알레르기_판정_값은_네_가지다():
     assert [v.label for v in AllergenVerdict] == ["함유", "혼입 가능", "미검출", "확인 불가"]
 
 
-def test_알레르기_판정에_안전은_없다():
+def test_allergen_verdict_has_no_safe():
+    """알레르기 판정에 안전은 없다."""
     # 미검출을 '안전'으로 바꿔 말하면 안 된다. 재현율 우선 원칙.
     assert "safe" not in {v.value for v in AllergenVerdict}
 
 
-def test_의도와_단서_목록():
+def test_intent_and_cue_kinds():
+    """의도와 단서 목록."""
     assert Intent.GENERAL in set(Intent)
     # ERD turn_candidate.cue_scores 의 키와 같아야 한다
     assert {c.value for c in CueKind} == {"center", "point", "gaze", "lang", "ctx"}

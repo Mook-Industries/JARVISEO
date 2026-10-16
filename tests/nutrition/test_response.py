@@ -26,7 +26,8 @@ from jarviseo.types import AllergenVerdict as V
         ("ABC", "이/가", "ABC가"),  # 한글로 안 끝나면 받침 없는 쪽
     ],
 )
-def test_조사(word, pair, expected):
+def test_particles(word, pair, expected):
+    """조사."""
     assert josa(word, pair) == expected
 
 
@@ -34,7 +35,8 @@ def J(verdict, **kw) -> AllergenJudgement:
     return AllergenJudgement(verdict=verdict, **kw)
 
 
-def test_함유는_알레르겐과_근거_표기를_말한다():
+def test_contains_says_allergen_and_evidence():
+    """함유는 알레르겐과 근거 표기를 말한다."""
     msg = build_message(
         J(V.CONTAINS, matched_allergens=["우유"], matched_terms=["탈지분유", "유청"]),
         product_name="초코쿠키",
@@ -44,18 +46,21 @@ def test_함유는_알레르겐과_근거_표기를_말한다():
     )
 
 
-def test_표기가_알레르겐_이름과_같으면_근거는_생략한다():
+def test_omits_evidence_equal_to_allergen_name():
+    """표기가 알레르겐 이름과 같으면 근거는 생략한다."""
     msg = build_message(J(V.CONTAINS, matched_allergens=["새우"], matched_terms=["새우"]))
     assert msg == "주의하세요. 새우가 들어 있어요."
 
 
-def test_근거_표기는_세_개까지만():
+def test_evidence_limited_to_three():
+    """근거 표기는 세 개까지만 말한다."""
     terms = ["탈지분유", "유청", "카제인", "버터", "치즈"]
     msg = build_message(J(V.CONTAINS, matched_allergens=["우유"], matched_terms=terms))
     assert "카제인" in msg and "버터" not in msg
 
 
-def test_함유와_혼입_가능을_같이_말한다():
+def test_says_contains_and_may_contain_together():
+    """함유와 혼입 가능을 같이 말한다."""
     msg = build_message(
         J(
             V.CONTAINS,
@@ -67,14 +72,16 @@ def test_함유와_혼입_가능을_같이_말한다():
     assert msg.endswith("땅콩은 같은 시설에서 써서 섞여 들어갔을 수 있어요.")
 
 
-def test_혼입_가능():
+def test_may_contain():
+    """혼입 가능."""
     msg = build_message(J(V.MAY_CONTAIN, may_contain_allergens=["땅콩", "호두"]))
     assert "땅콩, 호두를 쓰는 시설" in msg
     assert msg.startswith("원재료에서는 등록하신 알레르기 성분을 찾지 못했어요.")
     assert "없어요" not in msg  # 없다고 단정하지 않는다
 
 
-def test_미검출은_안전하다고_하지_않는다():
+def test_not_detected_is_not_called_safe():
+    """미검출은 안전하다고 하지 않는다."""
     msg = build_message(J(V.NOT_DETECTED))
     assert "찾지 못했어요" in msg
     assert "포장지" in msg
@@ -90,12 +97,14 @@ def test_미검출은_안전하다고_하지_않는다():
         ("모르는사유", "확인하지 못했어요"),
     ],
 )
-def test_확인_불가는_사유별로_안내한다(reason, phrase):
+def test_undetermined_explains_by_reason(reason, phrase):
+    """확인 불가는 사유별로 안내한다."""
     assert phrase in build_message(J(V.UNDETERMINED, reason=reason))
 
 
 @pytest.mark.parametrize("verdict", list(V))
-def test_어떤_판정에도_안전하다는_말은_없다(verdict):
+def test_no_verdict_says_safe(verdict):
+    """어떤 판정에도 안전하다는 말은 없다."""
     msg = build_message(J(verdict, matched_allergens=["우유"], may_contain_allergens=["땅콩"]))
     for banned in ("안전", "먹어도 돼", "드셔도"):
         assert banned not in msg
