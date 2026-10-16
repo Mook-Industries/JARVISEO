@@ -1,36 +1,34 @@
 """다중 단서 융합 — '저거'를 최종 결정한다.  담당: 최홍묵
 
-책임 지표: 대상 선택 정확도
+책임 지표: 대상 선택 정확도 · 되묻기 비율
 
-이 파일이 프로젝트의 기술적 중심이다.
-cues.py 가 매긴 단서별 점수를 합쳐서 후보 순위를 정하고,
-1위와 2위의 점수차가 충분하지 않으면 단정하지 않고 되묻는다.
+cues.py 가 매긴 단서별 점수를 가중치로 합쳐 후보 순위를 정하고,
+1위와 2위의 점수차(margin)가 기준보다 작으면 단정하지 않고 되묻는다.
+착용형 비서에서 틀린 단정은 침묵보다 나쁘다. 사용자가 확인할 화면이 없다.
 
-되묻기가 왜 중요한가
---------------------
-착용형 비서에서 틀린 단정은 침묵보다 나쁘다. 사용자가 확인할 화면이 없기
-때문에, 잘못 답해도 그게 잘못인지 알 방법이 없다.
-그리고 되묻는 동작 자체가 데모에서 가장 잘 보이는 차별점이다.
-
-지금은 가중치를 사람이 정한다(WEIGHTS). 나중에 이 가중치를 로지스틱 회귀로
-학습시키면 정형 데이터 기반 머신러닝이 파이프라인에 들어온다.
-그때 학습 데이터는 지시 장면 500장 라벨링 결과를 그대로 쓴다.
+되묻기 대답("왼쪽", "컵")은 단서가 아니다. 사용자가 직접 고른 것이라 점수에 섞지 않고
+후보를 걸러내는 데만 쓴다(10/15 결정 A안). 섞으면 ablation 의 v1 줄이 baseline 이 아니게 된다.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
+
 from jarviseo import config
+from jarviseo.pointing.cues import score_center
+from jarviseo.pointing.labels import korean_name
 from jarviseo.types import (
     CueKind,
+    CueScore,
     Detection,
     TargetCandidate,
     TargetResolution,
 )
 
-__all__ = ["WEIGHTS", "resolve_target"]
+__all__ = ["IMPLEMENTED_CUES", "WEIGHTS", "resolve_target"]
 
-# 단서별 가중치. 합이 1.0 이 되도록 유지한다.
-# 이 값이 곧 "무엇을 얼마나 믿는가"이고, ablation 의 비교 대상이다.
+# 단서별 가중치. 이 값이 곧 "무엇을 얼마나 믿는가"이고, ablation 의 비교 대상이다.
+# 켜진 단서의 가중치 합으로 나누므로 몇 개를 켜든 점수는 0~1 이다.
 WEIGHTS: dict[CueKind, float] = {
     CueKind.CENTER: 0.10,
     CueKind.POINT: 0.40,
@@ -38,6 +36,12 @@ WEIGHTS: dict[CueKind, float] = {
     CueKind.LANG: 0.25,
     CueKind.CTX: 0.10,
 }
+
+# 단서 → 점수 함수. 단서를 구현하면 여기에 넣는다.
+_SCORERS: dict[CueKind, Callable[[list[Detection], tuple[int, int]], list[CueScore]]] = {
+    CueKind.CENTER: score_center,
+}
+IMPLEMENTED_CUES = frozenset(_SCORERS)
 
 
 def resolve_target(
@@ -47,6 +51,7 @@ def resolve_target(
     text: str,
     frame_size: tuple[int, int],
     prev_target_label: str | None = None,
+    replies: Sequence[str] = (),
     enabled_cues: set[CueKind] | None = None,
     margin_threshold: float = config.CLARIFY_MARGIN_THRESHOLD,
 ) -> TargetResolution:
@@ -54,32 +59,113 @@ def resolve_target(
 
     Args:
         candidates: 장면에서 찾은 후보 물체들.
-        fingertip: 손끝 검출 결과. 손이 안 보이면 None.
-        gaze_vector: 시선 방향. 못 구했으면 None.
-        text: 사용자 발화 원문.
-        frame_size: (width, height). 상대 위치 계산에 쓴다.
-        prev_target_label: 직전 턴에서 확정한 대상의 라벨. 없으면 None.
-            CTX 단서("그거 말고 옆에 거")의 근거다.
-        enabled_cues: 켤 단서 집합. **ablation 실험의 스위치가 이것이다.**
-            None 이면 전부 켠다. {CueKind.CENTER} 하나만 주면 baseline 이 된다.
+        fingertip: 손 단서(v2) 자리. v1 은 쓰지 않는다.
+        gaze_vector: 시선 단서(v3) 자리. v1 은 쓰지 않는다.
+        text: 처음 질문 원문. 되묻기 대답은 넣지 않는다(``replies``).
+        frame_size: (width, height).
+        prev_target_label: 대화 맥락 단서(v5) 자리. v1 은 쓰지 않는다.
+        replies: 되묻기 대답들, 받은 순서대로. 후보를 걸러내는 데만 쓴다.
+        enabled_cues: 켤 단서. **ablation 의 스위치.** None 이면 구현된 단서 전부.
+            구현 안 된 단서가 있으면 ValueError — 조용히 빼면 v2 줄이 v1 숫자가 된다.
         margin_threshold: 1위-2위 점수차가 이 값보다 작으면 되묻는다.
-            기본값은 ``config.CLARIFY_MARGIN_THRESHOLD`` 다. 숫자를 여기에 따로
-            적지 않는 이유는, 두 곳에 있으면 한쪽만 고쳐져 어긋나기 때문이다.
+            기본값은 ``config.CLARIFY_MARGIN_THRESHOLD`` 다(두 곳에 적으면 어긋난다).
 
-    Returns:
-        후보 순위, 선택 결과, 되물을지 여부.
-
-    후보가 0개면 chosen=None, needs_clarify=True 로 반환한다.
-    후보가 1개면 margin 은 1.0 으로 둔다(비교 상대가 없으므로 확신).
+    후보가 0개면 chosen=None, needs_clarify=True, 되물을 문장 없음(그래프가 "다시 가리켜
+    주세요"로 끝낸다). 후보가 1개면 margin 은 1.0(비교 상대가 없으므로 확신)이다.
+    candidates 칸에는 걸러낸 뒤의 순위를 담는다. chosen 이 그 안에 있어야 DB 기록이 맞는다.
     """
-    raise NotImplementedError
+    active = IMPLEMENTED_CUES if enabled_cues is None else frozenset(enabled_cues)
+    if not active or active - IMPLEMENTED_CUES:
+        allowed = ", ".join(k.value for k in IMPLEMENTED_CUES)
+        raise ValueError(f"켤 단서가 없거나 구현 안 된 단서가 있다. 켤 수 있는 단서: {allowed}")
+    kinds = [k for k in CueKind if k in active]  # ablation 순서(v1~v5)로 기록한다
+
+    if not candidates:
+        return TargetResolution([], chosen=None, margin=0.0, needs_clarify=True)
+
+    narrowed = _narrow_by_replies(candidates, replies, kinds, frame_size)
+    ranked = _rank(narrowed, kinds, frame_size)
+    margin = 1.0 if len(ranked) == 1 else ranked[0].total_score - ranked[1].total_score
+    if margin < margin_threshold:
+        question = _build_clarify_question(ranked[0], ranked[1])
+        return TargetResolution(ranked, None, margin, True, question)
+    return TargetResolution(ranked, ranked[0], margin, False)
+
+
+def _rank(
+    candidates: list[Detection], kinds: list[CueKind], frame_size: tuple[int, int]
+) -> list[TargetCandidate]:
+    """켜진 단서 점수를 가중 평균해 높은 순으로 줄 세운다. 동점이면 들어온 순서를 지킨다."""
+    per_cue = {k: _SCORERS[k](candidates, frame_size) for k in kinds}
+    total_weight = sum(WEIGHTS[k] for k in kinds)
+    ranked = [
+        TargetCandidate(
+            detection=d,
+            cue_scores=[per_cue[k][i] for k in kinds],
+            total_score=sum(WEIGHTS[k] * per_cue[k][i].score for k in kinds) / total_weight,
+        )
+        for i, d in enumerate(candidates)
+    ]
+    return sorted(ranked, key=lambda c: c.total_score, reverse=True)
+
+
+def _narrow_by_replies(
+    candidates: list[Detection],
+    replies: Sequence[str],
+    kinds: list[CueKind],
+    frame_size: tuple[int, int],
+) -> list[Detection]:
+    """되묻기 대답으로 후보를 걸러낸다. 아무것도 안 맞으면 그 대답은 없던 것으로 한다.
+
+    이름("컵")은 남은 후보 전부에서 찾는다. 사용자가 이름을 댔으면 그것이 답이다.
+    위치("왼쪽")는 그 대답을 부른 질문의 두 후보(그때의 1·2위) 안에서만 고른다.
+    후보 전체에서 고르면, 컵 셋 중 가운데·오른쪽을 물었는데 맨 왼쪽 컵이 뽑힌다.
+    같은 후보면 순위가 늘 같으므로, 대답마다 순위를 다시 매기면 그때 물은 두 후보가 나온다.
+    """
+    for reply in replies:
+        said = reply.replace(" ", "")
+        candidates = _by_name(candidates, said) or candidates
+        if len(candidates) > 1:
+            asked = [c.detection for c in _rank(candidates, kinds, frame_size)[:2]]
+            candidates = _by_position(asked, said, frame_size[0]) or candidates
+    return candidates
+
+
+def _by_name(candidates: list[Detection], said: str) -> list[Detection]:
+    """대답에 든 후보 이름과 같은 후보만. "곰인형"처럼 여러 이름이 걸리면 가장 긴 이름."""
+    names = {korean_name(d.label).replace(" ", "") for d in candidates}
+    hits = [name for name in names if name in said]
+    if not hits:
+        return []
+    best = max(hits, key=len)
+    return [d for d in candidates if korean_name(d.label).replace(" ", "") == best]
+
+
+def _by_position(candidates: list[Detection], said: str, width: int) -> list[Detection]:
+    """대답에 위치 말이 있으면 그 자리의 후보 하나. 없으면 빈 리스트."""
+    if "왼쪽" in said:
+        return [min(candidates, key=lambda d: d.bbox.center[0])]
+    if "오른쪽" in said:
+        return [max(candidates, key=lambda d: d.bbox.center[0])]
+    if "가운데" in said:
+        return [min(candidates, key=lambda d: abs(d.bbox.center[0] - width / 2))]
+    return []
 
 
 def _build_clarify_question(top: TargetCandidate, second: TargetCandidate) -> str:
-    """되물을 문장을 만든다.
+    """되물을 문장. 같은 종류면 위치로("왼쪽 컵이요, 오른쪽 컵이요?"), 다르면 이름으로 묻는다.
 
-    두 후보를 구별할 수 있는 특징을 골라야 한다.
-    같은 종류면 위치로("왼쪽 컵이요, 오른쪽 컵이요?"),
-    다른 종류면 이름으로("컵이요, 병이요?") 묻는다.
+    1·2위만 묻는다. 셋을 다 읽으면 문장이 길어져 대답이 오히려 흐려진다.
     """
-    raise NotImplementedError
+    first, other = korean_name(top.detection.label), korean_name(second.detection.label)
+    if first == other:
+        return f"왼쪽 {first}{_yo(first)}, 오른쪽 {first}{_yo(first)}?"
+    return f"{first}{_yo(first)}, {other}{_yo(other)}?"
+
+
+def _yo(name: str) -> str:
+    """받침이 있으면 "이요"(컵이요), 없으면 "요"(사과요). 한글이 아니면 "요"."""
+    last = name[-1]
+    if "가" <= last <= "힣" and (ord(last) - ord("가")) % 28:
+        return "이요"
+    return "요"

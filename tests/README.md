@@ -29,6 +29,9 @@ DB 테스트는 여기에 더해 db job 이 pgvector 컨테이너를 띄워 실�
 | `workflow/nodes/test_pointing.py` | 가리킴 길(검출 → 대상 결정 ⇄ 되묻기 → 크롭)과 재촬영 — 크롭이 VLM 에 가는지, 되묻기 상한·한 글자 대답, 가리킴 기록 |
 | `workflow/nodes/test_ingredient.py` | 성분 질문이 VLM 없이 성분 판정 문장으로 끝나는지 — 크롭·알레르기 전달, 부품·사진 없음, 재촬영 안내 |
 | `pointing/test_crop.py` | 대상 크롭이 사진 경계를 넘거나 비어도 보낼 사진이 나오는지 |
+| `pointing/test_detector.py` | 후보 검출이 사람·작은 박스를 빼고, YOLO 결과를 Detection 으로 바꾸는지 (모델은 가짜로) |
+| `pointing/test_cues.py` | 가운데 단서가 가운데·크게 찍힌 후보에 높은 점수(0~1)를 주는지 |
+| `pointing/test_resolver.py` | 대상 결정: 순위·margin·되묻기 문장, 되묻기 대답으로 후보 좁히기, 단서 스위치 |
 
 ## 로컬에서 돌리는 법
 

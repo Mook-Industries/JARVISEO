@@ -1,103 +1,49 @@
 """단서별 점수 계산.  담당: 최홍묵
 
-후보 물체 하나하나에 대해 "이게 사용자가 가리킨 것일 가능성"을 단서별로
-0.0~1.0 점수로 매긴다. 여기서 나온 점수들을 resolver.py 가 합친다.
+후보 물체 하나하나에 "이게 사용자가 가리킨 것일 가능성"을 단서별로 0.0~1.0 점수로 매긴다.
+여기서 나온 점수를 resolver.py 가 가중치로 합친다. ablation 의 축이 이 파일이다.
 
-ablation(단서를 하나씩 껐다 켜며 기여도를 재는 실험)의 축이 이 파일이다.
-단서를 새로 추가할 때는 types.py 의 CueKind 에 항목을 먼저 넣고,
-여기에 score_* 함수를 하나 추가한 뒤, resolver 의 가중치에 등록한다.
+지금은 v1 center 만 있다. 단서를 추가할 때는 types.CueKind 에 있는 이름으로 score_* 함수를
+만들고, resolver 의 IMPLEMENTED_CUES 와 단서 → 함수 표에 등록한다.
 
-주의: 이 파일의 함수들은 딥러닝이 아니다. 좌표와 각도를 쓰는 기하 계산과
-규칙이다. 신경망은 detector.py 가 손끝·물체를 찾는 데까지만 쓴다.
+이 파일의 함수는 딥러닝이 아니다. 좌표로 하는 계산이고, 신경망은 detector.py 까지만 쓴다.
 """
 
 from __future__ import annotations
 
-from jarviseo.types import CueScore, Detection
+import math
 
-__all__ = [
-    "score_center",
-    "score_point",
-    "score_gaze",
-    "score_lang",
-    "score_ctx",
-]
+from jarviseo.types import CueKind, CueScore, Detection
+
+__all__ = ["CENTER_WEIGHT", "score_center"]
+
+# 가운데 단서 안에서 위치를 얼마나 믿을지. 나머지(0.3)는 크기.
+CENTER_WEIGHT = 0.7
 
 
-def score_point(
-    fingertip: Detection | None,
-    candidates: list[Detection],
-    frame_size: tuple[int, int],
-) -> list[CueScore]:
-    """손끝이 뻗은 방향에 있는 물체일수록 높은 점수.
+def score_center(candidates: list[Detection], frame_size: tuple[int, int]) -> list[CueScore]:
+    """화면 가운데에 가깝고 크게 찍힌 물체일수록 높은 점수. 후보와 같은 순서로 돌려준다.
 
-    구현 방향: 손끝 좌표에서 손가락이 향하는 방향으로 가상의 선을 긋고,
-    각 후보 물체 중심이 그 선에서 얼마나 벗어나 있는지(각도 차이)로 점수를 낸다.
-
-    fingertip 이 None 이면(손이 안 보이면) 이 단서는 기권한다.
-    전부 0.0 을 반환하되, 빈 리스트를 반환하지는 않는다.
-    빈 리스트와 "전부 0점"은 의미가 다르고, ablation 에서 구분해야 한다.
+    안경 카메라는 머리 방향을 따라가서, 보고 있는 물건이 화면 가운데에 온다.
+    크기는 비슷한 거리의 두 물건 중 가까운 쪽을 가르는 보조다.
+    다른 단서가 없을 때의 기본값이고, ablation 표의 첫 줄(baseline)이다.
     """
-    raise NotImplementedError
-
-
-def score_gaze(
-    gaze_vector: tuple[float, float] | None,
-    candidates: list[Detection],
-    frame_size: tuple[int, int],
-) -> list[CueScore]:
-    """시선이 향하는 쪽에 있는 물체일수록 높은 점수.
-
-    미결 사항: 시선 추정을 기성 라이브러리(MediaPipe 등)로 할지 직접 학습할지
-    아직 안 정했다. 기성 라이브러리를 쓰면 이 단서에는 우리가 학습시킨 모델이
-    들어가지 않는다는 점을 발표 때 명확히 구분해야 한다.
-
-    안경 카메라는 착용자 시점이라 화면 중앙이 대략 시선 방향이다.
-    그래서 이 단서는 score_center 와 상관관계가 높을 수 있다.
-    ablation 에서 둘을 같이 켰을 때 기여도가 겹치는지 확인할 것.
-    """
-    raise NotImplementedError
-
-
-def score_lang(
-    text: str,
-    candidates: list[Detection],
-    frame_size: tuple[int, int],
-) -> list[CueScore]:
-    """발화 속 단서와 맞는 물체일수록 높은 점수.
-
-    "빨간 거" -> 색, "왼쪽 거" -> 위치, "저 가방" -> 물체 종류.
-    종류가 명시되면("저 가방") 그것만으로 후보가 하나로 좁혀지기도 한다.
-
-    색 판단은 후보 박스 안의 대표 색을 뽑아서 비교한다.
-    위치 판단은 frame_size 기준 상대 좌표로 한다.
-    """
-    raise NotImplementedError
-
-
-def score_center(
-    candidates: list[Detection],
-    frame_size: tuple[int, int],
-) -> list[CueScore]:
-    """화면 중앙에 가깝고 크게 찍힌 물체일수록 높은 점수.
-
-    다른 단서가 하나도 없을 때의 기본값 역할을 한다.
-    baseline(단서를 아무것도 안 쓴 상태)을 이 단서 하나만 켠 상태로 잡으면
-    ablation 표의 첫 줄이 된다.
-    """
-    raise NotImplementedError
-
-
-def score_ctx(
-    prev_target_label: str | None,
-    candidates: list[Detection],
-) -> list[CueScore]:
-    """직전 턴에서 확정한 대상과 이어지는 물체일수록 높은 점수.
-
-    "그거 뭐야?" 다음에 "그거 얼마야?"처럼 같은 대상을 다시 가리키는 경우가 많다.
-    직전 대상과 라벨이 같은 후보에 점수를 준다.
-
-    prev_target_label 이 None 이면(세션의 첫 질문이면) 이 단서는 기권한다.
-    score_point 와 마찬가지로 빈 리스트가 아니라 전부 0.0 을 반환한다.
-    """
-    raise NotImplementedError
+    width, height = frame_size
+    half_w, half_h = width / 2, height / 2
+    scores = []
+    for d in candidates:
+        cx, cy = d.bbox.center
+        # 가로·세로를 각각 -1~1 로 맞춘 거리. 구석이 √2 라서 나눠 0~1 로 만든다.
+        distance = math.hypot((cx - half_w) / half_w, (cy - half_h) / half_h) / math.sqrt(2)
+        closeness = 1.0 - distance
+        # 넓이 비율은 대개 0.01~0.1 이라 그대로 쓰면 0 근처에 몰린다. 제곱근(변의 비율)으로 편다.
+        size = math.sqrt(d.bbox.area / (width * height))
+        score = CENTER_WEIGHT * closeness + (1.0 - CENTER_WEIGHT) * size
+        scores.append(
+            CueScore(
+                kind=CueKind.CENTER,
+                score=min(1.0, max(0.0, score)),
+                detail={"closeness": closeness, "size": size},
+            )
+        )
+    return scores
