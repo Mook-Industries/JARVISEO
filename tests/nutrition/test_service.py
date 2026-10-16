@@ -256,3 +256,74 @@ def test_정방향이면_돌리지_않는다(monkeypatch):
     reader = FakeReader((LABEL, 0.9))
     r = checker(reader, try_rotation=True).check(CROP, ["땅콩"])
     assert r.rotation == 0 and reader.calls == 1  # 원재료명을 찾으면 추가 OCR 없음
+
+
+# --- 조회 정보만으로 '미검출'을 말하지 않는다 ------------------------------------
+
+# 식품안전나라 실제 응답(신라면): 원재료가 상위 분류 이름뿐이다.
+RAMEN = ProductInfo(
+    barcode=CODE,
+    product_name="신라면",
+    raw_ingredients="복합조미식품, 면류, 과.채가공품",
+    source=IngredientSource.API,
+)
+
+
+def found(info: ProductInfo, code: str = CODE):
+    read = BarcodeRead(code=code, symbology="EAN_13")
+    return lambda image, **_: BarcodeLookup(read, info)  # 조회 인자가 늘어도 그대로 쓴다
+
+
+def test_알레르기_표시_없는_조회_정보로는_미검출이라_하지_않고_성분표를_읽는다(monkeypatch):
+    monkeypatch.setattr(service, "lookup_product", found(RAMEN))
+    reader = FakeReader((["원재료명: 소맥분(밀), 대두유, 정제염"], 0.9))
+    r = checker(reader).check(CROP, ["밀"])
+    assert reader.calls == 1  # 성분표를 읽었다
+    assert r.judgement.verdict is V.CONTAINS and r.judgement.source is IngredientSource.OCR
+    assert r.judgement.product.product_name == "신라면"  # 조회한 제품명을 이어 쓴다
+
+
+def test_성분표도_못_읽으면_재촬영을_요청한다(monkeypatch):
+    monkeypatch.setattr(service, "lookup_product", found(RAMEN))
+    r = checker(FakeReader((["설탕, 정제수"], 0.95))).check(CROP, ["밀"])  # 원재료명 머리말 없음
+    assert r.retake == RETAKE_WHOLE
+    assert r.judgement.verdict is V.UNDETERMINED
+
+
+def test_알레르기_표시가_있으면_조회_정보대로_답한다(monkeypatch):
+    info = ProductInfo(barcode=CODE, product_name="사이다", raw_ingredients="정제수, 설탕",
+                       allergen_notice="알레르기 유발물질 표시 없음")  # fmt: skip
+    monkeypatch.setattr(service, "lookup_product", found(info))
+    reader = FakeReader((LABEL, 0.9))
+    r = checker(reader).check(CROP, ["밀"])
+    assert reader.calls == 0 and r.judgement.verdict is V.NOT_DETECTED
+
+
+def test_조회_정보에서_찾으면_표시가_없어도_바로_경고한다(monkeypatch):
+    info = ProductInfo(barcode=CODE, product_name="쿠키", raw_ingredients="밀가루, 버터")
+    monkeypatch.setattr(service, "lookup_product", found(info))
+    reader = FakeReader((LABEL, 0.9))
+    r = checker(reader).check(CROP, ["밀"])
+    assert reader.calls == 0 and r.judgement.verdict is V.CONTAINS
+
+
+def test_등록한_알레르기가_없으면_성분표를_읽지_않는다(monkeypatch):
+    monkeypatch.setattr(service, "lookup_product", found(RAMEN))
+    reader = FakeReader((LABEL, 0.9))
+    checker(reader).check(CROP, [])
+    assert reader.calls == 0
+
+
+def test_한_번_성분표로_확인한_제품은_다음에_ocr을_다시_돌리지_않는다(monkeypatch, store):
+    # 첫 번째: 바코드는 읽었지만 어디에도 없어서 성분표를 읽는다(알레르기 표시 없는 제품).
+    monkeypatch.setattr(service, "lookup_product", miss(CODE, "not_found"))
+    plain = ["원재료명: 정제수, 설탕, 구연산"]
+    checker(FakeReader((plain, 0.95)), store=store).check(CROP, ["밀"])
+    cached = store.get_product(CODE)
+    assert cached.allergen_notice  # 비워 두지 않는다
+
+    # 두 번째: 캐시에서 꺼내면 바로 답한다.
+    monkeypatch.setattr(service, "lookup_product", found(cached))
+    reader = FakeReader((plain, 0.95))
+    r = checker(reader, store=store).check(CROP, ["밀"])
+    assert reader.calls == 0 and r.judgement.verdict is V.NOT_DETECTED

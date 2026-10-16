@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import cv2
 import numpy as np
@@ -60,6 +60,9 @@ from jarviseo.types import (
 )
 
 __all__ = ["IngredientCheck", "IngredientChecker"]
+
+# 성분표를 읽었지만 알레르기 표시가 없던 제품을 캐시에 남길 때 쓴다. 판정 쪽은 비었는지만 본다.
+OCR_NO_NOTICE = "알레르기 유발물질 표시 없음 (성분표 판독)"
 
 
 @dataclass
@@ -167,8 +170,27 @@ class IngredientChecker:
         timings["barcode"] = _ms(t0)
 
         if lookup.hit:
-            return self._from_product(lookup, user_allergens, timings)
+            result = self._from_product(lookup, user_allergens, timings)
+            if not self._needs_label(result, lookup.product, user_allergens):
+                return result
+            # 조회 정보에 알레르기 표시가 없어서 '못 찾음'을 믿을 수 없다. 성분표를 직접 읽는다.
+            product_name = product_name or lookup.product.product_name
         return self._from_ocr(crop, lookup, user_allergens, retake_count, product_name, timings)
+
+    @staticmethod
+    def _needs_label(result: IngredientCheck, info: ProductInfo, user_allergens: list[str]) -> bool:
+        """조회한 정보만으로 '미검출'이라고 말하면 안 되는 경우인가.
+
+        식품안전나라 원재료는 '면류, 분말스프'처럼 상위 분류 이름만 오는 제품이 많다.
+        그 안의 밀·대두는 보이지 않아서, 알레르기 표시 없이 원재료만 보고 '못 찾았다'고 하면
+        먹어도 된다는 말로 들린다. 그래서 포장의 알레르기 표시를 받지 못한 정보로는
+        '미검출'을 말하지 않고 성분표 OCR 로 넘어간다. 함유·혼입은 그대로 바로 경고한다.
+        """
+        return (
+            bool(user_allergens)
+            and result.judgement.verdict is AllergenVerdict.NOT_DETECTED
+            and not info.allergen_notice.strip()
+        )
 
     def check_frames(
         self,
@@ -295,9 +317,12 @@ class IngredientChecker:
         result.message = judgement.response_text
         if readable and self.store is not None and barcode:
             # OCR 로 처음 읽은 제품은 확인 전(pending)으로 캐시한다. 틀린 판독이 굳지 않게.
-            self.store.save_product(
-                judgement.product, status="pending", ingredients=result.ingredients
-            )
+            # 성분표를 직접 읽었는데 알레르기 표시가 없었다는 것도 정보다. 칸을 비워 두면
+            # 다음에 캐시에서 꺼냈을 때 '표시를 못 받은 정보'로 보고 또 OCR 을 돌린다.
+            saved = judgement.product
+            if not saved.allergen_notice:
+                saved = replace(saved, allergen_notice=OCR_NO_NOTICE)
+            self.store.save_product(saved, status="pending", ingredients=result.ingredients)
         return result
 
     def _poor_photo(
