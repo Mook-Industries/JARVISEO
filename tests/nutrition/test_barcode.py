@@ -16,6 +16,7 @@ from jarviseo.memory.store import MemoryStore
 from jarviseo.nutrition.barcode import (
     MfdsClient,
     MfdsError,
+    OffClient,
     is_valid_gtin,
     lookup_product,
     read_barcodes,
@@ -210,3 +211,93 @@ def test_invalid_캐시는_무시한다(store):
         info = client.lookup(CODE)
     store.save_product(info, status="invalid")
     assert store.get_product(CODE) is None
+
+
+# --- Open Food Facts (#74) -------------------------------------------------
+
+
+def fake_off(product: dict | None, calls: list[str] | None = None, status: int = 200):
+    """product 가 None 이면 '등록 없음' 응답(status 0)을 준다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if calls is not None:
+            calls.append(request.url.path)
+        if status != 200:
+            return httpx.Response(status, json={"status": 0})
+        if product is None:
+            return httpx.Response(200, json={"status": 0, "status_verbose": "product not found"})
+        return httpx.Response(200, json={"status": 1, "code": CODE, "product": product})
+
+    return OffClient(transport=httpx.MockTransport(handler))
+
+
+OFF_PRODUCT = {
+    "product_name": "Test Snack",
+    "product_name_ko": "테스트 스낵",
+    "ingredients_text_ko": "밀가루, 설탕, 탈지분유, 대두유",
+    "allergens_tags": ["en:gluten", "en:milk", "en:soybeans"],
+    "traces_tags": ["en:crustaceans", "ko:땅콩"],
+}
+
+
+def test_off_한글_원재료와_알레르기_태그를_옮긴다():
+    with fake_off(OFF_PRODUCT) as off:
+        info = off.lookup(CODE)
+    assert info.product_name == "테스트 스낵"
+    assert info.raw_ingredients == "밀가루, 설탕, 탈지분유, 대두유"
+    assert info.allergen_notice == "밀, 우유, 대두"
+    assert info.cross_contamination == "게, 새우, 땅콩"
+    assert info.source is IngredientSource.API
+
+
+@pytest.mark.parametrize("status", [200, 404])
+def test_off_등록이_없으면_none(status):
+    with fake_off(None, status=status) as off:
+        assert off.lookup(CODE) is None
+
+
+def test_off_영어_원재료만_있으면_ocr로_넘긴다(store):
+    english = {"product_name": "Snack", "ingredients_text": "wheat flour, sugar, milk powder"}
+    with fake_off(english) as off:
+        assert off.lookup(CODE).raw_ingredients == ""
+        result = lookup_product(draw_ean13(CODE), store=store, off_client=off)
+    assert not result.hit and result.reason == "no_ingredients"
+    assert store.get_product(CODE) is None
+
+
+def test_식품안전나라에_없으면_off에서_찾아_캐시한다(store):
+    off_calls: list[str] = []
+    image = draw_ean13(CODE)
+    with fake_mfds({}) as client, fake_off(OFF_PRODUCT, off_calls) as off:
+        first = lookup_product(image, store=store, client=client, off_client=off)
+        second = lookup_product(image, store=store, client=client, off_client=off)
+    assert first.hit and first.product.product_name == "테스트 스낵"
+    assert second.hit and second.product.source is IngredientSource.CACHE
+    assert len(off_calls) == 1  # 두 번째는 캐시에서 끝났다
+
+
+def test_식품안전나라에_있으면_off를_부르지_않는다(store):
+    off_calls: list[str] = []
+    with (
+        fake_mfds({"C005": [C005_ROW], "C002": C002_ROWS}) as client,
+        fake_off(OFF_PRODUCT, off_calls) as off,
+    ):
+        result = lookup_product(draw_ean13(CODE), store=store, client=client, off_client=off)
+    assert result.hit and result.product.product_name == "테스트 과자"
+    assert off_calls == []
+
+
+def test_off_장애여도_예외없이_ocr로_넘긴다(store):
+    def handler(request):
+        raise httpx.ConnectTimeout("timeout", request=request)
+
+    with fake_mfds({}) as client, OffClient(transport=httpx.MockTransport(handler)) as off:
+        result = lookup_product(draw_ean13(CODE), store=store, client=client, off_client=off)
+    assert not result.hit and result.reason == "api_error"
+    assert result.barcode.code == CODE
+
+
+def test_off_서버오류도_예외없이_넘긴다(store):
+    with fake_off(OFF_PRODUCT, status=500) as off:
+        result = lookup_product(draw_ean13(CODE), store=store, off_client=off)
+    assert not result.hit and result.reason == "api_error"

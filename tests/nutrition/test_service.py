@@ -41,7 +41,9 @@ class FakeReader:
 
 def miss(code: str | None = None, reason: str = "no_barcode"):
     read = BarcodeRead(code=code, symbology="EAN_13") if code else None
-    return lambda image, store=None, client=None: BarcodeLookup(read, None, reason=reason)
+    return lambda image, store=None, client=None, off_client=None: BarcodeLookup(
+        read, None, reason=reason
+    )
 
 
 def checker(reader, **kw) -> IngredientChecker:
@@ -63,7 +65,9 @@ def test_바코드로_찾으면_ocr_없이_판정한다(monkeypatch):
         source=IngredientSource.API,
     )
     monkeypatch.setattr(
-        service, "lookup_product", lambda image, store=None, client=None: BarcodeLookup(None, info)
+        service,
+        "lookup_product",
+        lambda image, store=None, client=None, off_client=None: BarcodeLookup(None, info),
     )
     reader = FakeReader((LABEL, 0.9))
     r = checker(reader).check(CROP, ["우유"])
@@ -199,7 +203,9 @@ def test_재촬영_상한을_넘으면_확인_불가로_끝낸다(monkeypatch):
 def test_바코드로_찾으면_품질이_나빠도_판정한다(monkeypatch):
     info = ProductInfo(barcode=CODE, product_name="쿠키", raw_ingredients="밀가루, 버터")
     monkeypatch.setattr(
-        service, "lookup_product", lambda image, store=None, client=None: BarcodeLookup(None, info)
+        service,
+        "lookup_product",
+        lambda image, store=None, client=None, off_client=None: BarcodeLookup(None, info),
     )
     r = checker(FakeReader((LABEL, 0.9)), quality_check=bad("blurry")).check(CROP, ["우유"])
     assert r.judgement.verdict is V.CONTAINS and r.quality is None
@@ -208,7 +214,7 @@ def test_바코드로_찾으면_품질이_나빠도_판정한다(monkeypatch):
 def test_여러_프레임이면_가장_선명한_것으로_확인한다(monkeypatch):
     seen = []
 
-    def lookup(image, store=None, client=None):
+    def lookup(image, store=None, client=None, off_client=None):
         seen.append(image)
         return BarcodeLookup(None, None, reason="no_barcode")
 

@@ -112,6 +112,11 @@ MFDS_API_KEY = _get("JARVISEO_MFDS_API_KEY") or "sample"
 MFDS_BASE_URL = _get("JARVISEO_MFDS_BASE_URL", "http://openapi.foodsafetykorea.go.kr/api")
 # 외부 API 가 느리면 사용자는 그동안 침묵을 듣는다. 짧게 끊고 OCR 로 넘어간다.
 MFDS_TIMEOUT_SEC = _get_float("JARVISEO_MFDS_TIMEOUT_SEC", 3.0)
+# 식품안전나라에 없으면 Open Food Facts 에 한 번 더 묻는다 (#74). 인증키가 필요 없다.
+# 한글 원재료가 있는 제품만 쓰고, 없으면 OCR 로 넘어간다. 끄면 식품안전나라 → OCR 순서.
+ENABLE_OFF_LOOKUP = _get_bool("JARVISEO_ENABLE_OFF_LOOKUP", True)
+OFF_BASE_URL = _get("JARVISEO_OFF_BASE_URL", "https://world.openfoodfacts.org")
+OFF_TIMEOUT_SEC = _get_float("JARVISEO_OFF_TIMEOUT_SEC", 3.0)
 
 # OCR 평균 신뢰도가 이보다 낮으면 검증 실패로 본다 (Validate Agent).
 OCR_CONF_THRESHOLD = _get_float("JARVISEO_OCR_CONF_THRESHOLD", 0.8)

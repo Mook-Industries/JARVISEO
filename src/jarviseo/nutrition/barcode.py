@@ -1,7 +1,14 @@
 """바코드 → 제품 정보 조회.  (Barcode Lookup Agent)
 
-흐름: 크롭 이미지 → 바코드 번호 읽기 → product 캐시 → 식품안전나라 API → 캐시 저장
-      여기서 원재료명을 못 얻으면 호출한 쪽이 성분표 OCR 로 넘어간다.
+흐름: 크롭 이미지 → 바코드 번호 읽기 → product 캐시 → 식품안전나라 API → Open Food Facts
+      → 캐시 저장. 여기서 원재료명을 못 얻으면 호출한 쪽이 성분표 OCR 로 넘어간다.
+
+Open Food Facts 를 두 번째로 묻는 이유 (#74)
+------------------------------------------
+식품안전나라 C005 바코드 데이터는 2018년 이후 갱신이 멈춰 최근 제품이 없다.
+Open Food Facts 는 누구나 고치는 공개 DB 라 최신 제품이 더 많다. 대신 원재료가 영어로만
+적힌 제품이 있어서, 한글 원재료가 있을 때만 쓴다(동의어 사전이 한국어라 영어 원재료로
+판정하면 알레르겐을 못 찾고 '미검출'로 말하게 된다).
 
 바코드 읽기에 pyzbar 대신 OpenCV 내장 검출기를 쓰는 이유
 -----------------------------------------------------
@@ -15,6 +22,7 @@ LLM 을 쓰지 않는다. 바코드 번호는 체크섬으로 검증하고, 제�
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 
@@ -29,8 +37,10 @@ __all__ = [
     "BarcodeLookup",
     "MfdsClient",
     "MfdsError",
+    "OffClient",
     "is_valid_gtin",
     "lookup_product",
+    "make_off_client",
     "read_barcodes",
 ]
 
@@ -205,7 +215,103 @@ class MfdsClient:
 
 
 # --------------------------------------------------------------------------
-# 3. 캐시 우선 조회 (Barcode Lookup Agent 본체)
+# 3. Open Food Facts
+# --------------------------------------------------------------------------
+
+# 알레르기·혼입 태그 → 법정 표시명. 한 태그가 여러 표시명에 걸치면(갑각류 = 게·새우) 모두 넣는다.
+# 놓치는 것보다 과잉 경고가 낫다(재현율 우선). 모르는 태그는 버린다.
+_OFF_ALLERGENS = {
+    "en:milk": ["우유"],
+    "en:eggs": ["알류"],
+    "en:buckwheat": ["메밀"],
+    "en:peanuts": ["땅콩"],
+    "en:soybeans": ["대두"],
+    "en:gluten": ["밀"],
+    "en:wheat": ["밀"],
+    "en:fish": ["고등어"],
+    "en:crustaceans": ["게", "새우"],
+    "en:molluscs": ["조개류", "오징어"],
+    "en:nuts": ["호두", "잣"],
+    "en:sulphur-dioxide-and-sulphites": ["아황산류"],
+}
+_OFF_FIELDS = (
+    "product_name,product_name_ko,ingredients_text,ingredients_text_ko,allergens_tags,traces_tags"
+)
+_HANGUL = re.compile(r"[가-힣]")
+
+
+def _off_names(tags: list[str] | None) -> str:
+    """OFF 태그 목록 → "우유, 대두". "ko:우유"처럼 한국어 태그는 그대로 쓴다."""
+    names: list[str] = []
+    for tag in tags or []:
+        mapped = _OFF_ALLERGENS.get(tag)
+        if mapped is None and tag.startswith("ko:"):
+            mapped = [tag[3:]]
+        for name in mapped or []:
+            if name not in names:
+                names.append(name)
+    return ", ".join(names)
+
+
+class OffClient:
+    """Open Food Facts API v2.  인증키는 없고, 이용 규칙대로 User-Agent 에 앱 이름을 밝힌다."""
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        timeout: float | None = None,
+        transport: httpx.BaseTransport | None = None,  # 테스트에서 가짜 응답을 끼운다
+    ) -> None:
+        self.base_url = (base_url or config.OFF_BASE_URL).rstrip("/")
+        self._http = httpx.Client(
+            timeout=timeout or config.OFF_TIMEOUT_SEC,
+            transport=transport,
+            headers={"User-Agent": "JARVISEO/0.1 (KDT team project)"},
+        )
+
+    def close(self) -> None:
+        self._http.close()
+
+    def __enter__(self) -> OffClient:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def lookup(self, barcode: str) -> ProductInfo | None:
+        """바코드로 제품을 찾는다. 등록이 없으면 None.
+
+        한글 원재료가 없으면 raw_ingredients 를 비워 돌려준다.
+        → ``lookup_product`` 가 미스로 보고 OCR 로 넘긴다.
+        """
+        resp = self._http.get(
+            f"{self.base_url}/api/v2/product/{barcode}.json", params={"fields": _OFF_FIELDS}
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") != 1:
+            return None
+        p = data.get("product") or {}
+        text = str(p.get("ingredients_text_ko") or p.get("ingredients_text") or "").strip()
+        return ProductInfo(
+            barcode=barcode,
+            product_name=str(p.get("product_name_ko") or p.get("product_name") or "").strip(),
+            raw_ingredients=text if _HANGUL.search(text) else "",
+            allergen_notice=_off_names(p.get("allergens_tags")),
+            cross_contamination=_off_names(p.get("traces_tags")),
+            source=IngredientSource.API,
+        )
+
+
+def make_off_client() -> OffClient | None:
+    """설정(``config.ENABLE_OFF_LOOKUP``)이 켜져 있으면 OffClient, 꺼져 있으면 None."""
+    return OffClient() if config.ENABLE_OFF_LOOKUP else None
+
+
+# --------------------------------------------------------------------------
+# 4. 캐시 우선 조회 (Barcode Lookup Agent 본체)
 # --------------------------------------------------------------------------
 
 
@@ -228,14 +334,18 @@ class BarcodeLookup:
 
 
 def lookup_product(
-    image: np.ndarray, store=None, client: MfdsClient | None = None
+    image: np.ndarray,
+    store=None,
+    client: MfdsClient | None = None,
+    off_client: OffClient | None = None,
 ) -> BarcodeLookup:
-    """크롭 이미지 → 제품 정보. 캐시 → API 순서로 찾는다.
+    """크롭 이미지 → 제품 정보. 캐시 → 식품안전나라 → Open Food Facts 순서로 찾는다.
 
     Args:
         image: 타깃 크롭 (BGR).
         store: ``MemoryStore``. 없으면 캐시를 건너뛴다(테스트·오프라인).
-        client: ``MfdsClient``. 없으면 API 를 건너뛴다.
+        client: ``MfdsClient``. 없으면 식품안전나라를 건너뛴다.
+        off_client: ``OffClient``. 없으면 Open Food Facts 를 건너뛴다.
 
     외부 API 장애는 예외로 올리지 않는다. 사용자는 OCR 로 답을 받을 수 있어야 한다.
     """
@@ -258,21 +368,22 @@ def lookup_product(
             if cached is not None and cached.raw_ingredients:
                 return done(read, cached)
 
-        if client is None:
-            continue
-        try:
-            product = client.lookup(read.code)
-        except (httpx.HTTPError, MfdsError, ValueError) as e:  # ValueError: JSON 깨짐
-            log.warning("식품안전나라 조회 실패 (%s): %s", read.code, e)
-            reason = "api_error"
-            continue
-        if product is None:
-            continue
-        if not product.raw_ingredients:
-            reason = "no_ingredients"
-            continue
-        if store is not None:
-            store.save_product(product, status="verified")
-        return done(read, product)
+        for name, api in (("식품안전나라", client), ("Open Food Facts", off_client)):
+            if api is None:
+                continue
+            try:
+                product = api.lookup(read.code)
+            except (httpx.HTTPError, MfdsError, ValueError) as e:  # ValueError: JSON 깨짐
+                log.warning("%s 조회 실패 (%s): %s", name, read.code, e)
+                reason = "api_error"
+                continue
+            if product is None:
+                continue
+            if not product.raw_ingredients:
+                reason = "no_ingredients"
+                continue
+            if store is not None:
+                store.save_product(product, status="verified")
+            return done(read, product)
 
     return done(reads[0], None, reason)
