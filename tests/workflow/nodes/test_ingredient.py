@@ -78,7 +78,8 @@ def _deps(**kwargs) -> GraphDeps:
     return GraphDeps(**(parts | kwargs))
 
 
-def test_성분_질문은_크롭과_알레르기를_넘겨_판정하고_vlm_은_부르지_않는다(store):
+def test_ingredient_question_judges_crop_without_vlm(store):
+    """성분 질문은 크롭과 알레르기를 넘겨 판정하고 VLM 은 부르지 않는다."""
     user_id = store.ensure_user()
     store.set_user_allergens(user_id, ["땅콩"])
     turn = {"session_id": store.start_session(user_id), "user_id": user_id}
@@ -97,7 +98,8 @@ def test_성분_질문은_크롭과_알레르기를_넘겨_판정하고_vlm_은_
         assert (row.verdict, row.response_text) == ("contains", MESSAGE)
 
 
-def test_가리킬_부품이_없으면_사진_전체로_판정한다():
+def test_judges_whole_photo_without_pointing_parts():
+    """가리킬 부품이 없으면 사진 전체로 판정한다."""
     deps = _deps(detector=None, resolve=None)
 
     result = build_graph(deps).invoke({})
@@ -107,7 +109,8 @@ def test_가리킬_부품이_없으면_사진_전체로_판정한다():
     assert deps.vlm.asked == []
 
 
-def test_판정기가_없으면_확인할_수_없다고_하고_vlm_은_부르지_않는다():
+def test_no_checker_says_unavailable_without_vlm():
+    """판정기가 없으면 확인할 수 없다고 하고 VLM 은 부르지 않는다."""
     deps = _deps(checker=None)
 
     build_graph(deps).invoke({})
@@ -116,7 +119,8 @@ def test_판정기가_없으면_확인할_수_없다고_하고_vlm_은_부르지
     assert deps.vlm.asked == []
 
 
-def test_사진이_없으면_확인할_수_없다고_한다():
+def test_no_photo_says_unavailable():
+    """사진이 없으면 확인할 수 없다고 한다."""
     deps = _deps(frames=None)
 
     build_graph(deps).invoke({})
@@ -125,7 +129,8 @@ def test_사진이_없으면_확인할_수_없다고_한다():
     assert deps.checker.calls == []
 
 
-def test_재촬영_안내가_오면_그_문장을_읽고_턴을_끝낸다():
+def test_retake_notice_is_read_and_ends_turn():
+    """재촬영 안내가 오면 그 문장을 읽고 턴을 끝낸다."""
     retake = "성분표가 잘 안 보여요. 조금 더 가까이 비춰 주세요."
     deps = _deps(checker=_Checker(retake))
 

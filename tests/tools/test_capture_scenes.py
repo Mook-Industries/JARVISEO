@@ -41,7 +41,8 @@ def _row(utterance: str) -> dict[str, object]:
 # --- 다음 작업과의 약속 -----------------------------------------------------
 
 
-def test_manifest_열_순서는_다음_작업과의_약속():
+def test_manifest_column_order_is_contract():
+    """manifest 열 순서는 다음 작업과의 약속이다."""
     # #3 미리 라벨·분할 스크립트가 이 순서로 읽는다. 바꾸면 그쪽도 같이 고쳐야 한다.
     expected = ["file", "session", "place", "utterance", "captured_at"]
     assert capture_scenes.MANIFEST_COLUMNS == expected
@@ -50,7 +51,8 @@ def test_manifest_열_순서는_다음_작업과의_약속():
 # --- 파일명 ----------------------------------------------------------------
 
 
-def test_파일명은_세션_2자리_번호_4자리():
+def test_filename_is_2_digit_session_4_digit_number():
+    """파일명은 세션 2자리 · 번호 4자리다."""
     assert capture_scenes.build_filename(3, "kitchen", 42) == "s03_kitchen_0042.jpg"
     assert capture_scenes.build_filename(12, "desk", 1) == "s12_desk_0001.jpg"
 
@@ -58,28 +60,33 @@ def test_파일명은_세션_2자리_번호_4자리():
 # --- 다음 번호 --------------------------------------------------------------
 
 
-def test_폴더가_없으면_1번부터(tmp_path):
+def test_starts_at_1_without_folder(tmp_path):
+    """폴더가 없으면 1번부터다."""
     assert capture_scenes.next_number(tmp_path / "s01") == 1
 
 
-def test_빈_폴더면_1번부터(tmp_path):
+def test_starts_at_1_in_empty_folder(tmp_path):
+    """빈 폴더면 1번부터다."""
     assert capture_scenes.next_number(tmp_path) == 1
 
 
-def test_장소가_달라도_세션_안에서_번호가_이어진다(tmp_path):
+def test_numbers_continue_across_places_in_session(tmp_path):
+    """장소가 달라도 세션 안에서 번호가 이어진다."""
     for name in ["s03_desk_0001.jpg", "s03_desk_0002.jpg", "s03_kitchen_0003.jpg"]:
         (tmp_path / name).touch()
     assert capture_scenes.next_number(tmp_path) == 4
 
 
-def test_중간_사진을_지워도_기존_사진을_덮어쓰지_않는다(tmp_path):
+def test_deleted_middle_photo_does_not_cause_overwrite(tmp_path):
+    """중간 사진을 지워도 기존 사진을 덮어쓰지 않는다."""
     # 0002 를 지운 상황. "개수 + 1" 로 세면 3 이 나와서 기존 0003 을 덮어쓴다.
     for name in ["s03_desk_0001.jpg", "s03_desk_0003.jpg"]:
         (tmp_path / name).touch()
     assert capture_scenes.next_number(tmp_path) == 4
 
 
-def test_규칙에_안_맞는_파일은_건너뛴다(tmp_path):
+def test_skips_files_not_matching_rule(tmp_path):
+    """규칙에 안 맞는 파일은 건너뛴다."""
     for name in ["s03_desk_0002.jpg", "memo.jpg", "s03_desk_abc.jpg", "manifest.csv"]:
         (tmp_path / name).touch()
     assert capture_scenes.next_number(tmp_path) == 3
@@ -88,7 +95,8 @@ def test_규칙에_안_맞는_파일은_건너뛴다(tmp_path):
 # --- manifest --------------------------------------------------------------
 
 
-def test_manifest_헤더는_처음_한_번만_쓴다(tmp_path):
+def test_manifest_header_written_once(tmp_path):
+    """manifest 헤더는 처음 한 번만 쓴다."""
     path = tmp_path / "manifest.csv"
     capture_scenes.append_manifest(path, _row("저거 뭐야"))
     capture_scenes.append_manifest(path, _row("저 빨간 거"))
@@ -100,7 +108,8 @@ def test_manifest_헤더는_처음_한_번만_쓴다(tmp_path):
     assert len(lines) == 3
 
 
-def test_manifest_한글과_쉼표가_그대로_남는다(tmp_path):
+def test_manifest_keeps_hangul_and_commas(tmp_path):
+    """manifest 에 한글과 쉼표가 그대로 남는다."""
     path = tmp_path / "manifest.csv"
     capture_scenes.append_manifest(path, _row("음, 왼쪽에 있는 컵 뭐야"))
 
@@ -113,7 +122,8 @@ def test_manifest_한글과_쉼표가_그대로_남는다(tmp_path):
 # --- jpg 저장 --------------------------------------------------------------
 
 
-def test_한글_경로에도_jpg가_저장된다(tmp_path):
+def test_saves_jpg_to_hangul_path(tmp_path):
+    """한글 경로에도 JPG 가 저장된다."""
     # cv2.imwrite 는 윈도우에서 한글 경로면 조용히 실패한다. CI 의 windows 가 이걸 잡는다.
     folder = tmp_path / "한글폴더"
     folder.mkdir()
@@ -130,7 +140,8 @@ def test_한글_경로에도_jpg가_저장된다(tmp_path):
 # --- 실행 인자 --------------------------------------------------------------
 
 
-def test_인자_기본값(monkeypatch):
+def test_argument_defaults(monkeypatch):
+    """인자 기본값."""
     _set_argv(monkeypatch, "--session", "3", "--place", "kitchen")
     args = capture_scenes.parse_args()
 
@@ -141,14 +152,16 @@ def test_인자_기본값(monkeypatch):
 
 
 @pytest.mark.parametrize("place", ["Kitchen", "주방", "my_desk", "desk1", "my desk"])
-def test_장소_이름은_영어_소문자만(monkeypatch, place):
+def test_place_name_is_lowercase_english(monkeypatch, place):
+    """장소 이름은 영어 소문자만 받는다."""
     # 밑줄이 들어가면 번호 파싱(rsplit)이 깨지고, 한글·공백은 윈도우 경로 문제를 만든다.
     _set_argv(monkeypatch, "--session", "3", "--place", place)
     with pytest.raises(SystemExit):
         capture_scenes.parse_args()
 
 
-def test_세션은_필수(monkeypatch):
+def test_session_is_required(monkeypatch):
+    """세션은 필수다."""
     _set_argv(monkeypatch, "--place", "desk")
     with pytest.raises(SystemExit):
         capture_scenes.parse_args()

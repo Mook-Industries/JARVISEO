@@ -7,7 +7,8 @@ from jarviseo.workflow.router import classify_intent
 
 
 @pytest.mark.parametrize("text", ["이거 먹어도 돼?", "성분 알려줘", "이거 뭐 들어갔어?"])
-def test_성분을_묻는_말은_지시어가_있어도_ingredient(text):
+def test_ingredient_words_win_over_demonstratives(text):
+    """성분을 묻는 말은 지시어가 있어도 INGREDIENT 다."""
     assert classify_intent(text) is Intent.INGREDIENT
 
 
@@ -25,12 +26,14 @@ def test_성분을_묻는_말은_지시어가_있어도_ingredient(text):
         "전에 본 컵",
     ],
 )
-def test_지난_일을_묻는_말은_recall(text):
+def test_past_questions_are_recall(text):
+    """지난 일을 묻는 말은 RECALL 이다."""
     assert classify_intent(text) is Intent.RECALL
 
 
 @pytest.mark.parametrize("text", ["저거 뭐야?", "이게 뭐예요", "그거 얼마야?", "저것 좀 봐"])
-def test_지시어가_있으면_pointing(text):
+def test_demonstratives_are_pointing(text):
+    """지시어가 있으면 POINTING 이다."""
     assert classify_intent(text) is Intent.POINTING
 
 
@@ -43,5 +46,6 @@ def test_지시어가_있으면_pointing(text):
         "",
     ],
 )
-def test_그_밖의_말은_general(text):
+def test_everything_else_is_general(text):
+    """그 밖의 말은 GENERAL 이다."""
     assert classify_intent(text) is Intent.GENERAL

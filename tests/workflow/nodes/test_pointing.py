@@ -93,7 +93,8 @@ def _deps(texts, frames=None, margins=(0.5,), detections=TWO_CUPS, **kwargs) -> 
 # --- 가리킴 길 ---------------------------------------------------------------
 
 
-def test_가리키는_질문은_고른_대상의_크롭을_vlm_에_보낸다():
+def test_pointing_question_sends_chosen_crop_to_vlm():
+    """가리키는 질문은 고른 대상의 크롭을 VLM 에 보낸다."""
     deps = _deps(["자비서, 저거 뭐야?"])
 
     result = build_graph(deps).invoke({})
@@ -109,7 +110,8 @@ def test_가리키는_질문은_고른_대상의_크롭을_vlm_에_보낸다():
     assert {"route", "detect", "resolve", "crop"} <= set(result["latency_ms"])
 
 
-def test_검출기가_없으면_가리키는_질문도_전체_사진으로_답한다():
+def test_no_detector_answers_with_whole_photo():
+    """검출기가 없으면 가리키는 질문도 전체 사진으로 답한다."""
     vlm = FakeVLMClient(["컵이에요."])
     deps = GraphDeps(
         stt=FakeSpeechToText(["저거 뭐야?"]),
@@ -124,7 +126,8 @@ def test_검출기가_없으면_가리키는_질문도_전체_사진으로_답�
     assert vlm.asked[0][0].image.shape == FULL
 
 
-def test_사진_버퍼가_없으면_가리키는_질문도_글자만으로_답한다():
+def test_no_frame_buffer_answers_with_text_only():
+    """사진 버퍼가 없으면 가리키는 질문도 글자만으로 답한다."""
     vlm = FakeVLMClient(["무엇을 말씀하시는지 안 보여요."])
     deps = GraphDeps(
         stt=FakeSpeechToText(["저거 뭐야?"]),
@@ -140,7 +143,8 @@ def test_사진_버퍼가_없으면_가리키는_질문도_글자만으로_답�
     assert vlm.asked[0][0] is None
 
 
-def test_이미지_폴더로_넣은_사진으로도_끝까지_돈다(tmp_path):
+def test_runs_end_to_end_with_image_folder(tmp_path):
+    """이미지 폴더로 넣은 사진으로도 끝까지 돈다."""
     for i in range(2):
         ok, png = cv2.imencode(".png", _sharp())
         assert ok
@@ -160,7 +164,8 @@ def test_이미지_폴더로_넣은_사진으로도_끝까지_돈다(tmp_path):
 # --- 되묻기 ------------------------------------------------------------------
 
 
-def test_애매하면_되묻고_대답으로_다시_고른다():
+def test_ambiguous_asks_and_resolves_with_reply():
+    """애매하면 되묻고 대답으로 다시 고른다."""
     deps = _deps(["저거 뭐야?", "왼쪽 거"], margins=[0.05, 0.5])
 
     result = build_graph(deps).invoke({})
@@ -207,7 +212,8 @@ def test_real_resolver_asks_and_crops_the_answered_side():
     assert deps.vlm.asked[0][0].image.shape == CROP
 
 
-def test_한_글자_대답도_받는다():
+def test_accepts_one_letter_reply():
+    """한 글자 대답도 받는다."""
     # 질문은 두 글자 미만이면 버리지만, 되묻기 대답 "컵"은 받아야 한다(listen min_letters=1)
     deps = _deps(["저거 뭐야?", "컵"], margins=[0.05, 0.5])
 
@@ -217,7 +223,8 @@ def test_한_글자_대답도_받는다():
     assert deps.tts.spoken == [QUESTION, "컵이에요."]
 
 
-def test_되묻기에_대답이_없으면_다시_가리켜_달라고_한다():
+def test_no_reply_asks_to_point_again():
+    """되묻기에 대답이 없으면 다시 가리켜 달라고 한다."""
     deps = _deps(["저거 뭐야?"], margins=[0.05])
 
     build_graph(deps).invoke({})
@@ -226,7 +233,8 @@ def test_되묻기에_대답이_없으면_다시_가리켜_달라고_한다():
     assert deps.vlm.asked == []
 
 
-def test_되묻기는_두_번까지만_한다():
+def test_clarifies_at_most_twice():
+    """되묻기는 두 번까지만 한다."""
     deps = _deps(["저거 뭐야?", "왼쪽 거", "왼쪽 거", "왼쪽 거"], margins=[0.05])
 
     result = build_graph(deps).invoke({})
@@ -236,7 +244,8 @@ def test_되묻기는_두_번까지만_한다():
     assert len(deps.resolve.calls) == 3
 
 
-def test_후보가_없으면_되묻지_않고_안내한다():
+def test_no_candidates_gives_notice_without_asking():
+    """후보가 없으면 되묻지 않고 안내한다."""
     deps = _deps(["저거 뭐야?"], detections=[])
 
     build_graph(deps).invoke({})
@@ -247,7 +256,8 @@ def test_후보가_없으면_되묻지_않고_안내한다():
 # --- 재촬영 ------------------------------------------------------------------
 
 
-def test_선명도_기준을_안_주면_흐려도_다시_고르지_않는다():
+def test_no_sharpness_threshold_keeps_blurry_frame():
+    """선명도 기준을 안 주면 흐려도 다시 고르지 않는다."""
     # 안경 카메라로 기준을 재기 전까지는 꺼 둔다(GraphDeps.sharpness_threshold 기본값 None)
     deps = _deps(["저거 뭐야?"], frames=_buffer(_blurry()))
 
@@ -257,7 +267,8 @@ def test_선명도_기준을_안_주면_흐려도_다시_고르지_않는다():
     assert deps.tts.spoken == ["컵이에요."]
 
 
-def test_흐린_사진뿐이면_두_번_다시_고르고_안내한다():
+def test_only_blurry_frames_recapture_twice_then_notice():
+    """흐린 사진뿐이면 두 번 다시 고르고 안내한다."""
     deps = _deps(["저거 뭐야?"], frames=_buffer(_blurry()), sharpness_threshold=100.0)
 
     result = build_graph(deps).invoke({})
@@ -267,7 +278,8 @@ def test_흐린_사진뿐이면_두_번_다시_고르고_안내한다():
     assert deps.vlm.asked == []
 
 
-def test_흐린_사진_뒤에_선명한_사진이_들어오면_이어서_답한다():
+def test_sharp_frame_after_blurry_continues():
+    """흐린 사진 뒤에 선명한 사진이 들어오면 이어서 답한다."""
     # 듣기에서 고른 사진은 흐리고, 다시 고르기 전에 카메라 스레드가 선명한 사진을 넣은 경우
     frames = _buffer(_blurry())
     pick = frames.pick_best
@@ -286,7 +298,8 @@ def test_흐린_사진_뒤에_선명한_사진이_들어오면_이어서_답한�
     assert deps.tts.spoken == ["컵이에요."]
 
 
-def test_버퍼가_비어_있으면_기준이_없어도_다시_고르고_안내한다():
+def test_empty_buffer_recaptures_even_without_threshold():
+    """버퍼가 비어 있으면 기준이 없어도 다시 고르고 안내한다."""
     deps = _deps(["저거 뭐야?"], frames=FrameBuffer())
 
     result = build_graph(deps).invoke({})
@@ -298,7 +311,8 @@ def test_버퍼가_비어_있으면_기준이_없어도_다시_고르고_안내�
 # --- 기록 · 안전장치 ---------------------------------------------------------
 
 
-def test_가리킴_결과가_기록에_남는다(store):
+def test_pointing_result_is_logged(store):
+    """가리킴 결과가 기록에 남는다."""
     user_id = store.ensure_user()
     turn = {"session_id": store.start_session(user_id), "user_id": user_id}
     deps = _deps(["저거 뭐야?"], store=store)
@@ -313,7 +327,8 @@ def test_가리킴_결과가_기록에_남는다(store):
         assert sorted(r.is_chosen for r in rows) == [False, True]
 
 
-def test_되묻다_끝난_턴은_고른_사람이_비어_있다(store):
+def test_gave_up_clarify_turn_has_no_resolver(store):
+    """되묻다 끝난 턴은 고른 사람이 비어 있다."""
     # MODEL 로 남으면 실패 분석 때 "모델이 고른 턴"에 아무도 안 고른 턴이 섞인다
     user_id = store.ensure_user()
     turn = {"session_id": store.start_session(user_id), "user_id": user_id}
@@ -327,12 +342,14 @@ def test_되묻다_끝난_턴은_고른_사람이_비어_있다(store):
         assert inference.target_label is None
 
 
-def test_재귀_한도가_걸려_있다():
+def test_recursion_limit_is_set():
+    """재귀 한도가 걸려 있다."""
     assert build_graph(_deps([])).config["recursion_limit"] == RECURSION_LIMIT
 
 
 @pytest.mark.parametrize("texts", [[], ["음."]])
-def test_질문이_없으면_가리킴_길도_타지_않는다(texts):
+def test_no_question_skips_pointing_path(texts):
+    """질문이 없으면 가리킴 길도 타지 않는다."""
     deps = _deps(texts)
 
     build_graph(deps).invoke({})
