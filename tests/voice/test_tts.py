@@ -73,7 +73,8 @@ def played(monkeypatch):
     return written
 
 
-def test_synthesize_는_다듬은_글자를_pcm_으로_요청하고_조각을_그대로_낸다():
+def test_synthesize_requests_pcm_and_yields_chunks():
+    """`synthesize()` 는 다듬은 글자를 PCM 으로 요청하고 조각을 그대로 낸다."""
     client = FakeClient()
     tts = TextToSpeech(voice="alloy", client=client)
 
@@ -92,7 +93,8 @@ def test_synthesize_는_다듬은_글자를_pcm_으로_요청하고_조각을_�
     assert tts.last_latency_ms >= 0
 
 
-def test_speak_는_받은_조각을_순서대로_재생하고_첫_조각_시간을_돌려준다(played):
+def test_speak_plays_chunks_and_returns_first_chunk_time(played):
+    """`speak()` 는 받은 조각을 순서대로 재생하고 첫 조각 시간을 돌려준다."""
     tts = TextToSpeech(client=FakeClient())
 
     took = tts.speak("안녕하세요.")
@@ -103,7 +105,9 @@ def test_speak_는_받은_조각을_순서대로_재생하고_첫_조각_시간�
     assert tts.last_interrupted is False
 
 
-def test_stop_하면_남은_조각을_받지_않고_응답_스트림을_닫는다(played):
+def test_stop_closes_stream_without_rest(played):
+    """`stop()` 하면 남은 조각을 받지 않고 응답 스트림을 닫는다."""
+
     def chunks(size):
         yield b"\x01" * size
         tts.stop()  # 첫 조각을 쓰는 사이 호출어가 들렸다
@@ -126,7 +130,9 @@ def test_stop_하면_남은_조각을_받지_않고_응답_스트림을_닫는�
     assert tts.last_interrupted is False
 
 
-def test_받는_도중_끊기면_받은_만큼만_재생하고_예외를_올리지_않는다(played):
+def test_broken_stream_plays_received_part_without_raising(played):
+    """받는 도중 끊기면 받은 만큼만 재생하고 예외를 올리지 않는다."""
+
     def cut(size):
         yield b"\x01" * size
         raise httpx2.ReadTimeout("끊김")  # openai 가 감싸지 않고 그대로 올라온다
@@ -137,7 +143,9 @@ def test_받는_도중_끊기면_받은_만큼만_재생하고_예외를_올리�
     assert took is not None
 
 
-def test_첫_조각도_못_받으면_아무것도_재생하지_않고_None(played):
+def test_no_first_chunk_plays_nothing_and_returns_none(played):
+    """첫 조각도 못 받으면 아무것도 재생하지 않고 None 을 준다."""
+
     def dead(size):
         raise httpx2.ReadTimeout("끊김")
         yield
@@ -149,7 +157,9 @@ def test_첫_조각도_못_받으면_아무것도_재생하지_않고_None(playe
     assert len(client.requests) == 2  # 한 번 더 요청해 보고 포기했다
 
 
-def test_첫_조각_전에_멈췄으면_새로_요청해서_읽는다(played):
+def test_stalled_before_first_chunk_retries(played):
+    """첫 조각 전에 멈췄으면 새로 요청해서 읽는다."""
+
     def stalled_once(size):
         client.chunks = two_chunks  # 다음 요청은 정상
         raise httpx2.ReadTimeout("응답을 받기 시작한 뒤 서버가 멈췄다")
@@ -165,7 +175,8 @@ def test_첫_조각_전에_멈췄으면_새로_요청해서_읽는다(played):
     assert took == tts.last_latency_ms >= 0
 
 
-def test_첫_조각을_기다리는_시간은_짧게_걸고_한_번만_다시_보낸다(monkeypatch):
+def test_first_chunk_wait_is_short_with_one_retry(monkeypatch):
+    """첫 조각을 기다리는 시간은 짧게 걸고 한 번만 다시 보낸다."""
     monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-test")  # 요청은 보내지 않는다
 
     client = TextToSpeech().client
@@ -184,7 +195,8 @@ def slow_chunks(delay):
     return chunks
 
 
-def test_prefetch_해_두면_speak_가_새로_요청하지_않고_받아_둔_조각을_바로_읽는다(played):
+def test_speak_uses_prefetched_chunks(played):
+    """`prefetch()` 해 두면 `speak()` 가 새로 요청하지 않고 받아 둔 조각을 바로 읽는다."""
     client = FakeClient(slow_chunks(0.2))
     tts = TextToSpeech(client=client)
 
@@ -198,13 +210,15 @@ def test_prefetch_해_두면_speak_가_새로_요청하지_않고_받아_둔_조
     assert client.closed
 
 
-def test_prefetch_없이_speak_하면_첫_조각_왕복을_그대로_기다린다(played):
+def test_speak_without_prefetch_waits_round_trip(played):
+    """`prefetch()` 없이 `speak()` 하면 첫 조각 왕복을 그대로 기다린다."""
     took = TextToSpeech(client=FakeClient(slow_chunks(0.2))).speak("컵이에요.")
 
     assert took >= 150  # 윈도우의 time.monotonic() 은 15.6ms 단위라 200 보다 조금 작게 나온다
 
 
-def test_다른_글자로_speak_하면_미리_받던_것은_버리고_새로_합성한다(played):
+def test_speak_other_text_discards_prefetch(played):
+    """다른 글자로 `speak()` 하면 미리 받던 것은 버리고 새로 합성한다."""
     client = FakeClient()
     tts = TextToSpeech(client=client)
 
@@ -215,7 +229,9 @@ def test_다른_글자로_speak_하면_미리_받던_것은_버리고_새로_합
     assert b"".join(played) == b"" * CHUNK_BYTES + b"" * CHUNK_BYTES  # 한 번만 읽었다
 
 
-def test_미리_합성이_실패하면_speak_도_소리_없이_None(played):
+def test_failed_prefetch_makes_speak_silent_none(played):
+    """미리 합성이 실패하면 `speak()` 도 소리 없이 None 을 준다."""
+
     def dead(size):
         raise httpx2.ReadTimeout("끊김")
         yield
@@ -231,7 +247,8 @@ def test_미리_합성이_실패하면_speak_도_소리_없이_None(played):
     ("speed", "value"),
     [("SLOW", 0.85), ("FAST", 1.2), ("fast", 1.2), ("NORMAL", None), ("모르는값", None)],
 )
-def test_tts_speed_를_speed_값으로_바꿔_보낸다(speed, value):
+def test_converts_tts_speed_to_speed(speed, value):
+    """`tts_speed` 를 `speed` 값으로 바꿔 보낸다."""
     client = FakeClient()
 
     list(TextToSpeech(speed=speed, client=client).synthesize("안녕하세요."))
@@ -249,11 +266,13 @@ def test_tts_speed_를_speed_값으로_바꿔_보낸다(speed, value):
         ("5m 앞, 5min 뒤, 3,4번째", "5미터 앞, 5min 뒤, 3,4번째"),
     ],
 )
-def test_단위·쉼표·물결표를_읽는_말로_바꾸고_마크다운을_뺀다(raw, want):
+def test_speaks_units_commas_tildes_and_strips_markdown(raw, want):
+    """단위 · 쉼표 · 물결표를 읽는 말로 바꾸고 마크다운을 뺀다."""
     assert normalize(raw) == want
 
 
-def test_문장_끝과_줄바꿈에서_자르고_소수점은_안_자른다():
+def test_splits_at_sentence_end_and_newline_not_decimal():
+    """문장 끝과 줄바꿈에서 자르고 소수점은 안 자른다."""
     text = "우유가 들어 있어요. 나트륨은 3.5그램이에요! 괜찮을까요?\n네"
 
     assert split_sentences(text) == [
@@ -265,7 +284,8 @@ def test_문장_끝과_줄바꿈에서_자르고_소수점은_안_자른다():
     assert split_sentences("") == []
 
 
-def test_prepare_는_끝까지_합성해_두고_play_가_그대로_재생한다(played):
+def test_prepare_synthesizes_all_and_play_replays(played):
+    """`prepare()` 는 끝까지 합성해 두고 `play()` 가 그대로 재생한다."""
     tts = TextToSpeech(client=FakeClient())
 
     pcm = tts.prepare("잠깐만요.")
@@ -277,7 +297,9 @@ def test_prepare_는_끝까지_합성해_두고_play_가_그대로_재생한다(
     assert tts.last_interrupted is False
 
 
-def test_미리_합성이_실패하면_빈_바이트이고_play_는_소리를_안_낸다(played):
+def test_failed_prepare_is_empty_and_play_is_silent(played):
+    """미리 합성이 실패하면 빈 바이트이고 `play()` 는 소리를 안 낸다."""
+
     def dead(size):
         raise httpx2.ReadTimeout("끊김")
         yield
@@ -289,7 +311,8 @@ def test_미리_합성이_실패하면_빈_바이트이고_play_는_소리를_�
     assert played == []
 
 
-def test_prepare_는_앞뒤_무음을_잘라_둔다(played):
+def test_prepare_trims_silence(played):
+    """`prepare()` 는 앞뒤 무음을 잘라 둔다."""
     quiet = bytes(SAMPLE_RATE * 2)  # 1초 무음
     voice = (3000).to_bytes(2, "little", signed=True) * (SAMPLE_RATE // 2)  # 0.5초 말소리
 

@@ -15,7 +15,8 @@ def blocks(n, start=0):
     return [(np.full(BLOCK, i, np.int16), i * BLOCK_SEC) for i in range(start, start + n)]
 
 
-def test_여럿이_같은_블록을_같은_순서로_받는다():
+def test_readers_get_same_blocks_in_order():
+    """여럿이 같은 블록을 같은 순서로 받는다."""
     with MicStream(source=blocks(10)) as mic:
         a = [int(b[0]) for b, _ in mic.blocks(since=0.0)]
         b = [int(b[0]) for b, _ in mic.blocks(since=0.0)]
@@ -23,21 +24,24 @@ def test_여럿이_같은_블록을_같은_순서로_받는다():
     assert a == b == list(range(10))
 
 
-def test_since_를_주면_그_시각_이후_블록부터_준다():
+def test_since_returns_blocks_after_that_time():
+    """`since` 를 주면 그 시각 이후 블록부터 준다."""
     with MicStream(source=blocks(10)) as mic:
         got = [t for _, t in mic.blocks(since=4 * BLOCK_SEC)]
 
     assert got[0] == 4 * BLOCK_SEC and len(got) == 6
 
 
-def test_들고_있는_것은_최근_history_sec_뿐이다():
+def test_keeps_only_recent_history_sec():
+    """들고 있는 것은 최근 `history_sec` 뿐이다."""
     with MicStream(source=blocks(10), history_sec=3 * BLOCK_SEC) as mic:
         got = [int(b[0]) for b, _ in mic.blocks(since=0.0)]
 
     assert got == [7, 8, 9]  # 그보다 오래된 블록은 버렸다
 
 
-def test_since_가_없으면_부른_뒤에_들어온_블록부터_준다():
+def test_without_since_returns_blocks_after_call():
+    """`since` 가 없으면 부른 뒤에 들어온 블록부터 준다."""
     go = threading.Event()
 
     def source():

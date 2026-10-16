@@ -34,7 +34,8 @@ class StopCounter:
         self.stops += 1
 
 
-def test_호출어가_들리면_읽던_답을_끊고_그_호출을_넘긴다():
+def test_wake_word_stops_answer_and_passes_call():
+    """호출어가 들리면 읽던 답을 끊고 그 호출을 넘긴다."""
     tts = StopCounter()
     barge = BargeIn(tts)
 
@@ -45,7 +46,8 @@ def test_호출어가_들리면_읽던_답을_끊고_그_호출을_넘긴다():
     assert barge.wait(timeout=0.01) is None  # 한 번 넘긴 호출은 다시 안 준다
 
 
-def test_쌓인_호출이_여럿이면_가장_최근_것만_준다():
+def test_returns_latest_of_queued_calls():
+    """쌓인 호출이 여럿이면 가장 최근 것만 준다."""
     barge = BargeIn(StopCounter())
     barge.on_detect(1.0, 0.98)
     barge.on_detect(4.0, 0.99)
@@ -54,7 +56,8 @@ def test_쌓인_호출이_여럿이면_가장_최근_것만_준다():
     assert barge.wait(timeout=0.01) is None
 
 
-def test_재생_중에_들린_호출을_넘길_때_게이트를_질문_읽는_곳까지_거슬러_연다():
+def test_call_during_playback_reopens_gate_back_to_question():
+    """재생 중에 들린 호출을 넘길 때 게이트를 질문 읽는 곳까지 거슬러 연다."""
     gate = MicGate(grace_sec=0.3)
     barge = BargeIn(StopCounter(), gate=gate)
     with gate.playing():
@@ -68,7 +71,8 @@ def test_재생_중에_들린_호출을_넘길_때_게이트를_질문_읽는_�
     assert gate.is_open(wake.t - config.WAKE_LOOKBACK_SEC)
 
 
-def test_재생_중이_아닐_때_들린_호출은_게이트를_건드리지_않는다():
+def test_call_outside_playback_leaves_gate():
+    """재생 중이 아닐 때 들린 호출은 게이트를 건드리지 않는다."""
     gate = MicGate(grace_sec=0.3)
     with gate.playing():
         pass
@@ -81,7 +85,8 @@ def test_재생_중이_아닐_때_들린_호출은_게이트를_건드리지_않
     assert not gate.is_open(closed_until - 0.1)
 
 
-def test_clear_는_쌓인_호출을_버린다():
+def test_clear_drops_queued_calls():
+    """`clear()` 는 쌓인 호출을 버린다."""
     barge = BargeIn(StopCounter())
     barge.on_detect(1.0, 0.98)
 
@@ -164,7 +169,8 @@ def hear(detector, score):
     detector.feed(np.full(FRAME, round(score * 1000), np.int16), time.monotonic())
 
 
-def test_재생_중_호출어가_들리면_끊고_이어_말한_질문을_자르지_않고_받는다(loop):
+def test_barge_in_keeps_following_question_whole(loop):
+    """재생 중 호출어가 들리면 끊고 이어 말한 질문을 자르지 않고 받는다."""
     # 스피커에 세 번째 20ms 를 쓰고 나서 "자비서"가 들렸다
     loop.on_write = lambda n: n == 3 and hear(loop.detector, 0.995)
 
@@ -198,7 +204,8 @@ def test_재생_중_호출어가_들리면_끊고_이어_말한_질문을_자르
     assert loop.client.transcribed == 1
 
 
-def test_재생_중에는_임계값이_높아_자기_목소리_점수로는_끊지_않는다(loop):
+def test_own_voice_score_does_not_barge_in(loop):
+    """재생 중에는 임계값이 높아 자기 목소리 점수로는 끊지 않는다."""
     # 평소 임계값(0.97)은 넘지만 재생 중 임계값(0.99)은 못 넘는다
     loop.on_write = lambda n: n % 10 == 0 and hear(loop.detector, 0.98)
 
@@ -210,7 +217,8 @@ def test_재생_중에는_임계값이_높아_자기_목소리_점수로는_끊�
     assert loop.barge.wait(timeout=0.01) is None
 
 
-def test_called_since_는_그_뒤에_들린_호출이_있는지_꺼내지_않고_본다():
+def test_called_since_peeks_without_consuming():
+    """`called_since()` 는 그 뒤에 들린 호출이 있는지 꺼내지 않고 본다."""
     barge = BargeIn(StopCounter())
     barge.on_detect(10.0, 0.99)
 

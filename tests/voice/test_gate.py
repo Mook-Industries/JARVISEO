@@ -22,7 +22,8 @@ BLOCK_SEC = BLOCK / SAMPLE_RATE
 DATA = Path(__file__).parents[1] / "data"
 
 
-def test_재생_중과_끝나고_유예_안에_들어온_블록만_무음이_된다():
+def test_only_blocks_during_playback_and_grace_are_muted():
+    """재생 중과 끝나고 유예 안에 들어온 블록만 무음이 된다."""
     gate = MicGate(grace_sec=0.3)
     before = time.monotonic() - 1.0
     with gate.playing():
@@ -37,7 +38,8 @@ def test_재생_중과_끝나고_유예_안에_들어온_블록만_무음이_된
     assert [b.any() for b, _ in out] == [True, False, False, True]
 
 
-def test_재생이_시작하고_끝날_때_더미_콜백을_부른다():
+def test_calls_callbacks_on_playback_start_and_end():
+    """재생이 시작하고 끝날 때 더미 콜백을 부른다."""
     gate, calls = MicGate(), []
     gate.on_playback(calls.append)
 
@@ -47,7 +49,8 @@ def test_재생이_시작하고_끝날_때_더미_콜백을_부른다():
     assert calls == [True, False]
 
 
-def test_재생이_예외로_끝나도_끝을_알리고_게이트가_열린다():
+def test_playback_error_still_opens_gate():
+    """재생이 예외로 끝나도 끝을 알리고 게이트가 열린다."""
     gate, calls = MicGate(), []
     gate.on_playback(calls.append)
 
@@ -84,7 +87,8 @@ def speaker_log(monkeypatch):
     return log
 
 
-def test_스피커는_첫_소리_전에_게이트를_닫고_소리를_다_낸_뒤에_연다(speaker_log):
+def test_speaker_closes_gate_before_sound_and_opens_after(speaker_log):
+    """스피커는 첫 소리 전에 게이트를 닫고 소리를 다 낸 뒤에 연다."""
     gate = MicGate()
     gate.on_playback(speaker_log.append)
 
@@ -93,7 +97,8 @@ def test_스피커는_첫_소리_전에_게이트를_닫고_소리를_다_낸_�
     assert speaker_log == [True, b"\x01\x00", b"\x02\x00", "stop", False]
 
 
-def test_조각이_하나도_없으면_게이트를_건드리지_않는다(speaker_log):
+def test_no_chunks_leaves_gate(speaker_log):
+    """조각이 하나도 없으면 게이트를 건드리지 않는다."""
     gate = MicGate()
     gate.on_playback(speaker_log.append)
 
@@ -103,7 +108,8 @@ def test_조각이_하나도_없으면_게이트를_건드리지_않는다(speak
     assert gate.is_open(time.monotonic())
 
 
-def test_재생_중_stop_하면_남은_소리를_버리고_게이트를_유예_없이_연다(speaker_log):
+def test_stop_during_playback_drops_rest_and_opens_gate(speaker_log):
+    """재생 중 `stop()` 하면 남은 소리를 버리고 게이트를 유예 없이 연다."""
     gate = MicGate(grace_sec=0.3)
     gate.on_playback(speaker_log.append)
     speaker = Speaker(gate=gate)
@@ -121,7 +127,8 @@ def test_재생_중_stop_하면_남은_소리를_버리고_게이트를_유예_�
     assert gate.is_open(speaker.stopped_at)  # 끝까지 재생했다면 0.3초 더 막혀 있다
 
 
-def test_큰_조각은_20ms_씩_나눠_써서_그_사이에도_멈춘다(monkeypatch):
+def test_large_chunk_written_in_20ms_slices_can_stop(monkeypatch):
+    """큰 조각은 20ms 씩 나눠 써서 그 사이에도 멈춘다."""
     speaker, written = Speaker(gate=MicGate()), []
 
     class FakeOutputStream:
@@ -151,7 +158,8 @@ def test_큰_조각은_20ms_씩_나눠_써서_그_사이에도_멈춘다(monkeyp
     assert written == [chunk[:PIECE_BYTES], "abort"]
 
 
-def test_첫_조각을_기다리는_동안_stop_하면_소리를_내지_않는다(speaker_log):
+def test_stop_before_first_chunk_plays_nothing(speaker_log):
+    """첫 조각을 기다리는 동안 `stop()` 하면 소리를 내지 않는다."""
     gate = MicGate()
     gate.on_playback(speaker_log.append)
     speaker = Speaker(gate=gate)
@@ -166,7 +174,8 @@ def test_첫_조각을_기다리는_동안_stop_하면_소리를_내지_않는�
     assert speaker.interrupted
 
 
-def test_재생_전에_부른_stop_은_다음_재생에_영향이_없다(speaker_log):
+def test_stop_before_playback_does_not_affect_next(speaker_log):
+    """재생 전에 부른 `stop()` 은 다음 재생에 영향이 없다."""
     speaker = Speaker(gate=MicGate())
     speaker.stop()
 
@@ -176,7 +185,8 @@ def test_재생_전에_부른_stop_은_다음_재생에_영향이_없다(speaker
     assert not speaker.interrupted
 
 
-def test_reopen_은_닫힌_구간을_줄이기만_한다():
+def test_reopen_only_shrinks_closed_span():
+    """`reopen()` 은 닫힌 구간을 줄이기만 한다."""
     gate = MicGate(grace_sec=0.3)
     with gate.playing():
         start = time.monotonic()
@@ -189,7 +199,8 @@ def test_reopen_은_닫힌_구간을_줄이기만_한다():
     assert gate.is_open(start)
 
 
-def test_STT_와_TTS_는_같은_게이트를_쓴다():
+def test_stt_and_tts_share_gate():
+    """STT 와 TTS 는 같은 게이트를 쓴다."""
     assert TextToSpeech(client=object()).speaker.gate is stt.MIC_GATE is MIC_GATE
 
 
@@ -233,7 +244,8 @@ class FakeClient:
         return SimpleNamespace(text="자비서, 저거 뭐야?")
 
 
-def test_listen_은_재생_중에_들어온_말은_흘리고_유예가_지난_말은_받아쓴다(monkeypatch, mic_from):
+def test_listen_ignores_speech_during_playback_and_grace(monkeypatch, mic_from):
+    """`listen()` 은 재생 중에 들어온 말은 흘리고 유예가 지난 말은 받아쓴다."""
     gate, client = MicGate(), FakeClient()
     monkeypatch.setattr(stt, "MIC_GATE", gate)
     listener = stt.SpeechToText(client=client)

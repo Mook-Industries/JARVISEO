@@ -33,7 +33,8 @@ def memory(store: MemoryStore) -> VectorMemory:
     return VectorMemory(store, FakeEmbedder(), min_score=0.2)
 
 
-def test_비슷한_질문으로_본_장면을_찾는다(store: MemoryStore, memory: VectorMemory):
+def test_finds_scene_by_similar_question(store: MemoryStore, memory: VectorMemory):
+    """비슷한 질문으로 본 장면을 찾는다."""
     user_id = store.ensure_user()
     turn_id = _turn(store, user_id)
     ids = [memory.remember_observation(user_id, turn_id, s, place="거실") for s in SCENES]
@@ -51,7 +52,8 @@ def test_비슷한_질문으로_본_장면을_찾는다(store: MemoryStore, memo
     assert memory.last_latency_ms is not None
 
 
-def test_가까운_순으로_top_k_개까지만_준다(store: MemoryStore):
+def test_returns_top_k_nearest_first(store: MemoryStore):
+    """가까운 순으로 `top_k` 개까지만 준다."""
     memory = VectorMemory(store, FakeEmbedder(), min_score=0.0)
     user_id = store.ensure_user()
     turn_id = _turn(store, user_id)
@@ -64,7 +66,8 @@ def test_가까운_순으로_top_k_개까지만_준다(store: MemoryStore):
     assert hits[0].score >= hits[1].score
 
 
-def test_점수가_문턱보다_낮으면_버린다(store: MemoryStore, memory: VectorMemory):
+def test_drops_hits_below_threshold(store: MemoryStore, memory: VectorMemory):
+    """점수가 문턱보다 낮으면 버린다."""
     user_id = store.ensure_user()
     turn_id = _turn(store, user_id)
     for scene in SCENES:
@@ -73,14 +76,16 @@ def test_점수가_문턱보다_낮으면_버린다(store: MemoryStore, memory: 
     assert memory.search(user_id, "오늘 날씨 어때") == []
 
 
-def test_다른_사용자의_기록은_안_나온다(store: MemoryStore, memory: VectorMemory):
+def test_excludes_other_users(store: MemoryStore, memory: VectorMemory):
+    """다른 사용자의 기록은 안 나온다."""
     me, other = store.ensure_user(), store.ensure_user("other@jarviseo.local")
     memory.remember_observation(other, _turn(store, other), "책상 위 검은 백팩")
 
     assert memory.search(me, "검은 백팩") == []
 
 
-def test_임베딩이_실패해도_설명은_남고_검색에는_안_나온다(store: MemoryStore):
+def test_embedding_failure_keeps_text_but_hides_from_search(store: MemoryStore):
+    """임베딩이 실패해도 설명은 남고 검색에는 안 나온다."""
     broken = VectorMemory(store, _BrokenEmbedder(), min_score=0.0)
     user_id = store.ensure_user()
     turn_id = _turn(store, user_id)
@@ -97,14 +102,16 @@ def test_임베딩이_실패해도_설명은_남고_검색에는_안_나온다(s
     assert broken.last_latency_ms is None
 
 
-def test_빈_질문은_찾지_않는다(store: MemoryStore, memory: VectorMemory):
+def test_empty_query_is_not_searched(store: MemoryStore, memory: VectorMemory):
+    """빈 질문은 찾지 않는다."""
     user_id = store.ensure_user()
     memory.remember_observation(user_id, _turn(store, user_id), "책상 위 검은 백팩")
 
     assert memory.search(user_id, "  ") == []
 
 
-def test_임베딩_모델_이름이_남는다(store: MemoryStore, memory: VectorMemory):
+def test_embedding_model_name_is_saved(store: MemoryStore, memory: VectorMemory):
+    """임베딩 모델 이름이 남는다."""
     user_id = store.ensure_user()
     observation_id = memory.remember_observation(user_id, _turn(store, user_id), "검은 백팩")
 

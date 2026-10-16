@@ -21,20 +21,24 @@ def _cos(a, b):
     return sum(x * y for x, y in zip(a, b, strict=True))
 
 
-def test_fake_의_공개_메서드가_실제와_같다():
+def test_fake_public_methods_match_real():
+    """Fake 의 공개 메서드가 실제와 같다."""
     for name, method in vars(TextEmbedder).items():
         if callable(method) and not name.startswith("_"):
             assert inspect.signature(getattr(FakeEmbedder, name)) == inspect.signature(method), name
 
 
-def test_fake_도_실제와_같은_결과_속성을_가진다():
+def test_fake_has_same_result_attributes():
+    """Fake 도 실제와 같은 결과 속성을 가진다."""
+
     def last_attrs(obj):
         return {name for name in vars(obj) if name.startswith("last_")}
 
     assert last_attrs(FakeEmbedder()) == last_attrs(TextEmbedder(client=object()))
 
 
-def test_실제_임베더는_설정한_모델로_한_문장을_보낸다():
+def test_real_embedder_sends_one_sentence_with_configured_model():
+    """실제 임베더는 설정한 모델로 한 문장을 보낸다."""
     api = _FakeEmbeddingsAPI()
     embedder = TextEmbedder(model="text-embedding-3-small", client=SimpleNamespace(embeddings=api))
 
@@ -45,7 +49,8 @@ def test_실제_임베더는_설정한_모델로_한_문장을_보낸다():
     assert embedder.last_latency_ms is not None
 
 
-def test_fake_는_같은_문장에_같은_길이_1_벡터를_준다():
+def test_fake_gives_same_unit_vector_for_same_text():
+    """Fake 는 같은 문장에 같은 길이 1 벡터를 준다."""
     a, b = FakeEmbedder().embed("책상 위 검은 백팩"), FakeEmbedder().embed("책상 위 검은 백팩")
 
     assert a == b
@@ -53,7 +58,8 @@ def test_fake_는_같은_문장에_같은_길이_1_벡터를_준다():
     assert math.isclose(_cos(a, a), 1.0)
 
 
-def test_fake_는_글자가_겹칠수록_가깝다():
+def test_fake_is_closer_with_more_shared_letters():
+    """Fake 는 글자가 겹칠수록 가깝다."""
     embed = FakeEmbedder().embed
     scene = embed("책상 위 검은 백팩")
 

@@ -42,7 +42,8 @@ def feed(det, values, t0=0.0):
         det.feed(np.full(BLOCK, v, np.int16), t0 + i * BLOCK_SEC)
 
 
-def test_30ms_블록을_80ms_로_모아_점수를_낸다():
+def test_groups_30ms_blocks_into_80ms_frames():
+    """30ms 블록을 80ms 로 모아 점수를 낸다."""
     frames = []
     det = WakeWordDetector(None, gate=MicGate(), scorer=lambda f: frames.append(len(f)) or 0.0)
 
@@ -51,7 +52,8 @@ def test_30ms_블록을_80ms_로_모아_점수를_낸다():
     assert frames == [FRAME] * 3
 
 
-def test_임계값을_넘으면_그_프레임이_끝난_시각으로_한_번_부른다():
+def test_calls_once_with_frame_end_time_over_threshold():
+    """임계값을 넘으면 그 프레임이 끝난 시각으로 한 번 부른다."""
     hits = []
     det = detector(hits)
 
@@ -61,7 +63,8 @@ def test_임계값을_넘으면_그_프레임이_끝난_시각으로_한_번_부
     assert hits == [(pytest.approx(0.32), 0.9)]
 
 
-def test_2초_안의_감지는_한_번으로_치고_2초가_지나면_다시_깨어난다():
+def test_detections_within_2s_count_once():
+    """2초 안의 감지는 한 번으로 치고 2초가 지나면 다시 깨어난다."""
     hits = []
     det = detector(hits)
 
@@ -72,7 +75,8 @@ def test_2초_안의_감지는_한_번으로_치고_2초가_지나면_다시_깨
     assert [round(t, 2) for t, _ in hits] == [0.08, 2.48]
 
 
-def test_재생_중과_끝난_뒤_유예_안에서는_임계값이_0_8_이다():
+def test_threshold_is_0_8_during_playback_and_grace():
+    """재생 중과 끝난 뒤 유예 안에서는 임계값이 0.8 이다."""
     gate, hits = MicGate(grace_sec=0.3), []
     det = detector(hits, gate=gate)
 
@@ -88,7 +92,8 @@ def test_재생_중과_끝난_뒤_유예_안에서는_임계값이_0_8_이다():
     assert hits[1][0] > end + 3.0
 
 
-def test_콜백이_예외를_내도_감지는_계속된다():
+def test_callback_error_keeps_detecting():
+    """콜백이 예외를 내도 감지는 계속된다."""
     calls = []
 
     def boom(t, s):
@@ -103,7 +108,8 @@ def test_콜백이_예외를_내도_감지는_계속된다():
     assert len(calls) == 2
 
 
-def test_start_하면_MicStream_을_읽어_감지하고_stop_하면_멈춘다():
+def test_start_reads_mic_stream_and_stop_halts():
+    """`start()` 하면 `MicStream` 을 읽어 감지하고 `stop()` 하면 멈춘다."""
     go, hits = threading.Event(), []
 
     def source():
@@ -153,7 +159,7 @@ def question_audio(*parts):
     ]
 
 
-def test_listen_은_공유_마이크에서_since_뒤에_말한_것만_받아쓴다(monkeypatch):
+def test_listen_transcribes_only_after_since_on_shared_mic(monkeypatch):
     """호출어를 잡은 뒤 listen() 을 늦게 불러도, since 이후에 이미 지나간 말을 받아쓴다."""
     with wave.open(str(DATA / "jarviseo_question.wav"), "rb") as f:
         voice = np.frombuffer(f.readframes(f.getnframes()), dtype="<i2")
@@ -177,7 +183,7 @@ def test_listen_은_공유_마이크에서_since_뒤에_말한_것만_받아쓴�
     assert after is None and len(client.requests) == 1
 
 
-def test_감지보다_먼저_시작한_질문도_앞부분부터_받아쓴다(monkeypatch):
+def test_question_started_before_detection_is_transcribed_whole(monkeypatch):
     """감지는 호출어가 끝나고 조금 뒤에 된다. 그새 시작한 질문 앞부분을 놓치면 안 된다."""
     with wave.open(str(DATA / "jarviseo_question.wav"), "rb") as f:
         voice = np.frombuffer(f.readframes(f.getnframes()), dtype="<i2")
@@ -196,7 +202,8 @@ def test_감지보다_먼저_시작한_질문도_앞부분부터_받아쓴다(mo
     assert utterance.started_at <= spoken_at
 
 
-def test_호출어부터_같이_녹음해도_말_시작은_호출어가_끝난_뒤로_둔다(monkeypatch):
+def test_speech_start_is_after_wake_word_in_same_recording(monkeypatch):
+    """호출어부터 같이 녹음해도 말 시작은 호출어가 끝난 뒤로 둔다."""
     monkeypatch.setattr(stt, "MIC_GATE", MicGate())
     blocks = question_audio((1.0, False), (2.0, True), (1.0, False))
     starts = []
@@ -211,7 +218,8 @@ def test_호출어부터_같이_녹음해도_말_시작은_호출어가_끝난_�
     assert starts == [utterance.started_at]
 
 
-def test_호출어만_말하고_쉬면_받아쓰지_않고_이어서_질문을_받는다(monkeypatch):
+def test_wake_word_then_pause_waits_for_question(monkeypatch):
+    """호출어만 말하고 쉬면 받아쓰지 않고 이어서 질문을 받는다."""
     monkeypatch.setattr(stt, "MIC_GATE", MicGate())
     # "자비서" 0.6초, 1초 쉬고, 질문 1.2초. 감지는 호출어가 끝나고 0.1초 뒤
     blocks = question_audio((1.0, False), (0.6, True), (1.0, False), (1.2, True), (1.0, False))
@@ -228,7 +236,8 @@ def test_호출어만_말하고_쉬면_받아쓰지_않고_이어서_질문을_�
     assert starts[-1] == utterance.started_at
 
 
-def test_늘여_말한_호출어만_받아써지면_이어서_질문을_받는다(monkeypatch):
+def test_drawn_out_wake_word_only_waits_for_question(monkeypatch):
+    """늘여 말한 호출어만 받아써지면 이어서 질문을 받는다."""
     monkeypatch.setattr(stt, "MIC_GATE", MicGate())
     # "자~비~서" 1.4초 중간(1.7초)에 감지됐고, 1초 쉬고 질문
     blocks = question_audio((1.0, False), (1.4, True), (1.0, False), (1.2, True), (1.0, False))
@@ -242,7 +251,8 @@ def test_늘여_말한_호출어만_받아써지면_이어서_질문을_받는�
     assert len(client.requests) == 2
 
 
-def test_커스텀_모델_파일이_없으면_받는_법을_알려_준다(tmp_path):
+def test_missing_custom_model_explains_download(tmp_path):
+    """커스텀 모델 파일이 없으면 받는 법을 알려 준다."""
     # 모델은 Git 에 없다. openwakeword 가 없는 CI 에서도 먼저 걸러야 한다.
     from jarviseo.voice.wakeword import load_scorer
 

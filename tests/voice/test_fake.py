@@ -15,7 +15,8 @@ from jarviseo.voice import FakeSpeechToText, FakeTextToSpeech, SpeechToText, Tex
 @pytest.mark.parametrize(
     ("real", "fake"), [(SpeechToText, FakeSpeechToText), (TextToSpeech, FakeTextToSpeech)]
 )
-def test_fake_의_공개_메서드가_실제와_같다(real, fake):
+def test_fake_public_methods_match_real(real, fake):
+    """Fake 의 공개 메서드가 실제와 같다."""
     for name, method in vars(real).items():
         if callable(method) and not name.startswith("_"):
             assert inspect.signature(getattr(fake, name)) == inspect.signature(method), name
@@ -24,7 +25,9 @@ def test_fake_의_공개_메서드가_실제와_같다(real, fake):
 @pytest.mark.parametrize(
     ("real", "fake"), [(SpeechToText, FakeSpeechToText), (TextToSpeech, FakeTextToSpeech)]
 )
-def test_fake_도_실제와_같은_결과_속성을_가진다(real, fake):
+def test_fake_has_same_result_attributes(real, fake):
+    """Fake 도 실제와 같은 결과 속성을 가진다."""
+
     def last_attrs(obj):
         return {name for name in vars(obj) if name.startswith("last_")}
 
@@ -32,7 +35,8 @@ def test_fake_도_실제와_같은_결과_속성을_가진다(real, fake):
     assert last_attrs(fake()) == last_attrs(real(client=object()))
 
 
-def test_fake_stt_는_돌려주기_전에_시작_콜백을_부른다():
+def test_fake_stt_calls_start_callback_before_return():
+    """Fake STT 는 돌려주기 전에 시작 콜백을 부른다."""
     starts = []
     stt = FakeSpeechToText(["저거 뭐야?"])
 
@@ -44,7 +48,7 @@ def test_fake_stt_는_돌려주기_전에_시작_콜백을_부른다():
     assert stt.listen() is None  # 문장을 다 쓰면 말이 없는 것으로 친다
 
 
-def test_fake_stt_는_말_시작_시각을_정할_수_있다():
+def test_fake_stt_can_set_speech_start():
     """사진 폴더(0초, 0.033초…)로 돌릴 때 말 시작 시각을 사진 시각에 맞춘다."""
     starts = []
     stt = FakeSpeechToText(["저거 뭐야?", "자비서", "컵이요", "뭐야?"], starts=[0.5, 1.0, 2.0])
@@ -60,12 +64,14 @@ def test_fake_stt_는_말_시작_시각을_정할_수_있다():
     assert before <= last.started_at <= time.monotonic()
 
 
-def test_fake_stt_도_min_letters_를_주면_한_글자_대답을_받는다():
+def test_fake_stt_accepts_one_letter_with_min_letters():
+    """Fake STT 도 `min_letters` 를 주면 한 글자 대답을 받는다."""
     assert FakeSpeechToText(["컵"]).listen() is None
     assert FakeSpeechToText(["컵"]).listen(min_letters=1).text == "컵"
 
 
-def test_fake_tts_는_받은_문장을_모은다():
+def test_fake_tts_collects_sentences():
+    """Fake TTS 는 받은 문장을 모은다."""
     tts = FakeTextToSpeech()
 
     assert tts.speak("안녕하세요") >= 0
