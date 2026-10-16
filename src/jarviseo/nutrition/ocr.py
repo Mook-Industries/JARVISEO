@@ -247,6 +247,26 @@ def _allergen_tail(text: str) -> int:
     return base + start
 
 
+_WORD = re.compile(r"[^,\s·/()]+")
+
+
+def _name_lists(text: str) -> list[tuple[int, int]]:
+    """'혼입' 글자 없이 알레르겐 이름만 늘어놓은 목록의 (시작, 끝) 위치들.  (#76)
+
+    항목 경계(•·※·마침표·긴 숫자)로 나눈 덩어리마다, 알레르기 표시 이름(우유·대두·밀 …)인
+    낱말이 2개 이상이고 그 사이에 쉼표가 있으면 첫 이름부터 마지막 이름까지를 목록으로 본다.
+    OCR 이 '혼입 가능' 글자를 못 읽은 혼입 목록을 잡으려는 것이다. 사이에 낀 깨진 낱말
+    ("달길", "땅몸")도 함께 넘겨서, 판정 쪽 동의어·유사 매칭이 볼 수 있게 한다.
+    """
+    spans = []
+    cuts = [0, *(b.end() for b in _BOUNDARY.finditer(text)), len(text)]
+    for lo, hi in zip(cuts, cuts[1:], strict=False):
+        names = [w for w in _WORD.finditer(text, lo, hi) if w.group() in _NOTICE_WORDS]
+        if len(names) >= 2 and "," in text[names[0].start() : names[-1].end()]:
+            spans.append((names[0].start(), names[-1].end()))
+    return spans
+
+
 def _blank(text: str, s: int, e: int) -> str:
     """이미 쓴 구간을 공백으로 지운다. 길이를 유지해야 다른 위치값이 어긋나지 않는다."""
     return text[:s] + " " * (e - s) + text[e:]
@@ -290,7 +310,13 @@ def split_sections(text: str) -> PanelSections:
         out.has_ingredient_header = True
         rest = masked[head.end() :]
         stop = _OTHER_HEADER.search(rest)
-        rest = rest[: stop.start()] if stop else rest
+        if stop:
+            # 다른 항목 뒤에 남은 알레르겐 이름 목록은 '혼입 가능'으로 본다(#76).
+            # 어느 구간에도 안 넣으면 통째로 놓친다. 놓치는 것보다 낮춰 말하는 쪽이 안전하다.
+            tail = rest[stop.start() :]
+            lists = [tail[s:e].strip(" ,") for s, e in _name_lists(tail)]
+            out.cross_contamination = ", ".join(x for x in (out.cross_contamination, *lists) if x)
+            rest = rest[: stop.start()]
     else:
         # 머리말을 못 찾으면 남은 글자 전체를 보조로 원재료 칸에 둔다 (멘토 피드백 2026-10-14).
         # has_ingredient_header 는 False 로 두므로 판정은 '확인 불가'로 가고,

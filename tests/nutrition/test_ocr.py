@@ -340,3 +340,36 @@ def test_문장_끝_마침표는_그대로_둔다():
     )
     assert sec.ingredients == "밀가루"
     assert sec.cross_contamination.startswith("이 제품은 땅콩")
+
+
+# --- '혼입' 글자 없는 알레르겐 목록 (#76) -----------------------------------
+
+# label_03 OCR 원문을 줄인 것. '혼입 가능' 글자를 OCR 이 못 읽었다.
+LABEL_03 = (
+    "원재료명: 밀가루, 설탕, 버터(우유), 대두레시틴 우유,대두 함유 포장재질 플리에틸렌 "
+    "품목보고번호 19870415003245 기,쇠고기,최고기,오징어 ·밀,달길, 땅몸, 호두복승아, 새우,거조 "
+    "을위해질소충전"
+)
+
+
+def test_다른_항목_뒤의_알레르겐_목록은_혼입으로_잡는다():
+    sec = split_sections(LABEL_03)
+    assert "포장재질" not in sec.ingredients and "쇠고기" not in sec.ingredients
+    for name in ("쇠고기", "오징어", "밀", "새우"):
+        assert name in sec.cross_contamination
+    assert "질소충전" not in sec.cross_contamination  # 마지막 이름에서 끝낸다
+    assert sec.allergen_notice == "우유,대두"
+
+
+def test_이름이_하나뿐이면_목록으로_보지_않는다():
+    sec = split_sections("원재료명: 밀가루, 설탕 보관방법: 우유와 함께 드세요, 직사광선을 피하세요")
+    assert sec.cross_contamination == ""
+
+
+def test_혼입_문구가_있으면_목록과_함께_남긴다():
+    text = (
+        "원재료명: 밀가루 이 제품은 땅콩을 사용한 제품과 같은 제조시설에서 제조합니다. "
+        "포장재질 폴리에틸렌 대두, 호두"
+    )
+    sec = split_sections(text)
+    assert "땅콩" in sec.cross_contamination and sec.cross_contamination.endswith("대두, 호두")
