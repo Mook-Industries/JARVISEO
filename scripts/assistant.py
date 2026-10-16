@@ -1,7 +1,7 @@
 """호출어부터 음성 대답까지 도는 비서.  담당: 문태현
 
 웹캠·마이크·스피커를 열고 "자비서"를 기다린다. 부르면 그래프(src/jarviseo/workflow/graph.py)로
-질문 한 번을 돌린다: 받아쓰기 → 의도 → (기억 검색) → VLM → 읽기 → 기록.
+질문 한 번을 돌린다: 받아쓰기 → 의도 → (기억 검색 · 가리킴 · 성분 판정) → VLM → 읽기 → 기록.
 대답을 읽거나 기다리는 중에 "자비서"라고 부르면 끊고 새 질문을 받는다(끼어들기).
 OpenAI 키와 호출어 모델(data/models/jarviseo.onnx, data/README.md)이 필요하다.
 
@@ -30,6 +30,10 @@ import threading
 from jarviseo import config
 from jarviseo.capture import FrameBuffer, FrameSource, WebcamSource
 from jarviseo.memory import DialogMemory, MemoryStore, VectorMemory
+from jarviseo.nutrition.barcode import MfdsClient
+from jarviseo.nutrition.service import IngredientChecker
+from jarviseo.pointing import resolve_target
+from jarviseo.pointing.detector import ObjectDetector
 from jarviseo.vlm import VLMClient
 from jarviseo.voice import BargeIn, ResponseCollector, SpeechToText, TextToSpeech, WakeWordDetector
 from jarviseo.voice.mic import MicStream
@@ -131,6 +135,11 @@ def main() -> None:
     collector = ResponseCollector(tts, called_since=barge.called_since)  # "잠깐만요"를 미리 합성
     frames = FrameBuffer(config.FRAME_BUFFER_SIZE)
     turns: list[dict[str, float]] = []
+    # YOLO·동의어 사전을 읽는 데 몇 초 걸린다. 마이크·카메라를 열기 전에 읽어야 그동안 쌓인
+    # 소리·사진이 첫 질문에 섞이지 않는다. 아래 WakeWordDetector 와 헷갈리지 않게 이름을 달리 둔다.
+    object_detector = ObjectDetector()
+    mfds = MfdsClient()
+    checker = IngredientChecker(store=store, client=mfds)
 
     with MicStream(args.mic) as mic, Camera(WebcamSource(args.camera), frames):
         deps = GraphDeps(
@@ -142,12 +151,16 @@ def main() -> None:
             memory=dialog.memory,
             dialog=dialog,
             collector=collector,
+            detector=object_detector,
+            resolve=resolve_target,
+            checker=checker,
         )
         graph = build_graph(deps)
         detector = WakeWordDetector(mic, on_detect=barge.on_detect)
         detector.start()
         print(f"기록 {args.db} (session_id {session_id}), VLM {vlm.model}")
         print(f"기억 검색 {'켜짐' if deps.recall_enabled else '꺼짐 (JARVISEO_ENABLE_RECALL)'}")
+        print("가리킴 v1(가운데 우선) · 성분 판정 켜짐")
         print("\n'자비서'를 부르고 이어서 말하세요. 끝내려면 Ctrl+C")
         try:
             run(graph, barge, session_id, user_id, turns)
@@ -159,6 +172,7 @@ def main() -> None:
     print("\n마무리하는 중 (받던 답·대화 기억 저장)...")
     collector.close()
     dialog.close()
+    mfds.close()
     store.end_session(session_id)
     if turns:
         print(f"\n중앙값 ({len(turns)}턴, ms)")

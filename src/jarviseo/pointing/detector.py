@@ -1,18 +1,18 @@
-"""손끝·물체 검출 (YOLO).  담당: 최홍묵
+"""물체 후보 검출 (사전학습 COCO YOLO).  담당: 최홍묵
 
-책임 지표: fingertip mAP@0.5
+책임 지표: 후보 재현율 (진열대 식품 장면은 따로)
 
-여기가 이 프로젝트에서 '딥러닝'에 해당하는 부분이다.
-COCO 로 사전학습된 YOLO 는 "사람"은 잡아도 "검지 끝이 어디냐"는 모른다.
-그래서 손끝 데이터를 직접 모아 파인튜닝한다.
+"저거"의 후보가 될 물건(컵·병·가방 등)은 COCO 에 이미 있어서 사전학습 YOLO 를 그대로 쓴다.
+손은 여기서 보지 않는다. 손가락 방향(v2)은 MediaPipe ``HandLandmarker`` 관절로 구하고,
+손끝 YOLO 는 학습하지 않는다(10/14 결정). 손끝 박스 하나로는 방향을 구할 수 없다.
 
-반드시 지킬 것
---------------
-1. **baseline 을 학습 전에 잰다.** 학습을 시작한 뒤에는 사전학습 상태의
-   성능을 되돌려 잴 수 없다. 사전학습 YOLO 를 우리 평가셋에 그대로 돌린
-   숫자를 먼저 기록하고 나서 학습에 들어간다.
-2. **test 셋은 최종 측정 전까지 열지 않는다.** 보면서 튜닝하면 나온 숫자가
-   실제 성능이 아니게 된다.
+파인튜닝은 측정으로 필요가 확인될 때만 한다. 진열대에서 과자 봉지가 후보에 안 잡히면
+``product`` 클래스를 학습한다. 그때 지킬 것:
+
+1. **baseline 을 학습 전에 잰다.** 학습을 시작한 뒤에는 사전학습 상태의 성능을 되돌려
+   잴 수 없다.
+2. **test 셋은 최종 측정 전까지 열지 않는다.** 보면서 튜닝하면 나온 숫자가 실제 성능이
+   아니게 된다.
 3. 배포 포맷은 ONNX 로 통일한다. CoreML 은 맥 전용이라 팀원이 못 쓴다.
 """
 
@@ -22,39 +22,47 @@ from pathlib import Path
 
 import numpy as np
 
-from jarviseo.types import Detection
+from jarviseo.types import BBox, Detection
 
-__all__ = ["FingertipDetector", "ObjectDetector"]
+__all__ = ["EXCLUDED_LABELS", "MIN_AREA_RATIO", "ObjectDetector", "filter_detections"]
+
+# 안경 시점에서는 사용자 손·팔이 person 으로 잡힌다. 후보에 두면 가운데 단서에서 1위가 되기 쉽다.
+EXCLUDED_LABELS = frozenset({"person"})
+# 화면 넓이의 0.2% (1080p 에서 약 64×64). 이보다 작으면 크롭해도 VLM·OCR 이 못 읽고,
+# 후보만 늘어 margin 을 깎는다. 안경 카메라 사진으로 재기 전까지는 출발점이다.
+MIN_AREA_RATIO = 0.002
 
 
-class FingertipDetector:
-    """파인튜닝한 YOLO 로 손끝 위치를 찾는다."""
-
-    def __init__(self, weights: Path, conf_threshold: float = 0.25) -> None:
-        self.weights = weights
-        self.conf_threshold = conf_threshold
-        raise NotImplementedError("W1 스파이크에서 사전학습 YOLO 로드부터 확인할 것")
-
-    def detect(self, image: np.ndarray) -> list[Detection]:
-        """손끝을 찾아 반환한다. 손이 안 보이면 빈 리스트.
-
-        label 은 "fingertip" 으로 통일한다. types.py 의 약속이다.
-        """
-        raise NotImplementedError
+def filter_detections(detections: list[Detection], frame_size: tuple[int, int]) -> list[Detection]:
+    """후보가 될 수 없는 검출(사람·아주 작은 박스)을 뺀다. 순서는 그대로 둔다."""
+    width, height = frame_size
+    min_area = width * height * MIN_AREA_RATIO
+    return [d for d in detections if d.label not in EXCLUDED_LABELS and d.bbox.area >= min_area]
 
 
 class ObjectDetector:
-    """장면 안의 후보 물체들을 찾는다.
-
-    이쪽은 파인튜닝하지 않고 사전학습 YOLO 를 그대로 쓴다.
-    "저거"의 후보가 될 일반적인 물건(컵, 가방, 병 등)은 COCO 에 이미 있다.
-    학습 자원은 손끝 쪽에 몰아주는 편이 낫다.
-    """
+    """장면 안의 후보 물체들을 찾는다. 앱에서 하나만 만들어 돌려 쓴다(모델을 한 번만 읽으려고)."""
 
     def __init__(self, weights: Path | str = "yolov8n.pt", conf_threshold: float = 0.25) -> None:
-        self.weights = weights
+        # CI 에는 ultralytics 가 없다. 모듈 위에서 import 하면 pointing 테스트가 전부 깨진다.
+        from ultralytics import YOLO
+
+        self.model = YOLO(str(weights))
         self.conf_threshold = conf_threshold
-        raise NotImplementedError
 
     def detect(self, image: np.ndarray) -> list[Detection]:
-        raise NotImplementedError
+        """BGR 이미지에서 후보를 찾는다. 없으면 빈 리스트.
+
+        ultralytics 는 numpy 배열을 OpenCV(BGR) 이미지로 읽으므로 RGB 로 바꾸지 않는다.
+        """
+        result = self.model.predict(image, conf=self.conf_threshold, verbose=False)[0]
+        boxes = result.boxes
+        # 텐서를 그대로 BBox 에 넣으면 DB 에 저장할 때 터진다. tolist() 로 float 로 바꾼다.
+        detections = [
+            Detection(label=result.names[int(cls)], confidence=conf, bbox=BBox(*xyxy))
+            for xyxy, conf, cls in zip(
+                boxes.xyxy.tolist(), boxes.conf.tolist(), boxes.cls.tolist(), strict=True
+            )
+        ]
+        height, width = image.shape[:2]
+        return filter_detections(detections, (width, height))

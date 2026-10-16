@@ -13,6 +13,7 @@ import pytest
 
 from jarviseo.capture import FrameBuffer, ImageFolderSource
 from jarviseo.memory import TurnCandidate, TurnInference
+from jarviseo.pointing import resolve_target
 from jarviseo.types import BBox, Detection, Frame, Intent, TargetCandidate, TargetResolution
 from jarviseo.vlm import FakeVLMClient
 from jarviseo.voice import FakeSpeechToText, FakeTextToSpeech
@@ -47,10 +48,10 @@ class _Resolver:
 
     def __init__(self, margins=(0.5,)) -> None:
         self.margins = list(margins)
-        self.calls: list[str] = []
+        self.calls: list[tuple[str, list[str]]] = []
 
-    def __call__(self, candidates, text, frame_size, **kwargs) -> TargetResolution:
-        self.calls.append(text)
+    def __call__(self, candidates, text, frame_size, replies=(), **kwargs) -> TargetResolution:
+        self.calls.append((text, list(replies)))
         margin = self.margins.pop(0) if len(self.margins) > 1 else self.margins[0]
         if not candidates:
             return TargetResolution([], chosen=None, margin=0.0, needs_clarify=True)
@@ -165,11 +166,45 @@ def test_애매하면_되묻고_대답으로_다시_고른다():
     result = build_graph(deps).invoke({})
 
     assert deps.tts.spoken == [QUESTION, "컵이에요."]
-    # 다시 고를 때 처음 질문과 대답이 둘 다 넘어간다
-    assert deps.resolve.calls == ["저거 뭐야?", "저거 뭐야? 왼쪽 거"]
+    # 다시 고를 때 처음 질문은 그대로, 대답은 따로 넘어간다(대답은 단서가 아니라 후보 좁히기)
+    assert deps.resolve.calls == [("저거 뭐야?", []), ("저거 뭐야?", ["왼쪽 거"])]
     assert result["clarify_replies"] == ["왼쪽 거"]
     assert result["clarify_count"] == 1
     assert deps.vlm.asked[0][1] == "저거 뭐야?"  # VLM 질문은 처음 질문 그대로
+
+
+class _HintSTT(FakeSpeechToText):
+    """listen() 에 받은 힌트를 기록한다."""
+
+    def __init__(self, texts) -> None:
+        super().__init__(texts)
+        self.hints: list[tuple[str, ...]] = []
+
+    def listen(self, *args, hints=(), **kwargs):
+        self.hints.append(tuple(hints))
+        return super().listen(*args, hints=hints, **kwargs)
+
+
+def test_clarify_hints_include_candidate_names():
+    """되묻기 대답을 받아쓸 때 위치 말과 장면 후보의 한글 이름을 중복 없이 힌트로 준다."""
+    deps = _deps(["저거 뭐야?", "컵"], margins=[0.05, 0.5])
+    deps.stt = _HintSTT(["저거 뭐야?", "컵"])
+
+    build_graph(deps).invoke({})
+
+    assert deps.stt.hints[-1] == ("왼쪽", "오른쪽", "가운데", "컵")
+
+
+def test_real_resolver_asks_and_crops_the_answered_side():
+    """실제 resolve_target 으로: 컵 둘이 비슷하면 되묻고, '왼쪽 거'면 왼쪽 컵의 크롭을 보낸다."""
+    deps = _deps(["저거 뭐야?", "왼쪽 거"])
+    deps.resolve = resolve_target
+
+    result = build_graph(deps).invoke({})
+
+    assert deps.tts.spoken == ["왼쪽 컵이요, 오른쪽 컵이요?", "컵이에요."]
+    assert result["target"].chosen.detection is TWO_CUPS[0]
+    assert deps.vlm.asked[0][0].image.shape == CROP
 
 
 def test_한_글자_대답도_받는다():

@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Literal
 
 from jarviseo.pointing.crop import crop_target as cut_target
+from jarviseo.pointing.labels import korean_name
 from jarviseo.workflow.deps import GraphDeps
 from jarviseo.workflow.messages import CLARIFY_GIVE_UP, canned_response
 from jarviseo.workflow.nodes.voice import REPLY_SEC
@@ -28,7 +29,7 @@ __all__ = [
 ]
 
 # 되묻기 대답("왼쪽 거")을 받아쓸 때 STT 에 주는 힌트. 짧은 대답이 덜 틀린다(voice/stt.py).
-# 후보 이름(한글)은 v1 대상 결정이 되묻는 문장을 만들 때 같이 더한다.
+# 장면에 있는 후보 이름(한글)은 clarify 가 같이 더한다.
 REPLY_HINTS = ("왼쪽", "오른쪽", "가운데")
 
 
@@ -37,15 +38,15 @@ def detect(state: JarviseoState, deps: GraphDeps) -> dict:
 
 
 def resolve(state: JarviseoState, deps: GraphDeps) -> dict:
-    # 되묻기 대답("왼쪽 거")만으로는 무엇을 찾는지 모른다. 처음 질문에 이어 붙여 넘긴다.
-    text = " ".join([state["utterance"].text, *state.get("clarify_replies", [])])
     # 키워드로 불러야 가짜와 실제 resolve_target 을 바꿔 끼워도 안 깨진다.
     target = deps.resolve(
         candidates=state["detections"],
         fingertip=None,  # 손 단서(v2)가 붙으면 채운다
         gaze_vector=None,
-        text=text,
+        text=state["utterance"].text,
         frame_size=state["frame"].size,
+        # 되묻기 대답("왼쪽 거")은 단서가 아니라 후보를 좁히는 데 쓴다. 질문과 따로 넘긴다.
+        replies=state.get("clarify_replies", []),
     )
     return {"target": target}
 
@@ -62,7 +63,10 @@ def clarify(state: JarviseoState, deps: GraphDeps) -> dict:
     # 사진을 새로 고르지 않는다(on_speech_start 없음). 대답하는 사이 고개를 돌렸어도
     # 처음 가리킨 장면에서 다시 골라야 한다.
     # 대답은 "컵"처럼 한 글자일 수 있다. 기본(두 글자 미만은 버림)대로면 대답이 없던 것이 된다.
-    reply = deps.stt.listen(timeout=REPLY_SEC, min_letters=1, hints=REPLY_HINTS)
+    # "컵" 한 글자는 "급"·"켭"으로 틀리기 쉽다. 장면에 있는 후보 이름을 힌트로 같이 준다.
+    names = (korean_name(c.detection.label) for c in target.candidates)
+    hints = tuple(dict.fromkeys((*REPLY_HINTS, *names)))
+    reply = deps.stt.listen(timeout=REPLY_SEC, min_letters=1, hints=hints)
     if reply is None:
         return {"response": canned_response(state, CLARIFY_GIVE_UP)}
     # 한 개짜리 리스트로 줘야 리듀서(operator.add)가 앞의 대답 뒤에 이어 붙인다.
