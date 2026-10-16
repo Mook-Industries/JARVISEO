@@ -43,6 +43,7 @@ from jarviseo.nutrition.ocr import (
     split_sections,
 )
 from jarviseo.nutrition.quality import ImageQuality, assess_quality, best_frame
+from jarviseo.nutrition.region import locate_panel
 from jarviseo.nutrition.response import (
     RETAKE_CLOSER,
     RETAKE_GLARE,
@@ -82,6 +83,7 @@ class IngredientCheck:
     timings_ms: dict[str, int] = field(default_factory=dict)  # barcode / quality / ocr / match
     quality: ImageQuality | None = None  # OCR 전 품질 검사 결과 (바코드로 찾으면 None)
     rotation: int = 0  # 성분표가 돌아가 있어 돌려 읽은 각도 (0 / 90 / 270)
+    panel_region: BBox | None = None  # 자동으로 찾은 성분표 영역 (못 찾았거나 끄면 None)
 
 
 @dataclass
@@ -115,6 +117,7 @@ class IngredientChecker:
         reader: OCR 엔진. 없으면 EasyOCR. 테스트에서 가짜를 끼운다.
         quality_check: OCR 전 품질 검사. None 이면 검사하지 않는다(테스트용 단색 이미지 등).
         try_rotation: 원재료명을 못 찾으면 90°·270° 로 돌려서도 읽는다(ocr.read_upright).
+        auto_region: 성분표 영역을 먼저 찾아 그 부분만 크게 읽는다(region.locate_panel).
     """
 
     def __init__(
@@ -129,8 +132,10 @@ class IngredientChecker:
         quality_check: Callable[[np.ndarray], ImageQuality] | None = assess_quality,
         try_rotation: bool = config.OCR_TRY_ROTATION,
         food_qr: FoodQrClient | None = None,
+        auto_region: bool = config.OCR_AUTO_REGION,
     ) -> None:
         self.try_rotation = try_rotation
+        self.auto_region = auto_region
         self.store = store
         self.client = client
         self.food_qr = food_qr
@@ -223,9 +228,9 @@ class IngredientChecker:
 
     # -- 성분표 OCR -------------------------------------------------------
 
-    def _read(self, image: np.ndarray, scale: float) -> _OcrPass:
+    def _read(self, image: np.ndarray, scale: float, region: BBox | None = None) -> _OcrPass:
         h, w = image.shape[:2]
-        panel = crop_and_upscale(image, BBox(0, 0, w, h), scale=scale)
+        panel = crop_and_upscale(image, region or BBox(0, 0, w, h), scale=scale)
         lines, angle = read_upright(panel, reader=self.reader, try_rotation=self.try_rotation)
         sections = split_sections(join_lines(lines))
         return _OcrPass(lines, sections, mean_confidence(lines), angle)
@@ -250,11 +255,26 @@ class IngredientChecker:
             if not quality.ok:
                 return self._poor_photo(quality, lookup, user_allergens, retake_count, timings)
 
+        region = None
+        if self.auto_region:
+            # 성분표 영역을 먼저 찾는다. 못 찾으면(단서 없음) 지금처럼 사진 전체를 읽는다.
+            t0 = time.perf_counter()
+            found, anchors = locate_panel(crop, self.reader)
+            timings["region"] = _ms(t0)
+            if anchors:
+                region = found
+
         t0 = time.perf_counter()
-        best = self._read(crop, scale=2.0)
+        if region is not None:
+            # 영역은 긴 변이 1600px 이 되게 키운다(평가 때와 같은 배율, 최대 3배).
+            scale = min(3.0, max(1.0, 1600 / max(region.width, region.height)))
+            best = self._read(crop, scale=scale, region=region)
+        else:
+            best = self._read(crop, scale=2.0)
         reprocessed = False
         if not self._passes(best) and self.max_reprocess > 0:
             # 같은 사진을 다시 읽는다. 단순 반복은 같은 결과라 보정·배율을 바꾼다.
+            # 영역을 잘못 잡았을 수도 있어서 재처리는 사진 전체로 한다.
             again = self._read(_enhance(crop), scale=3.0)
             reprocessed = True
             if self._passes(again) or again.conf > best.conf:
@@ -300,6 +320,7 @@ class IngredientChecker:
             timings_ms=timings,
             quality=quality,
             rotation=best.angle,
+            panel_region=region,
         )
 
         needs_retake = (

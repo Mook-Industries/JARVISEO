@@ -137,6 +137,10 @@ OCR_REMOTE_URL = _get("JARVISEO_OCR_REMOTE_URL")
 OCR_REMOTE_TOKEN = _get("JARVISEO_OCR_REMOTE_TOKEN")
 # 첫 요청은 모델을 데우느라 느릴 수 있어 넉넉히 둔다. 넘기면 이 PC 에서 대신 읽는다.
 OCR_REMOTE_TIMEOUT_SEC = _get_float("JARVISEO_OCR_REMOTE_TIMEOUT_SEC", 15.0)
+# 성분표 영역 자동 찾기 (nutrition/region.py, #75). 사진 전체를 한 번 더 OCR 해서 '함유'·원재료명
+# 같은 단서로 성분표만 잘라 크게 읽는다. 평가 세트 21장 재현율 사람 영역 81% / 자동 76%.
+# OCR 이 한 번 늘어서 CPU 에서는 느리다. GPU 서버에서 확인한 뒤 켠다.
+OCR_AUTO_REGION = _get_bool("JARVISEO_OCR_AUTO_REGION", False)
 
 # OCR 전 사진 품질 검사 (nutrition/quality.py). 흐리거나 반사가 심하면 OCR 을 돌리지 않고
 # 다시 보여 달라고 한다. 평가 세트 21장으로 정한 임시값 — 실제 카메라 프레임으로 다시 맞춘다.
