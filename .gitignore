@@ -10,6 +10,7 @@
 data/datasets/*
 data/models/*
 data/videos/*
+data/captures/
 *.db
 *.sqlite3
 !data/datasets/.gitkeep

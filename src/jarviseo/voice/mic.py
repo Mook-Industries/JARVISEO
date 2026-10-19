@@ -3,9 +3,11 @@
 16kHz 모노 int16 을 30ms 블록으로 읽고, 블록마다 첫 샘플이 마이크에 들어온 시각
 (``time.monotonic()`` 기준)을 같이 낸다.
 
-시각은 첫 블록에서 한 번 정하고, 그 뒤로는 읽은 샘플 수로 센다. 블록마다
-``time.monotonic()`` 을 찍으면 윈도우(파이썬 3.12)에서는 15.6ms 단위로 뭉치고,
-드라이버가 블록을 몰아서 줄 때마다 시각이 흔들린다.
+시각은 읽은 샘플 수로 센다. 블록마다 ``time.monotonic()`` 을 찍으면 윈도우(파이썬 3.12)에서는
+15.6ms 단위로 뭉치고, 드라이버가 블록을 몰아서 줄 때마다 시각이 흔들린다.
+다만 장치는 16kHz 를 딱 맞춰 주지 않는다. 샘플 수로만 세면 실제 시각보다 점점 늦어져서
+(10/15 실측 1.4%, 8분에 약 7초) 재생 구간·호출 시각·사진 시각과 비교가 틀어졌다(#69).
+그래서 ``BlockClock`` 이 블록을 받은 시각과 견줘 늦어진 만큼 당긴다.
 
 ``Microphone`` 은 한 곳에서만 읽는다. 호출어 감지와 STT 처럼 여럿이 같이 읽을 때는
 ``MicStream`` 을 쓴다.
@@ -13,7 +15,7 @@
 
 from __future__ import annotations
 
-import itertools
+import math
 import threading
 import time
 from collections import deque
@@ -21,10 +23,75 @@ from collections.abc import Iterable, Iterator
 
 import numpy as np
 
-__all__ = ["BLOCK", "SAMPLE_RATE", "MicStream", "Microphone"]
+__all__ = ["BLOCK", "SAMPLE_RATE", "BlockClock", "MicStream", "Microphone"]
 
 SAMPLE_RATE = 16000
 BLOCK = 480  # 30ms. webrtcvad 가 받는 길이는 10·20·30ms 뿐이다
+BLOCK_SEC = BLOCK / SAMPLE_RATE
+# 샘플 수로 센 시각이 이보다 더 늦으면 당긴다. 이보다 작은 차이는 읽기 흔들림과 못 가른다.
+DRIFT_TOLERANCE_SEC = 0.01
+# 늦었는지는 최근 이만큼 받은 블록들 중 가장 덜 늦은 것으로 본다. 읽는 쪽이 잠깐 밀려서
+# 늦게 받은 블록만 보고 당기면 안 되기 때문이다.
+DRIFT_WINDOW_SEC = 1.0
+
+
+class BlockClock:
+    """블록 시각을 샘플 수로 세되, 실제 시각보다 늦어지거나 앞서면 맞춘다.
+
+    블록을 받은 시각(read_at)에서 블록 길이와 장치 입력 지연을 빼면 "늦어도 이때는 들어왔다"는
+    상한이 나온다. 소리는 들어오기 전에 받을 수 없으니 실제 시각은 이 상한보다 늦을 수 없다.
+
+    - 샘플 수로 센 시각이 상한보다 앞서면(장치가 빠르거나 첫 블록을 늦게 받음) 바로 상한에 맞춘다.
+    - 최근 ``DRIFT_WINDOW_SEC`` 동안 받은 블록이 모두 상한보다 ``DRIFT_TOLERANCE_SEC`` 넘게 늦으면
+      (장치가 느림) 그중 가장 덜 늦은 만큼 당긴다. 가장 덜 늦은 블록은 제때 받은 블록이다.
+    - 읽는 쪽이 밀렸다가 쌓인 블록을 몰아 받는 동안에는 블록이 실제보다 빨리 들어온다.
+      그때는 당기지 않는다(쌓인 블록은 원래 늦게 받은 것이다). 밀린 동안 생긴 차이는
+      다 받은 뒤 맞춘다.
+    - overflow(놓친 샘플)가 나면 센 수가 틀렸으니 상한에 다시 맞춘다.
+
+    낸 시각은 늘 앞 블록보다 크다.
+    """
+
+    def __init__(
+        self,
+        latency: float,
+        tolerance: float = DRIFT_TOLERANCE_SEC,
+        window: float = DRIFT_WINDOW_SEC,
+    ) -> None:
+        """latency 는 장치가 알려 준 입력 지연(초)이다(``InputStream.latency``)."""
+        self.latency = latency
+        self.tolerance = tolerance
+        self.window = window
+        self._t0: float | None = None  # 블록 0 의 시각. 맞출 때마다 옮긴다
+        self._n = 0
+        self._last = -math.inf
+        self._lags: deque[tuple[float, float]] = deque()  # (받은 시각, 상한 − 센 시각)
+
+    def stamp(self, read_at: float, overflowed: bool = False) -> float:
+        """방금 받은 블록의 첫 샘플 시각. read_at 은 그 블록을 받은 monotonic 시각이다."""
+        latest = read_at - BLOCK_SEC - self.latency
+        if self._t0 is None or overflowed:
+            self._t0 = latest - self._n * BLOCK_SEC
+            self._lags.clear()
+        counted = self._t0 + self._n * BLOCK_SEC
+        if counted > latest:
+            self._t0 -= counted - latest
+            counted = latest
+            self._lags.clear()
+        self._lags.append((read_at, latest - counted))
+        while read_at - self._lags[0][0] > self.window:
+            self._lags.popleft()
+        span = read_at - self._lags[0][0]
+        # 창이 반 넘게 찼고, 블록을 실제보다 빨리 받고 있지 않을 때만 본다(몰아 받는 중이 아님)
+        if span >= self.window / 2 and len(self._lags) * BLOCK_SEC <= 1.5 * span + BLOCK_SEC:
+            lag = min(lag for _, lag in self._lags)
+            if lag > self.tolerance:
+                self._t0 += lag
+                counted += lag
+                self._lags.clear()
+        self._n += 1
+        self._last = max(counted, self._last + 1e-6)
+        return self._last
 
 
 class Microphone:
@@ -48,14 +115,10 @@ class Microphone:
 
     def blocks(self) -> Iterator[tuple[np.ndarray, float]]:
         """(블록, 그 블록 첫 샘플의 시각) 을 계속 낸다. 그만 받으려면 for 문을 빠져나온다."""
-        block, _ = self._stream.read(BLOCK)
-        # 방금 읽은 블록 길이만큼, 그리고 장치가 알려 준 입력 지연만큼 거슬러 올라간다.
-        t0 = time.monotonic() - BLOCK / SAMPLE_RATE - self._stream.latency
-        for n in itertools.count():
-            yield block[:, 0], t0 + n * BLOCK / SAMPLE_RATE
+        clock = BlockClock(self._stream.latency)
+        while True:
             block, overflowed = self._stream.read(BLOCK)
-            if overflowed:  # 놓친 샘플이 있으면 샘플 수로 센 시각이 밀리므로 다시 맞춘다
-                t0 = time.monotonic() - (n + 2) * BLOCK / SAMPLE_RATE - self._stream.latency
+            yield block[:, 0], clock.stamp(time.monotonic(), overflowed)
 
 
 class MicStream:
