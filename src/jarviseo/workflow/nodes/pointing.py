@@ -66,7 +66,11 @@ def clarify(state: JarviseoState, deps: GraphDeps) -> dict:
     # 질문을 다 말한 뒤에 들린 호출어는 새로 부른 것이다. 질문 첫머리의 호출어가
     # 한 번 더 잡힌 것은 이보다 이르다.
     question_end = state["utterance"].ended_at
-    if deps.tts.last_interrupted or _called_since(deps, question_end):
+
+    def called_again() -> bool:
+        return _called_since(deps, question_end)
+
+    if deps.tts.last_interrupted or called_again():
         return _called_again(state)  # 되묻는 중에 다시 불러서 되묻기가 끊겼다
     # 사진을 새로 고르지 않는다(on_speech_start 없음). 대답하는 사이 고개를 돌렸어도
     # 처음 가리킨 장면에서 다시 골라야 한다.
@@ -74,9 +78,14 @@ def clarify(state: JarviseoState, deps: GraphDeps) -> dict:
     # "컵" 한 글자는 "급"·"켭"으로 틀리기 쉽다. 장면에 있는 후보 이름을 힌트로 같이 준다.
     names = (korean_name(c.detection.label) for c in target.candidates)
     hints = tuple(dict.fromkeys((*REPLY_HINTS, *names)))
-    reply = deps.stt.listen(timeout=REPLY_SEC, min_letters=1, hints=hints)
-    if _called_since(deps, question_end):
-        return _called_again(state)  # 대답을 기다리는 동안 다시 불렀다. 받아쓴 말은 새 질문이다
+    # 대답을 기다리다 다시 부르면 그 자리에서 듣기를 멈춘다. 5초를 다 채우면 사용자는 신호(시작음)를
+    # 기다리며 말을 멈추고, 다음 턴은 "자비서"만 다시 읽어 "네, 말씀하세요"를 해야 했다(세션 11).
+    # 되묻는 말 끝에 걸쳐 부르면 감지가 재생 뒤로 밀리는데(감지 지연 최대 0.33초), 그 감지도 듣기를
+    # 시작한 뒤에 들어오므로 여기서 잡힌다. 듣기 전에 그만큼 쉬지 않는 것은, 쉬는 동안 시작한
+    # 대답("왼쪽") 앞부분이 잘리기 때문이다(since 없는 listen 은 부른 뒤 소리부터 읽는다).
+    reply = deps.stt.listen(timeout=REPLY_SEC, min_letters=1, hints=hints, stop=called_again)
+    if called_again():
+        return _called_again(state)  # 대답을 기다리는 동안 다시 불렀다. 그 말은 새 질문이다
     if reply is None:
         return {"response": canned_response(state, CLARIFY_GIVE_UP)}
     # 한 개짜리 리스트로 줘야 리듀서(operator.add)가 앞의 대답 뒤에 이어 붙인다.

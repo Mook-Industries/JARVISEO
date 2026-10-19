@@ -327,6 +327,8 @@ def test_new_call_while_waiting_for_reply_ends_turn():
     assert deps.tts.spoken == [QUESTION]
     # 질문을 다 말한 뒤에 들린 호출만 센다
     assert set(seen) == {result["utterance"].ended_at}
+    # 대답 듣기를 그 자리에서 멈춰서(stop) 새 질문은 다음 턴의 listen 이 받는다
+    assert deps.stt.listen().text == "이건 뭐야?"
 
 
 # --- 재촬영 ------------------------------------------------------------------
