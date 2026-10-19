@@ -20,11 +20,14 @@ from jarviseo.voice import FakeSpeechToText, FakeTextToSpeech
 from jarviseo.workflow import GraphDeps, build_graph
 from jarviseo.workflow.graph import RECURSION_LIMIT
 from jarviseo.workflow.messages import CLARIFY_GIVE_UP, RECAPTURE_GIVE_UP
+from jarviseo.workflow.nodes.answer import POINTING_CONTEXT
 
 FULL = (1080, 1920, 3)
 # 아래 왼쪽 컵 박스 (400,500)-(700,900) 300×400 에 사방 15% 여백. 긴 변 520 이라 VLM 에도 그대로
 CROP = (520, 390, 3)
 QUESTION = "왼쪽 컵이요, 오른쪽 컵이요?"
+# 가리킨 질문이 VLM 에 갈 때의 모양(크롭이라는 맥락 + 검출기 추정 이름 + 원래 질문)
+PROMPT = POINTING_CONTEXT.format(name="컵", question="저거 뭐야?")
 TWO_CUPS = [
     Detection("cup", 0.9, BBox(400, 500, 700, 900)),
     Detection("cup", 0.9, BBox(1200, 500, 1500, 900)),
@@ -104,7 +107,7 @@ def test_pointing_question_sends_chosen_crop_to_vlm():
     ((sent, question, _),) = deps.vlm.asked
     # 프로젝트 핵심 결정: VLM 에는 전체 프레임이 아니라 고른 대상의 크롭이 간다.
     assert sent.image.shape == CROP
-    assert question == "저거 뭐야?"
+    assert question == PROMPT  # 잘린 사진이라는 맥락을 붙여 보낸다
     assert result["response"].used_frame.image.shape == FULL  # 기록에는 원본 장면
     assert result["response"].target is result["target"]
     assert deps.tts.spoken == ["컵이에요."]
@@ -188,7 +191,7 @@ def test_ambiguous_asks_and_resolves_with_reply():
     assert deps.resolve.calls == [("저거 뭐야?", []), ("저거 뭐야?", ["왼쪽 거"])]
     assert result["clarify_replies"] == ["왼쪽 거"]
     assert result["clarify_count"] == 1
-    assert deps.vlm.asked[0][1] == "저거 뭐야?"  # VLM 질문은 처음 질문 그대로
+    assert deps.vlm.asked[0][1] == PROMPT  # 되묻기 대답은 빼고 처음 질문에 맥락만
 
 
 class _HintSTT(FakeSpeechToText):
@@ -338,6 +341,28 @@ def test_pointing_result_is_logged(store):
         assert inference.resolved_by == "MODEL"
         rows = db.query(TurnCandidate).filter_by(turn_id=result["turn_id"]).all()
         assert sorted(r.is_chosen for r in rows) == [False, True]
+
+
+class _Dialog:
+    """DialogMemory.remember 와 같은 모양. 기억에 넣으라고 받은 질문 · 대답을 모은다."""
+
+    def __init__(self) -> None:
+        self.remembered: list[tuple[str, str]] = []
+
+    def remember(self, user_id, turn_id, question, answer) -> None:
+        self.remembered.append((question, answer))
+
+
+def test_pointing_context_is_not_saved_to_dialog_memory(store):
+    """맥락 문장은 VLM 에만 가고, 대화 기억에는 사용자가 한 원래 질문이 들어간다."""
+    user_id = store.ensure_user()
+    turn = {"session_id": store.start_session(user_id), "user_id": user_id}
+    deps = _deps(["저거 뭐야?"], store=store, dialog=_Dialog())
+
+    build_graph(deps).invoke(turn)
+
+    assert deps.vlm.asked[0][1] == PROMPT
+    assert deps.dialog.remembered == [("저거 뭐야?", "컵이에요.")]
 
 
 def test_gave_up_clarify_turn_has_no_resolver(store):

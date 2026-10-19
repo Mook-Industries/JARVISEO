@@ -200,3 +200,7 @@ WAKE_LOOKBACK_SEC = _get_float("JARVISEO_WAKE_LOOKBACK_SEC", 1.0)
 # VLM 답이 이 시간(초) 안에 안 오면 "잠깐만요"를 먼저 읽는다. 안경에는 화면이 없어서
 # 아무 소리가 없으면 사용자는 못 들은 줄 안다. gpt-6-sol 왕복은 3번 재서 1.7~2.8초였다(10/14).
 FILLER_AFTER_SEC = _get_float("JARVISEO_FILLER_AFTER_SEC", 1.5)
+
+# VLM 답을 이 시간(초)까지만 기다리고, 넘으면 안내 문장으로 턴을 끝낸다. 클라이언트 타임아웃이
+# 10초 × 재시도 1번이라 그대로 두면 최악 20초를 기다린다. spike 3 에서 45번 중 1번(6.5초)만 넘었다.
+VLM_DEADLINE_SEC = _get_float("JARVISEO_VLM_DEADLINE_SEC", 5.0)
