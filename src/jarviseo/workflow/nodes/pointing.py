@@ -3,7 +3,9 @@
 detect      : 사진에서 물체 후보를 찾는다 (pointing/detector.py)
 resolve     : 후보 중 가리킨 대상을 고른다 (pointing/resolver.py)
 clarify     : 1·2위가 비슷하면 되묻고 대답을 듣는다. 사진은 다시 고르지 않는다.
-              2번 넘거나 대답이 없거나 후보가 없으면 "다시 가리켜 주세요"로 끝낸다
+              2번 넘거나 대답이 없거나 후보가 없으면 "다시 가리켜 주세요"로 끝낸다.
+              되묻는 중이나 대답을 기다리는 중에 "자비서"라고 다시 부르면 그 말은 대답이 아니라
+              새 질문이다. 빈 대답으로 기록만 하고 끝내서, 새 질문은 다음 턴(BARGE_IN)이 받는다
 crop_target : 고른 대상을 여백 15% 넣어 잘라낸다 (pointing/crop.py). 성분 판정은 이 크롭 그대로,
               VLM 에는 generate 가 크기를 맞춰 보낸다
 """
@@ -61,6 +63,11 @@ def clarify(state: JarviseoState, deps: GraphDeps) -> dict:
     if not target.candidates or count >= MAX_CLARIFY:
         return {"response": canned_response(state, CLARIFY_GIVE_UP)}
     deps.tts.speak(target.clarify_question or CLARIFY_GIVE_UP)
+    # 질문을 다 말한 뒤에 들린 호출어는 새로 부른 것이다. 질문 첫머리의 호출어가
+    # 한 번 더 잡힌 것은 이보다 이르다.
+    question_end = state["utterance"].ended_at
+    if deps.tts.last_interrupted or _called_since(deps, question_end):
+        return _called_again(state)  # 되묻는 중에 다시 불러서 되묻기가 끊겼다
     # 사진을 새로 고르지 않는다(on_speech_start 없음). 대답하는 사이 고개를 돌렸어도
     # 처음 가리킨 장면에서 다시 골라야 한다.
     # 대답은 "컵"처럼 한 글자일 수 있다. 기본(두 글자 미만은 버림)대로면 대답이 없던 것이 된다.
@@ -68,14 +75,30 @@ def clarify(state: JarviseoState, deps: GraphDeps) -> dict:
     names = (korean_name(c.detection.label) for c in target.candidates)
     hints = tuple(dict.fromkeys((*REPLY_HINTS, *names)))
     reply = deps.stt.listen(timeout=REPLY_SEC, min_letters=1, hints=hints)
+    if _called_since(deps, question_end):
+        return _called_again(state)  # 대답을 기다리는 동안 다시 불렀다. 받아쓴 말은 새 질문이다
     if reply is None:
         return {"response": canned_response(state, CLARIFY_GIVE_UP)}
     # 한 개짜리 리스트로 줘야 리듀서(operator.add)가 앞의 대답 뒤에 이어 붙인다.
     return {"clarify_replies": [reply.text], "clarify_count": count + 1}
 
 
-def after_clarify(state: JarviseoState) -> Literal["gave_up", "replied"]:
+def after_clarify(state: JarviseoState) -> Literal["called_again", "gave_up", "replied"]:
+    if state.get("interrupted"):
+        return "called_again"  # 읽을 것 없이 기록만
     return "gave_up" if "response" in state else "replied"  # 포기 안내를 만들었으면 읽으러
+
+
+def _called_since(deps: GraphDeps, t: float) -> bool:
+    return deps.called_since is not None and deps.called_since(t)
+
+
+def _called_again(state: JarviseoState) -> dict:
+    """되묻다가 다시 불렸을 때. 답을 버린 generate 처럼 빈 대답으로 기록만 한다.
+
+    빈 대답이라 대화 기억에는 안 들어가고, interrupted 라서 쌓인 호출이 다음 턴(BARGE_IN)이 된다.
+    """
+    return {"response": canned_response(state, ""), "interrupted": True}
 
 
 def crop_target(state: JarviseoState, deps: GraphDeps) -> dict:

@@ -194,7 +194,8 @@ def run(
             save_photos(state, photo_dir, number, store)
         if "turn_id" in state:
             turns.append(state.get("latency_ms", {}))
-        # 대답을 읽다 끊겼거나 기다리는 동안 다시 불렀으면 그 호출이 쌓여 있고, 다음 턴이 된다.
+        # 대답을 읽다 끊겼거나 기다리는 동안(되묻는 중도) 다시 불렀으면 그 호출이 쌓여 있고,
+        # 다음 턴이 된다.
         # 끝까지 읽었으면 질문하는 동안 다시 잡힌 호출어 같은 지난 감지는 버린다.
         trigger = "BARGE_IN" if state.get("interrupted") else "WAKEWORD"
         if trigger == "WAKEWORD":
@@ -242,6 +243,7 @@ def main() -> None:
             memory=dialog.memory,
             dialog=dialog,
             collector=collector,
+            called_since=barge.called_since,  # 되묻는 동안 다시 불렀는지
             detector=object_detector,
             resolve=resolve_target,
             checker=checker,
