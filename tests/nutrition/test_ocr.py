@@ -325,6 +325,13 @@ def test_finds_header_with_cut_first_letter():
     assert sec.ingredients == "밀가루(밀 미국산), 백설탕"
 
 
+def test_finds_cut_header_misread_as_dae():
+    """첫 글자가 잘리고 '재'를 '대'로 읽은 머리말도 찾는다 (label_01 실측)."""
+    sec = split_sections("대료명 밀가루(밀 미국산) 백설탕 장재질 폴리프로필렌")
+    assert sec.has_ingredient_header
+    assert sec.ingredients == "밀가루(밀 미국산) 백설탕"
+
+
 def test_ingredients_end_at_storage_notice():
     """보관 안내에서 원재료가 끝난다."""
     # "얼지 않게"의 '게'가 알레르겐(게)으로 잡히던 문제

@@ -454,3 +454,13 @@ def test_close_closes_food_qr():
     qr = FakeQr()
     checker(FakeReader((LABEL, 0.9)), food_qr=qr).close()
     assert qr.closed
+
+
+def test_upright_panel_without_header_is_not_rotated(monkeypatch):
+    """머리말을 못 찾아도 높은 신뢰도로 많이 읽었으면 돌려 읽지 않는다 (OCR 호출을 줄인다)."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    upright = ["밀가루, 설탕, 탈지분유, 정제소금, 코코아분말, 식물성유지", "땅콩, 호두, 대두 함유"]
+    reader = FakeReader((upright, 0.95))
+    r = checker(reader, try_rotation=True).check(CROP, ["땅콩"])
+    assert r.rotation == 0
+    assert reader.calls == 2  # 그대로 1번 + 재처리 1번. 90°·270° 는 읽지 않는다
