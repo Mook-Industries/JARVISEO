@@ -80,18 +80,27 @@ class FakeTextToSpeech:
 
     prepare() 는 글자를 그대로 바이트로 주고, play() 는 그걸 글자로 되돌려 ``spoken`` 에 넣는다.
     그래서 미리 만든 "잠깐만요"를 읽은 것도 ``spoken`` 에서 보인다.
+
+    interrupt 에 글자를 주면 그 글자가 든 문장을 speak() 할 때 끼어들기로 끊긴 것처럼
+    ``last_interrupted`` 가 True 가 된다. 글자 하나는 한 번만 끊고 지운다.
+
+        tts = FakeTextToSpeech(interrupt=["왼쪽 컵이요"])  # 되묻는 중에 다시 불렀다
     """
 
-    def __init__(self) -> None:
+    def __init__(self, interrupt: Iterable[str] = ()) -> None:
         self.spoken: list[str] = []
         # prefetch() 로 미리 합성하라고 받은 문장
         self.prefetched: list[str] = []
         self.last_latency_ms: float | None = None
         self.last_interrupted = False
+        self._interrupt = list(interrupt)
 
     def speak(self, text: str) -> float | None:
         self.spoken.append(text)
-        self.last_latency_ms, self.last_interrupted = 0.0, False
+        cut = next((part for part in self._interrupt if part in text), None)
+        if cut is not None:
+            self._interrupt.remove(cut)
+        self.last_latency_ms, self.last_interrupted = 0.0, cut is not None
         return 0.0
 
     def prefetch(self, text: str) -> None:

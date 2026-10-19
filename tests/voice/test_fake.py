@@ -76,3 +76,14 @@ def test_fake_tts_collects_sentences():
 
     assert tts.speak("안녕하세요") >= 0
     assert tts.spoken == ["안녕하세요"]
+
+
+def test_fake_tts_interrupts_sentence_once():
+    """Fake TTS 는 `interrupt` 글자가 든 문장을 한 번 끊긴 것으로 친다."""
+    tts = FakeTextToSpeech(interrupt=["왼쪽 컵이요"])
+
+    tts.speak("왼쪽 컵이요, 오른쪽 컵이요?")
+    assert tts.last_interrupted is True
+    tts.speak("왼쪽 컵이요, 오른쪽 컵이요?")  # 같은 글자는 한 번만 끊는다
+    assert tts.last_interrupted is False
+    assert tts.spoken == ["왼쪽 컵이요, 오른쪽 컵이요?"] * 2
