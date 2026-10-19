@@ -190,7 +190,8 @@ def test_sounding_marks_delayed_span_without_muting():
     gate = MicGate()
     entered = time.monotonic()
     with gate.sounding(delay=0.1):
-        assert gate.is_sounding(entered + 0.1)
+        # 경계 바로 그 시각은 시계 단위에 따라 갈린다(리눅스·맥은 촘촘해 표시가 몇 μs 늦게 시작)
+        assert gate.is_sounding(entered + 0.11)
         assert gate.is_sounding(entered + 10.0)  # 내는 동안은 끝을 모른다
     left = time.monotonic()
     block = np.ones(BLOCK, np.int16)

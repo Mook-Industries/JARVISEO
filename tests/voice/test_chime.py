@@ -125,8 +125,9 @@ def test_chime_marks_sound_for_vad(speaker_log, which):
     done = time.monotonic()
 
     played = getattr(chime, f"{which}_played_at")
-    assert not gate.is_sounding(played)  # 아직 스피커에서 안 나왔다
-    assert gate.is_sounding(played + 0.05)
+    # 경계 바로 그 시각은 시계 단위에 따라 갈려서(리눅스·맥은 표시가 몇 μs 늦게 시작) 비켜 본다
+    assert not gate.is_sounding(played + 0.04)  # 아직 스피커에서 안 나왔다
+    assert gate.is_sounding(played + 0.06)
     assert gate.is_sounding(done + 0.05)  # 다 쓴 뒤에도 출력 지연 + 울림만큼 남는다
     assert not gate.is_sounding(done + 0.05 + SOUND_TAIL_SEC + 0.01)
 
