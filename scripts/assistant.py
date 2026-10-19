@@ -3,7 +3,7 @@
 웹캠·마이크·스피커를 열고 "자비서"를 기다린다. 부르면 그래프(src/jarviseo/workflow/graph.py)로
 질문 한 번을 돌린다: 받아쓰기 → 의도 → (기억 검색 · 가리킴 · 성분 판정) → VLM → 읽기 → 기록.
 대답을 읽거나 기다리는 중에 "자비서"라고 부르면 끊고 새 질문을 받는다(끼어들기).
-부르면 시작음을, 턴이 끝나 다시 호출을 기다리게 되면 종료음을 낸다(JARVISEO_CHIME_VOLUME=0 이면 끔).
+부르면 시작음을, 질문하는 말이 끝나면(받아쓰기 전) 종료음을 낸다(JARVISEO_CHIME_VOLUME=0 이면 끔).
 OpenAI 키와 호출어 모델(data/models/jarviseo.onnx, data/README.md)이 필요하다.
 
 실행 (레포 맨 위 폴더에서):
@@ -188,20 +188,17 @@ def run(
             "trigger_type": trigger,
         }
         state = graph.invoke(turn)
-        # 대답을 읽다 끊겼거나 기다리는 동안 다시 불렀으면 그 호출이 쌓여 있고, 다음 턴이 된다.
-        # 끝까지 읽었으면 질문하는 동안 다시 잡힌 호출어 같은 지난 감지는 버린다.
-        trigger = "BARGE_IN" if state.get("interrupted") else "WAKEWORD"
-        if trigger == "WAKEWORD":
-            barge.clear()
-            # 다시 불러도 된다는 신호. 끊긴 턴은 바로 다음 턴의 시작음이 나서 내지 않는다.
-            # 사진 저장보다 먼저 내야 대답 끝에 바로 붙는다. 종료음 도중에 부른 호출은 남는다.
-            chime.end()
         show(state)
         number += 1
         if photo_dir is not None:
             save_photos(state, photo_dir, number, store)
         if "turn_id" in state:
             turns.append(state.get("latency_ms", {}))
+        # 대답을 읽다 끊겼거나 기다리는 동안 다시 불렀으면 그 호출이 쌓여 있고, 다음 턴이 된다.
+        # 끝까지 읽었으면 질문하는 동안 다시 잡힌 호출어 같은 지난 감지는 버린다.
+        trigger = "BARGE_IN" if state.get("interrupted") else "WAKEWORD"
+        if trigger == "WAKEWORD":
+            barge.clear()
 
 
 def main() -> None:
@@ -237,7 +234,7 @@ def main() -> None:
 
     with MicStream(args.mic) as mic, Camera(WebcamSource(args.camera), frames):
         deps = GraphDeps(
-            stt=SpeechToText(mic=mic),
+            stt=SpeechToText(mic=mic, on_speech_end=chime.end),  # 질문 말이 끝나면 종료음
             tts=tts,
             vlm=vlm,
             frames=frames,
