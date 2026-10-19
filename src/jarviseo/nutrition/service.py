@@ -3,6 +3,15 @@
 크롭 이미지 한 장 → 바코드 조회 → (못 찾으면) 성분표 OCR → 판정 → 안내 문장.
 그래프 노드는 ``IngredientChecker.check`` 하나만 부르면 된다. LLM 을 쓰지 않는다.
 
+다른 모듈에서 붙일 때 (크롭 하나 + 성분 분석이 필요한지)
+------------------------------------------------------
+    checker = make_checker(store)          # 앱 시작 때 한 번 (OCR 모델·푸드QR 연결)
+    text = checker.answer(crop, needs_ingredient, user_allergens)
+    if text is not None:
+        tts.speak(text)                    # "해당 제품에는 밀, 대두가 들어 있고, ..."
+    checker.close()                        # 앱 끝날 때
+``needs_ingredient`` 가 False 면 아무것도 하지 않고 None 을 돌려준다(바코드·OCR 안 돎).
+
 재처리·재촬영 (기획 05-workflow 5.4, 2026-10-02 반영)
 ------------------------------------------------------
 0. OCR 전에 사진 품질을 본다(quality.py). 흐리거나 반사가 심하면 OCR 을 돌리지 않고
@@ -36,6 +45,7 @@ from jarviseo.nutrition.barcode import (
     FoodQrClient,
     MfdsClient,
     lookup_product,
+    make_food_qr_client,
 )
 from jarviseo.nutrition.ocr import (
     OcrReader,
@@ -152,6 +162,30 @@ class IngredientChecker:
         self.max_retake = max_retake
 
     # -- 진입점 ------------------------------------------------------------
+
+    def answer(
+        self, crop: np.ndarray | None, needs_ingredient: bool, user_allergens: list[str]
+    ) -> str | None:
+        """다른 모듈이 부르는 입구. 성분 분석이 필요할 때만 돌고, 읽어 줄 문장 하나를 돌려준다.
+
+        Args:
+            crop: 가리킨 물건 하나를 자른 이미지 (BGR).
+            needs_ingredient: 성분 분석이 필요한가. False 면 바로 None (아무것도 안 돈다).
+            user_allergens: 사용자가 등록한 알레르기 (예: ["계란", "땅콩"]).
+
+        Returns:
+            "해당 제품에는 밀이 들어 있고, 새우는 ... 섞여 들어갔을 수 있어요." 같은 문장.
+            사진으로 못 읽으면 재촬영 안내 문장. 분석이 필요 없거나 크롭이 없으면 None.
+        """
+        if not needs_ingredient or crop is None or crop.size == 0:
+            return None
+        result = self.check(crop, user_allergens)
+        return result.retake or result.message
+
+    def close(self) -> None:
+        """푸드QR 연결을 닫는다. 앱이 끝날 때 한 번 부른다."""
+        if self.food_qr is not None:
+            self.food_qr.close()
 
     def check(
         self,
@@ -387,3 +421,11 @@ class IngredientChecker:
 
 def _ms(t0: float) -> int:
     return round((time.perf_counter() - t0) * 1000)
+
+
+def make_checker(store=None, **kwargs) -> IngredientChecker:
+    """앱에서 쓸 판정기. 푸드QR 인증키가 있으면 푸드QR 까지 붙인다(없으면 캐시 → OCR).
+
+    OCR 모델과 동의어 사전을 한 번만 읽도록 앱 시작 때 하나만 만들어 돌려 쓴다.
+    """
+    return IngredientChecker(store=store, food_qr=make_food_qr_client(), **kwargs)
