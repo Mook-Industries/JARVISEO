@@ -6,7 +6,8 @@
 재생 중에 STT 쪽 마이크를 막는 게이트(``gate.py``)는 둘이 알아서 같이 쓴다.
 호출어 감지(``WakeWordDetector``)와 STT 는 ``MicStream`` 하나를 같이 읽는다.
 읽어 주는 중에 호출어가 들리면 ``BargeIn`` 이 재생을 끊고 그 호출을 다음 턴으로 넘긴다.
-호출을 받으면 ``Chime.start()`` 로 시작음을, 턴이 끝나면 ``Chime.end()`` 로 종료음을 낸다.
+호출을 받으면 ``Chime.start()`` 로 시작음을, 질문하는 말이 끝나면 ``Chime.end()`` 로 종료음을 낸다
+(``SpeechToText(on_speech_end=chime.end)``).
 실제 구현이 끝나기 전이나 CI 에서는 모양이 같은 Fake 를 끼운다.
 """
 

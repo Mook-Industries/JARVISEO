@@ -68,8 +68,8 @@ class Speaker:
         그때까지 받은 소리는 마저 내고 예외를 그대로 올린다. stop() 으로 끊기면 chunks 를
         더 읽지 않고 돌아온다(닫는 것은 chunks 를 만든 쪽이 한다).
 
-        mute_mic=False 면 게이트를 닫지 않는다. 사용자가 말하는 도중에 내는 시작음용이다.
-        대신 소리가 마이크에 들어가는 구간을 게이트에 표시한다(``MicGate.sounding``).
+        mute_mic=False 면 게이트를 닫지 않는다. 사용자가 말하는 도중이나 말끝에 내는 시작음·종료음
+        용이다. 대신 소리가 마이크에 들어가는 구간을 게이트에 표시한다(``MicGate.sounding``).
         """
         self._stop.clear()
         self.interrupted, self.stopped_at, self.started_at = False, None, None
@@ -97,7 +97,7 @@ class Speaker:
             ) as out,
         ):
             self.started_at = time.monotonic()
-            # 마이크를 안 막는 소리(시작음)는 마이크에 들어가는 구간만 표시한다. VAD 가 말로 안 본다
+            # 마이크를 안 막는 소리(시작음·종료음)는 마이크에 들어가는 구간만 표시한다(VAD 가 무시)
             with nullcontext() if mute_mic else self.gate.sounding(out.latency):
                 for chunk in itertools.chain([first], chunks):
                     if not self._write(out, chunk):

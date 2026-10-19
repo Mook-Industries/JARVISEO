@@ -1,4 +1,4 @@
-"""시작음·종료음 파일을 맞게 읽고, 시작음은 게이트를 열어 둔 채 종료음은 닫고 내는지 확인한다.
+"""시작음·종료음 파일을 맞게 읽고, 둘 다 게이트를 열어 둔 채 다른 스레드에서 내는지 확인한다.
 
 스피커는 부르지 않는다.
 """
@@ -88,74 +88,61 @@ def test_load_sound_rejects_other_format(tmp_path):
         load_sound(path)
 
 
-def test_start_plays_without_closing_gate(speaker_log):
-    """시작음은 게이트를 닫지 않는다. 그 사이에 이어 말한 질문이 무음으로 바뀌면 안 된다."""
+@pytest.mark.parametrize("which", ["start", "end"])
+def test_chime_plays_in_background_without_closing_gate(speaker_log, which):
+    """시작음·종료음은 바로 돌아오고 게이트를 닫지 않는다.
+
+    시작음 사이에 이어 말한 질문, 종료음 사이에 이어 말한 말(말끝을 잘못 판정했을 때)이
+    무음으로 바뀌면 안 된다.
+    """
     gate = MicGate()
     gate.on_playback(speaker_log.append)
     chime = Chime(gate=gate)
+    pcm = chime.start_pcm if which == "start" else chime.end_pcm
 
     asked = time.monotonic()
-    chime.start()
+    getattr(chime, which)()
     chime.wait()
 
     assert speaker_log[0] == ("open", "low")
     assert True not in speaker_log and False not in speaker_log  # 게이트 훅이 안 불렸다
-    assert written(speaker_log) == len(chime.start_pcm)
+    assert written(speaker_log) == len(pcm)
     assert gate.is_open(time.monotonic())
-    assert chime.speaker.started_at >= asked
+    assert getattr(chime, f"{which}_played_at") >= asked
 
 
-def test_start_marks_sound_for_vad(speaker_log):
-    """시작음이 스피커에서 나오는 구간(출력 지연 0.05초 뒤부터)을 게이트에 표시한다.
+@pytest.mark.parametrize("which", ["start", "end"])
+def test_chime_marks_sound_for_vad(speaker_log, which):
+    """소리가 스피커에서 나오는 구간(출력 지연 0.05초 뒤부터)을 게이트에 표시한다.
 
     STT 의 VAD 가 그 구간을 말로 보지 않아야 "자비서." 하고 쉰 틈을 시작음이 메우지 않는다.
     """
     gate = MicGate()
     chime = Chime(gate=gate)
 
-    chime.start()
+    getattr(chime, which)()
     chime.wait()
     done = time.monotonic()
 
-    started = chime.speaker.started_at
-    assert not gate.is_sounding(started)  # 아직 스피커에서 안 나왔다
-    assert gate.is_sounding(started + 0.05)
+    played = getattr(chime, f"{which}_played_at")
+    assert not gate.is_sounding(played)  # 아직 스피커에서 안 나왔다
+    assert gate.is_sounding(played + 0.05)
     assert gate.is_sounding(done + 0.05)  # 다 쓴 뒤에도 출력 지연 + 울림만큼 남는다
     assert not gate.is_sounding(done + 0.05 + SOUND_TAIL_SEC + 0.01)
 
 
-def test_end_does_not_mark_sound(speaker_log):
-    """종료음은 게이트를 닫아서 따로 표시하지 않는다."""
-    gate = MicGate()
-
-    Chime(gate=gate).end()
-
-    assert not gate.is_sounding(time.monotonic() - 0.01)
-
-
-def test_end_closes_gate_like_tts(speaker_log):
-    """종료음은 TTS 처럼 소리 전에 게이트를 닫고 다 낸 뒤 연다(유예 0.3초)."""
-    gate = MicGate(grace_sec=0.3)
-    gate.on_playback(speaker_log.append)
-    chime = Chime(gate=gate)
-
-    chime.end()
-
-    assert speaker_log[0] is True and speaker_log[-2:] == ["stop", False]
-    assert written(speaker_log) == len(chime.end_pcm)
-    assert not gate.is_open(time.monotonic())  # 끝난 직후는 아직 유예 중
-
-
-def test_end_waits_for_start_to_finish(speaker_log):
-    """시작음이 나는 중에 end() 를 부르면 시작음을 다 낸 뒤 종료음을 낸다."""
+def test_end_plays_after_start_finishes(speaker_log):
+    """시작음이 나는 중에 end() 를 부르면 바로 돌아오고, 시작음을 다 낸 뒤 종료음을 낸다."""
     chime = Chime(gate=MicGate())
 
     chime.start()
     chime.end()
+    chime.wait()
 
     opened = [i for i, entry in enumerate(speaker_log) if isinstance(entry, tuple)]
     assert len(opened) == 2
     assert "stop" in speaker_log[opened[0] : opened[1]]  # 시작음 스트림을 닫은 뒤 다시 열었다
+    assert chime.start_played_at <= chime.end_played_at  # 윈도우 시계는 약 16ms 단위다
 
 
 def test_zero_volume_never_opens_speaker(speaker_log):
@@ -164,5 +151,6 @@ def test_zero_volume_never_opens_speaker(speaker_log):
 
     chime.start()
     chime.end()
+    chime.wait()
 
     assert speaker_log == []

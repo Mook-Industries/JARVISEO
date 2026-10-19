@@ -70,7 +70,7 @@ def record_speech(
 
     timeout 초 안에 시작을 못 잡으면 None. 말이 max_sec 를 넘으면 거기서 자른다.
     ignore(블록 시각) 가 True 인 블록은 말로 보지 않는다. 소리는 녹음에 그대로 남는다.
-    시작음이 섞인 구간을 넘길 때 쓴다(``MicGate.is_sounding``).
+    시작음·종료음이 섞인 구간을 넘길 때 쓴다(``MicGate.is_sounding``).
     is_speech 는 테스트에서 판정을 바꿔 끼울 때만 넘긴다.
     """
     is_speech = is_speech or _webrtcvad()

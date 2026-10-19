@@ -57,17 +57,23 @@ class SpeechToText:
         device: int | None = None,
         mic: MicStream | None = None,
         client: OpenAI | None = None,
+        on_speech_end: Callable[[], None] | None = None,
     ) -> None:
         """device 는 sounddevice 입력 장치 번호다. None 이면 기본 마이크.
 
         mic 를 주면 호출어 감지와 같이 쓰는 그 마이크를 읽고, listen(since=...) 로 지나간 소리부터
         받을 수 있다. 없으면 listen() 때마다 마이크를 열었다 닫는다.
         client 는 테스트에서 가짜 API 를 끼울 때만 넘긴다.
+
+        on_speech_end 는 listen() 이 사용자 말이 끝났다고 판정한 순간, 받아쓰기 요청을 보내기 전에
+        부른다. 종료음(``Chime.end``)을 넘긴다. 바로 돌아와야 받아쓰기가 늦어지지 않는다.
+        호출어만 듣고 끝난 녹음(다시 듣는 경우)에는 부르지 않는다.
         """
         self.model = model
         self.language = language
         self.device = device
         self.mic = mic
+        self.on_speech_end = on_speech_end
         # 키가 비어 있으면 None 으로 넘긴다. 그래야 첫 요청이 아니라 여기서 바로 알려 준다.
         self.client = client or OpenAI(
             api_key=config.OPENAI_API_KEY or None, timeout=TIMEOUT_SEC, max_retries=RETRIES
@@ -113,18 +119,22 @@ class SpeechToText:
         self.last_raw_text = self.last_latency_ms = None
 
         def question(speech: Speech | None) -> Utterance | None:
+            if speech is not None and self.on_speech_end is not None:
+                self.on_speech_end()  # 말이 끝났다(종료음). 받아쓰기와 같이 간다
             return self._question(speech, min_letters, hints)
 
         # TTS 가 재생 중이거나 막 끝났으면 그동안 들어온 소리는 무음으로 바뀐다(gate.py).
+        # 시작음·종료음이 마이크에 들어간 구간은 말로 보지 않는다(gate.sounding, #104).
+        ours = MIC_GATE.is_sounding
         if self.mic is None:
             # 받아쓰는 동안 마이크를 붙잡고 있지 않게, 녹음이 끝나면 바로 닫는다.
             with Microphone(self.device) as mic:
                 blocks = MIC_GATE.mute(mic.blocks())
-                speech = record_speech(blocks, on_speech_start, timeout=timeout)
+                speech = record_speech(blocks, on_speech_start, timeout=timeout, ignore=ours)
             return question(speech)
         if since is None:
             blocks = MIC_GATE.mute(self.mic.blocks())
-            speech = record_speech(blocks, on_speech_start, timeout=timeout)
+            speech = record_speech(blocks, on_speech_start, timeout=timeout, ignore=ours)
             return question(speech)
 
         floor = since - WAKE_LAG_SEC
@@ -136,9 +146,9 @@ class SpeechToText:
         blocks = MIC_GATE.mute(self.mic.blocks(since=since - config.WAKE_LOOKBACK_SEC))
 
         def record() -> Speech | None:
-            # 호출 뒤 시작음이 난 구간은 말로 보지 않는다(gate.sounding). 안 그러면 "자비서." 하고
-            # 쉬었다가 질문할 때 시작음이 그 쉼을 메워 호출어와 질문이 한 발화로 붙는다(#104).
-            return record_speech(blocks, started, timeout=timeout, ignore=MIC_GATE.is_sounding)
+            # 시작음 구간을 말로 안 봐야 "자비서." 하고 쉬었다가 질문할 때 시작음이 그 쉼을 메워
+            # 호출어와 질문이 한 발화로 붙지 않는다(#104).
+            return record_speech(blocks, started, timeout=timeout, ignore=ours)
 
         speech = record()
         if speech is not None and speech.ended_at <= since + WAKE_ONLY_SEC:

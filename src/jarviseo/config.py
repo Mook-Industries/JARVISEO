@@ -190,7 +190,7 @@ WAKEWORD_PLAYBACK_THRESHOLD = _get_float("JARVISEO_WAKEWORD_PLAYBACK_THRESHOLD",
 # 잘리지 않게 한다. 호출어("자비서" 길이 중앙 0.57초)가 통째로 들어가야 받아쓴 뒤
 # transcript.clean 이 지운다. 0.4초로는 끝 "서"만 들어가 "그래서"·"여기서"로 받아써졌다.
 WAKE_LOOKBACK_SEC = _get_float("JARVISEO_WAKE_LOOKBACK_SEC", 1.0)
-# 시작음("자비서"를 알아들음)·종료음(대답이 끝남) 크기. 0~1 로 파일 소리에 곱한다. 0 이면 안 낸다.
+# 시작음("자비서"를 알아들음)·종료음(질문을 다 들음) 크기. 0~1 로 파일 소리에 곱한다. 0 이면 끔.
 CHIME_VOLUME = _get_float("JARVISEO_CHIME_VOLUME", 1.0)
 # VLM 답이 이 시간(초) 안에 안 오면 "잠깐만요"를 먼저 읽는다. 안경에는 화면이 없어서
 # 아무 소리가 없으면 사용자는 못 들은 줄 안다. gpt-6-sol 왕복은 3번 재서 1.7~2.8초였다(10/14).

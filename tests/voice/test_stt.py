@@ -153,6 +153,28 @@ def test_listen_skips_api_without_speech(heard, monkeypatch):
     assert client.requests == []
 
 
+def test_listen_calls_on_speech_end_before_transcribing(heard):
+    """말이 끝났다고 판정하면 받아쓰기 요청을 보내기 전에 `on_speech_end` 를 부른다(종료음)."""
+    client = FakeClient()
+    sent = []  # 종료음을 낼 때까지 보낸 받아쓰기 요청 수
+
+    s = stt.SpeechToText(client=client, on_speech_end=lambda: sent.append(len(client.requests)))
+    s.listen()
+
+    assert sent == [0]  # 한 번, 요청을 보내기 전에
+    assert len(client.requests) == 1
+
+
+def test_listen_without_speech_does_not_call_on_speech_end(heard, monkeypatch):
+    """말이 시작되지 않고 끝나면(timeout) 종료음을 내지 않는다."""
+    monkeypatch.setattr(vad, "record_speech", lambda *args, **kwargs: None)
+    ends = []
+    s = stt.SpeechToText(client=FakeClient(), on_speech_end=lambda: ends.append(1))
+
+    assert s.listen() is None
+    assert ends == []
+
+
 def pause_with_chime():
     """호출어·질문 대신 "자비서, 저거 뭐야?" 녹음 → 1초 쉼(그 사이 시작음) → 같은 녹음을 만든다.
 
@@ -188,13 +210,14 @@ def test_listen_after_pause_skips_chime_between_wake_word_and_question(monkeypat
     if marked:
         gate.mark_sound(*span)
     blocks = [(audio[i : i + BLOCK], i / SAMPLE_RATE) for i in range(0, len(audio) - BLOCK, BLOCK)]
-    starts = []
+    starts, ends = [], []
 
     with MicStream(source=blocks, history_sec=len(audio) / SAMPLE_RATE + 1) as mic:
-        s = stt.SpeechToText(mic=mic, client=FakeClient())
+        s = stt.SpeechToText(mic=mic, client=FakeClient(), on_speech_end=lambda: ends.append(1))
         utterance = s.listen(on_speech_start=starts.append, timeout=2.0, since=detected)
 
     assert utterance.text == "저거 뭐야?"
+    assert ends == [1]  # 호출어만 듣고 끝난 녹음에는 종료음을 내지 않는다
     if marked:
         assert utterance.started_at == pytest.approx(question_at, abs=0.1)
     else:
