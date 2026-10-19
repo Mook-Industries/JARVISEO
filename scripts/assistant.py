@@ -30,7 +30,7 @@ import threading
 from jarviseo import config
 from jarviseo.capture import FrameBuffer, FrameSource, WebcamSource
 from jarviseo.memory import DialogMemory, MemoryStore, VectorMemory
-from jarviseo.nutrition.barcode import MfdsClient
+from jarviseo.nutrition.barcode import make_food_qr_client
 from jarviseo.nutrition.service import IngredientChecker
 from jarviseo.pointing import resolve_target
 from jarviseo.pointing.detector import ObjectDetector
@@ -138,8 +138,12 @@ def main() -> None:
     # YOLO·동의어 사전을 읽는 데 몇 초 걸린다. 마이크·카메라를 열기 전에 읽어야 그동안 쌓인
     # 소리·사진이 첫 질문에 섞이지 않는다. 아래 WakeWordDetector 와 헷갈리지 않게 이름을 달리 둔다.
     object_detector = ObjectDetector()
-    mfds = MfdsClient()
-    checker = IngredientChecker(store=store, client=mfds)
+    # 성분 질문: 바코드 → 캐시 → 푸드QR → 성분표 OCR → 재촬영 안내.
+    # 식품안전나라는 쓰지 않는다. 원재료가 '면류, 분말스프'처럼 상위 분류만 오고
+    # 바코드가 다른 제품으로 잡히는 일이 있었다(2026-10-16 실측, #81).
+    # 성분표 OCR 은 .env 에 JARVISEO_OCR_REMOTE_URL 이 있으면 Colab GPU 서버에서 돈다(#82).
+    qr = make_food_qr_client()
+    checker = IngredientChecker(store=store, food_qr=qr)
 
     with MicStream(args.mic) as mic, Camera(WebcamSource(args.camera), frames):
         deps = GraphDeps(
@@ -161,6 +165,9 @@ def main() -> None:
         print(f"기록 {args.db} (session_id {session_id}), VLM {vlm.model}")
         print(f"기억 검색 {'켜짐' if deps.recall_enabled else '꺼짐 (JARVISEO_ENABLE_RECALL)'}")
         print("가리킴 v1(가운데 우선) · 성분 판정 켜짐")
+        qr_state = "푸드QR" if qr else "푸드QR 꺼짐(JARVISEO_FOOD_QR_API_KEY 없음)"
+        ocr_state = "Colab GPU" if config.OCR_REMOTE_URL else "이 PC CPU"
+        print(f"성분 판정: 캐시 → {qr_state} → 성분표 OCR({ocr_state})")
         print("\n'자비서'를 부르고 이어서 말하세요. 끝내려면 Ctrl+C")
         try:
             run(graph, barge, session_id, user_id, turns)
@@ -172,7 +179,8 @@ def main() -> None:
     print("\n마무리하는 중 (받던 답·대화 기억 저장)...")
     collector.close()
     dialog.close()
-    mfds.close()
+    if qr is not None:
+        qr.close()
     store.end_session(session_id)
     if turns:
         print(f"\n중앙값 ({len(turns)}턴, ms)")
