@@ -80,6 +80,12 @@ def report(path: Path, result, elapsed_ms: int) -> None:
         if result.panel_region is not None:
             b = result.panel_region
             print(f"성분표   : ({int(b.x1)},{int(b.y1)})-({int(b.x2)},{int(b.y2)}) 만 읽음")
+        if result.occlusion:
+            kind = {
+                "cut_edge": "사진 가장자리에서 잘림",
+                "cut_header": "성분표 머리말 앞이 잘림",
+            }
+            print(f"가려짐   : {kind.get(result.occlusion, result.occlusion)}")
     print(f"문장     : {result.retake or result.message}")
     steps = ", ".join(f"{STEP_NAMES.get(k, k)} {v}ms" for k, v in result.timings_ms.items())
     print(f"시간     : 전체 {elapsed_ms}ms ({steps})")
