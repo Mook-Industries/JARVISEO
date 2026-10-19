@@ -25,7 +25,7 @@ from jarviseo.vlm import FakeVLMClient, VLMClient
 from jarviseo.voice import FakeSpeechToText, FakeTextToSpeech, ResponseCollector
 from jarviseo.voice.collector import FILLER
 from jarviseo.workflow import GraphDeps, build_graph
-from jarviseo.workflow.messages import RECAPTURE_GIVE_UP, REPROMPT, SORRY
+from jarviseo.workflow.messages import RECAPTURE_GIVE_UP, REPROMPT, SORRY, VLM_TOO_SLOW
 
 
 @pytest.fixture
@@ -327,3 +327,66 @@ def test_call_while_waiting_drops_answer_and_logs_interrupted(file_store):
     with file_store.session() as db:
         assert db.get(TurnVoice, result["turn_id"]).is_interrupted is True
         assert db.get(SessionTurn, result["turn_id"]).answer_text == ""
+
+
+# --- VLM 답 상한 -----------------------------------------------------------------
+
+
+def test_slow_vlm_reads_notice_instead_of_waiting(file_store):
+    """VLM 이 상한 안에 답하지 않으면 안내 문장을 읽고 끝낸다. 지연 · 기억은 남기지 않는다."""
+    tts = FakeTextToSpeech()
+    dialog = DialogMemory(VectorMemory(file_store, embedder=FakeEmbedder()))
+    deps = GraphDeps(
+        stt=FakeSpeechToText(["이거 뭐야?"]),
+        tts=tts,
+        vlm=FakeVLMClient(["늦은 답"], delay=0.3),
+        store=file_store,
+        memory=dialog.memory,
+        dialog=dialog,
+        vlm_deadline_sec=0.1,
+    )
+
+    started = time.monotonic()
+    result = build_graph(deps).invoke(turn_input(file_store))
+    waited = time.monotonic() - started
+    dialog.close()
+
+    assert tts.spoken == [VLM_TOO_SLOW]
+    assert waited < 0.3  # 늦은 답을 끝까지 기다리지 않았다
+    assert "vlm" not in result["latency_ms"]  # 왕복을 모르는 요청의 시간은 남기지 않는다
+    with file_store.session() as db:
+        assert db.query(Observation).count() == 0
+
+
+def test_answer_within_deadline_is_read():
+    """상한 안에 온 답은 지금처럼 읽고 지연도 남긴다."""
+    tts = FakeTextToSpeech()
+    deps = GraphDeps(
+        stt=FakeSpeechToText(["이거 뭐야?"]),
+        tts=tts,
+        vlm=FakeVLMClient(["컵이에요."], delay=0.05),
+        vlm_deadline_sec=1.0,
+    )
+
+    result = build_graph(deps).invoke({})
+
+    assert tts.spoken == ["컵이에요."]
+    assert "vlm" in result["latency_ms"]
+
+
+def test_filler_then_notice_when_answer_is_too_slow():
+    """필러("잠깐만요")를 읽은 뒤에도 상한까지 답이 없으면 안내 문장으로 끝낸다."""
+    tts = FakeTextToSpeech()
+    deps = GraphDeps(
+        stt=FakeSpeechToText(["이거 뭐야?"]),
+        tts=tts,
+        vlm=FakeVLMClient(["늦은 답"], delay=0.5),
+        collector=ResponseCollector(tts, after_sec=0.05),
+        vlm_deadline_sec=0.2,
+    )
+
+    result = build_graph(deps).invoke({})
+
+    assert tts.spoken == [FILLER, VLM_TOO_SLOW]
+    assert result["filler_sent"] is True
+    assert "늦은 답" not in tts.prefetched  # 버린 답은 미리 합성하지 않는다

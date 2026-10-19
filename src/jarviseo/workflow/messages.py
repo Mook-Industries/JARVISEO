@@ -15,17 +15,22 @@ __all__ = [
     "RECAPTURE_GIVE_UP",
     "REPROMPT",
     "SORRY",
+    "VLM_TOO_SLOW",
     "canned_response",
 ]
 
 # 호출어만 부르고 멈췄을 때 되묻는 말
 REPROMPT = "네, 말씀하세요."
 SORRY = "죄송해요, 지금은 대답을 못 드려요. 잠시 뒤에 다시 물어봐 주세요."
+# VLM 이 GraphDeps.vlm_deadline_sec 안에 답하지 않았을 때. 실패(SORRY)와 기록에서 나눠 센다
+VLM_TOO_SLOW = "답이 늦어지고 있어요. 잠시 뒤에 다시 물어봐 주세요."
 RECAPTURE_GIVE_UP = "화면이 흐려서 잘 안 보여요. 다시 바라보며 불러 주세요."  # 스토리보드 S-06
 CLARIFY_GIVE_UP = "어느 것을 말씀하시는지 모르겠어요. 다시 가리켜 주세요."  # 가리킴 흐름도
 INGREDIENT_UNAVAILABLE = "지금은 성분을 확인할 수 없어요. 포장의 원재료명을 직접 확인해 주세요."
 # 새 내용이 없어서 대화 기억에 넣지 않는 문장들
-CANNED = frozenset({SORRY, RECAPTURE_GIVE_UP, CLARIFY_GIVE_UP, INGREDIENT_UNAVAILABLE})
+CANNED = frozenset(
+    {SORRY, VLM_TOO_SLOW, RECAPTURE_GIVE_UP, CLARIFY_GIVE_UP, INGREDIENT_UNAVAILABLE}
+)
 
 
 def canned_response(state: JarviseoState, text: str) -> AssistantResponse:

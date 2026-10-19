@@ -52,6 +52,8 @@ class GraphDeps:
     # 출발점일 뿐이라, 켜 두면 어두운 방의 멀쩡한 사진도 다시 고른다.
     # 사진이 아예 없을 때는 이 값과 상관없이 다시 고른다.
     sharpness_threshold: float | None = None
+    # VLM 답을 이만큼(초)만 기다리고, 넘으면 안내 문장으로 턴을 끝낸다. 테스트는 짧게 바꿔 끼운다.
+    vlm_deadline_sec: float = config.VLM_DEADLINE_SEC
 
 
 def can_point(state: JarviseoState, deps: GraphDeps) -> bool:

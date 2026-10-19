@@ -1,20 +1,39 @@
 """VLM 답 노드.  담당: 최홍묵 (부르는 모듈: vlm/ · voice/collector.py 문태현)
 
 VLM 답을 받는다. 늦으면 "잠깐만요"를 먼저 읽고, 기다리는 동안 다시 불리면 답을 버린다.
+GraphDeps.vlm_deadline_sec(기본 5초) 안에 답이 없으면 기다리기를 멈추고 안내 문장으로 끝낸다.
 """
 
 from __future__ import annotations
 
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from typing import Literal
 
 from jarviseo.pointing.crop import fit_for_vlm
+from jarviseo.pointing.labels import korean_name
 from jarviseo.types import AssistantResponse
 from jarviseo.workflow.deps import GraphDeps
-from jarviseo.workflow.messages import SORRY
+from jarviseo.workflow.messages import SORRY, VLM_TOO_SLOW
 from jarviseo.workflow.state import JarviseoState
 
-__all__ = ["after_generate", "generate"]
+__all__ = ["POINTING_CONTEXT", "after_generate", "generate"]
+
+# VLM 지시문(vlm/client.py)은 사진을 "질문한 순간 보인 장면"이라고 설명한다. 크롭을 보낼 때
+# 그대로 두면 잘린 사진을 장면 전체로 믿는다. 검출기 이름(COCO)은 틀릴 수 있어 추정으로만 준다.
+POINTING_CONTEXT = (
+    "사진은 사용자가 가리킨 물건만 잘라낸 것이다. 주변 장면은 보이지 않는다.\n"
+    "물체 검출기의 추정은 '{name}'이지만 틀릴 수 있으니 사진을 보고 판단한다.\n"
+    "질문: {question}"
+)
+
+log = logging.getLogger(__name__)
+
+# 상한이 지나도 이미 나간 HTTP 요청은 끊을 수 없어서, 클라이언트 타임아웃(최악 20초)까지 여기서
+# 마저 돌게 둔다. 그사이 연달아 물어도 새 요청이 막히지 않게 일꾼을 넉넉히 둔다.
+# 프로그램을 끝낼 때 파이썬이 남은 요청을 기다려서, Ctrl+C 뒤 최악 20초 걸릴 수 있다.
+_VLM_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="vlm")
 
 
 def generate(state: JarviseoState, deps: GraphDeps) -> dict:
@@ -28,14 +47,27 @@ def generate(state: JarviseoState, deps: GraphDeps) -> dict:
     crop = state.get("crop")
     sent = replace(frame, image=fit_for_vlm(crop), sharpness=None) if crop is not None else frame
 
+    # 맥락은 VLM 에만 간다. 대화 기억에는 원래 질문(utterance.text)이 들어간다(nodes/memory.py).
+    prompt = _with_pointing_context(question, state)
+
+    too_slow = False
+
     def ask() -> str | None:
-        return vlm.ask(sent, question, memories)
+        nonlocal too_slow
+        future = _VLM_POOL.submit(vlm.ask, sent, prompt, memories)
+        try:
+            return future.result(timeout=deps.vlm_deadline_sec)
+        except TimeoutError:
+            too_slow = True
+            return None  # collector 는 None 이면 미리 합성하지 않는다. 늦게 온 답은 버려진다
 
     # collector 는 답을 다른 스레드에서 기다리다가 늦으면 "잠깐만요"를 먼저 읽는다.
     answer = collector.collect(ask) if collector is not None else ask()
     dropped = collector is not None and collector.dropped
+    if too_slow and not dropped:
+        log.warning("VLM 답이 %.1f초 안에 안 와서 안내 문장으로 끝냈다", deps.vlm_deadline_sec)
     response = AssistantResponse(
-        text="" if dropped else (answer or SORRY),
+        text="" if dropped else (VLM_TOO_SLOW if too_slow else (answer or SORRY)),
         intent=state["intent"],
         used_frame=frame,  # 기록에는 원본 장면을 남긴다. 틀린 사례를 다시 보려고
         target=state.get("target"),  # log_turn 이 이걸로 turn_candidate 를 쓴다
@@ -46,11 +78,23 @@ def generate(state: JarviseoState, deps: GraphDeps) -> dict:
         "filler_sent": collector is not None and collector.filler_sent,
         "interrupted": dropped,
     }
-    # 버린 답은 아직 받는 중이라 last_latency_ms 가 이번 값이 아니다.
-    if not dropped and vlm.last_latency_ms is not None:
+    # 버린 답 · 늦은 답은 아직 받는 중이라 last_latency_ms 가 이번 값이 아니다.
+    # (끊긴 옛 요청이 다음 질문 도중에 끝나면 그 값을 써 넣을 수 있다. 클라이언트가 값 하나를
+    # 같이 쓰기 때문이고, 새 요청이 끝날 때 다시 덮어써서 대부분 맞다.)
+    if not dropped and not too_slow and vlm.last_latency_ms is not None:
         update["latency_ms"] = {"vlm": vlm.last_latency_ms}
     return update
 
 
 def after_generate(state: JarviseoState) -> Literal["dropped", "answered"]:
     return "dropped" if state["interrupted"] else "answered"  # 버린 답은 읽지 않고 기록만
+
+
+def _with_pointing_context(question: str, state: JarviseoState) -> str:
+    """크롭을 보낼 때만(POINTING) 질문 앞에 가리킴 맥락을 붙인다."""
+    target = state.get("target")
+    # 크롭이 있으면 고른 대상도 있다(crop_target 은 chosen 일 때만 돈다). 그래도 없으면 질문만.
+    if state.get("crop") is None or target is None or target.chosen is None:
+        return question
+    name = korean_name(target.chosen.detection.label)
+    return POINTING_CONTEXT.format(name=name, question=question)
