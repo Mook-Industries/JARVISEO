@@ -4,7 +4,8 @@ detect      : 사진에서 물체 후보를 찾는다 (pointing/detector.py)
 resolve     : 후보 중 가리킨 대상을 고른다 (pointing/resolver.py)
 clarify     : 1·2위가 비슷하면 되묻고 대답을 듣는다. 사진은 다시 고르지 않는다.
               2번 넘거나 대답이 없거나 후보가 없으면 "다시 가리켜 주세요"로 끝낸다
-crop_target : 고른 대상만 잘라낸다 (pointing/crop.py). VLM · 성분 판정에는 이 크롭이 간다
+crop_target : 고른 대상을 여백 15% 넣어 잘라낸다 (pointing/crop.py). 성분 판정은 이 크롭 그대로,
+              VLM 에는 generate 가 크기를 맞춰 보낸다
 """
 
 from __future__ import annotations

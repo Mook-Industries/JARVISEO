@@ -22,7 +22,8 @@ from jarviseo.workflow.graph import RECURSION_LIMIT
 from jarviseo.workflow.messages import CLARIFY_GIVE_UP, RECAPTURE_GIVE_UP
 
 FULL = (1080, 1920, 3)
-CROP = (400, 300, 3)  # 아래 왼쪽 컵 박스 (400,500)-(700,900)
+# 아래 왼쪽 컵 박스 (400,500)-(700,900) 300×400 에 사방 15% 여백. 긴 변 520 이라 VLM 에도 그대로
+CROP = (520, 390, 3)
 QUESTION = "왼쪽 컵이요, 오른쪽 컵이요?"
 TWO_CUPS = [
     Detection("cup", 0.9, BBox(400, 500, 700, 900)),
@@ -108,6 +109,18 @@ def test_pointing_question_sends_chosen_crop_to_vlm():
     assert result["response"].target is result["target"]
     assert deps.tts.spoken == ["컵이에요."]
     assert {"route", "detect", "resolve", "crop"} <= set(result["latency_ms"])
+
+
+def test_vlm_gets_crop_shrunk_to_768():
+    """큰 물건의 크롭은 VLM 으로 보낼 때 긴 변 768px 로 줄인다. 기록에는 원본 장면이 남는다."""
+    big = Detection("cup", 0.9, BBox(100, 100, 1800, 1000))  # 여백을 넣으면 사진 전체가 된다
+    deps = _deps(["저거 뭐야?"], detections=[big])
+
+    result = build_graph(deps).invoke({})
+
+    assert deps.vlm.asked[0][0].image.shape == (432, 768, 3)
+    assert result["crop"].shape == FULL  # 상태의 크롭(성분 판정이 받는 것)은 줄이지 않는다
+    assert result["response"].used_frame.image.shape == FULL
 
 
 def test_no_detector_answers_with_whole_photo():

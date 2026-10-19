@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Literal
 
+from jarviseo.pointing.crop import fit_for_vlm
 from jarviseo.types import AssistantResponse
 from jarviseo.workflow.deps import GraphDeps
 from jarviseo.workflow.messages import SORRY
@@ -23,8 +24,9 @@ def generate(state: JarviseoState, deps: GraphDeps) -> dict:
     # 대상을 골랐으면 그 크롭만 보낸다. 사진만 바꾼 Frame 이라 VLMClient 는 그대로 쓴다.
     # 선명도는 원본 사진의 값이라 지운다. numpy 배열은 `if crop:` 으로 쓰면 에러라
     # is not None 으로 본다.
+    # 크기 조정(64px 확대 · 긴 변 768px)은 VLM 으로 보낼 때만 한다. 성분 판정은 원본으로 읽는다.
     crop = state.get("crop")
-    sent = replace(frame, image=crop, sharpness=None) if crop is not None else frame
+    sent = replace(frame, image=fit_for_vlm(crop), sharpness=None) if crop is not None else frame
 
     def ask() -> str | None:
         return vlm.ask(sent, question, memories)
