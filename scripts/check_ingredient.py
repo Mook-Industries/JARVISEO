@@ -1,16 +1,19 @@
-"""사진 한 장으로 성분 판정 전체를 돌려 보는 스크립트.  담당: 권용현
+"""사진 한 장으로 성분 판정을 돌려 보는 스크립트.  담당: 권용현
 
-사진 → 바코드 → 푸드QR → (못 찾으면) 성분표 OCR → 알레르기 판정 → 안내 문장.
-앱(assistant.py)은 웹캠·음성이 있어야 해서, 사진 파일로 끝까지 확인하려고 만들었다.
-단계마다 걸린 시간을 찍는다. 어디가 느린지 보고 줄이려는 용도다.
+사진을 넣으면 앱이 읽어 줄 문장 하나가 나온다.
+    해당 제품에는 밀, 대두가 들어 있고, 새우, 땅콩은 섞였을 수 있어요.
+안에서는 다른 모듈이 부르는 입구(IngredientChecker.answer)를 그대로 부른다.
+사진 → 바코드 → 푸드QR → (못 찾으면) 성분표 OCR → 알레르기 판정 → 문장.
 
+--detail 을 주면 바코드·판정 출처·단계별 시간까지 찍는다(어디가 느린지 볼 때).
 OCR 은 .env 에 JARVISEO_OCR_REMOTE_URL 이 있으면 Colab GPU, 없으면 이 PC CPU 로 돈다.
 캐시(DB)는 쓰지 않는다. 매번 실제 조회 경로를 탄다.
 
 사용:
     python scripts/check_ingredient.py 사진.jpg --allergens 계란 땅콩 새우
-    python scripts/check_ingredient.py data/samples/ --allergens 우유
-    python scripts/check_ingredient.py 사진.jpg --allergens 계란 --region   # 성분표 영역만 읽기
+    python scripts/check_ingredient.py data/samples/ --allergens 우유          # 폴더 안 사진 전부
+    python scripts/check_ingredient.py 사진.jpg --allergens 계란 --detail     # 단계별 시간까지
+    python scripts/check_ingredient.py 사진.jpg --allergens 계란 --region     # 성분표 영역만 읽기
 """
 
 from __future__ import annotations
@@ -24,8 +27,7 @@ import numpy as np
 
 from jarviseo import config
 from jarviseo.nutrition import ocr
-from jarviseo.nutrition.barcode import make_food_qr_client
-from jarviseo.nutrition.service import IngredientChecker
+from jarviseo.nutrition.service import make_checker
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 STEP_NAMES = {"barcode": "바코드·조회", "quality": "품질 검사", "ocr": "OCR", "match": "판정"}
@@ -84,7 +86,7 @@ def report(path: Path, result, elapsed_ms: int) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="사진 한 장으로 성분 판정 전체 확인")
+    ap = argparse.ArgumentParser(description="사진 한 장으로 성분 판정 확인")
     ap.add_argument("paths", nargs="+", help="사진 파일 또는 폴더")
     ap.add_argument("--allergens", nargs="+", required=True, help="내 알레르기 (예: 계란 땅콩)")
     ap.add_argument(
@@ -93,30 +95,36 @@ def main() -> None:
         default=config.OCR_AUTO_REGION,
         help="성분표 영역을 먼저 찾아 그 부분만 읽는다 (기본: .env 의 JARVISEO_OCR_AUTO_REGION)",
     )
+    ap.add_argument("--detail", action="store_true", help="바코드·판정 출처·단계별 시간까지 찍는다")
     args = ap.parse_args()
 
-    food_qr = make_food_qr_client()
-    print(f"푸드QR   : {'사용' if food_qr else '인증키 없음 → 건너뜀'}")
-    print(f"OCR      : {'Colab GPU' if config.OCR_REMOTE_URL else '이 PC CPU'}")
-    print(f"알레르기 : {', '.join(args.allergens)}")
-    print(f"영역찾기 : {'켬' if args.region else '끔'}")
+    reader = None
+    if args.detail:
+        print(f"푸드QR   : {'사용' if config.FOOD_QR_API_KEY else '인증키 없음 → 건너뜀'}")
+        print(f"OCR      : {'Colab GPU' if config.OCR_REMOTE_URL else '이 PC CPU'}")
+        print(f"알레르기 : {', '.join(args.allergens)}")
+        print(f"영역찾기 : {'켬' if args.region else '끔'}")
+        # OCR 모델 준비는 앱 시작 때 한 번만 한다. 사진마다 시간에 섞이지 않게 따로 잰다.
+        t0 = time.perf_counter()
+        reader = ocr._get_reader()
+        reader.readtext(np.full((64, 256, 3), 255, dtype=np.uint8))
+        print(f"OCR 준비 : {int((time.perf_counter() - t0) * 1000)}ms (앱 시작 때 한 번)")
 
-    # OCR 모델 준비는 앱에서 시작할 때 한 번만 한다. 사진마다 시간에 섞이지 않게 따로 잰다.
-    t0 = time.perf_counter()
-    reader = ocr._get_reader()
-    reader.readtext(np.full((64, 256, 3), 255, dtype=np.uint8))
-    print(f"OCR 준비 : {int((time.perf_counter() - t0) * 1000)}ms (앱 시작 때 한 번)")
-
-    checker = IngredientChecker(store=None, food_qr=food_qr, reader=reader, auto_region=args.region)
+    checker = make_checker(store=None, reader=reader, auto_region=args.region)
+    files = collect(args.paths)
     try:
-        for path in collect(args.paths):
+        for path in files:
             image = imread(path)
-            t0 = time.perf_counter()
-            result = checker.check(image, args.allergens)
-            report(path, result, int((time.perf_counter() - t0) * 1000))
+            if args.detail:
+                t0 = time.perf_counter()
+                result = checker.check(image, args.allergens)
+                report(path, result, int((time.perf_counter() - t0) * 1000))
+                continue
+            # 다른 모듈이 부르는 입구 그대로: 크롭 하나 + 성분 분석이 필요하다(True).
+            text = checker.answer(image, True, args.allergens)
+            print(f"{path.name}: {text}" if len(files) > 1 else text)
     finally:
-        if food_qr is not None:
-            food_qr.close()
+        checker.close()
 
 
 if __name__ == "__main__":
