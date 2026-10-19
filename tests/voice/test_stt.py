@@ -6,6 +6,7 @@ OpenAI API 와 마이크는 부르지 않는다. 가짜 client 로 바꿔 끼우
 
 import io
 import wave
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -14,9 +15,14 @@ from openai import OpenAIError
 
 from jarviseo import config
 from jarviseo.voice import stt, vad
-from jarviseo.voice.mic import SAMPLE_RATE
+from jarviseo.voice.chime import START_WAV, load_sound
+from jarviseo.voice.gate import SOUND_TAIL_SEC, MicGate
+from jarviseo.voice.mic import BLOCK, SAMPLE_RATE, MicStream
+from jarviseo.voice.speaker import SAMPLE_RATE as SPEAKER_RATE
 from jarviseo.voice.transcript import clean, is_question
 from jarviseo.voice.vad import Speech
+
+DATA = Path(__file__).parents[1] / "data"
 
 
 class FakeClient:
@@ -50,7 +56,7 @@ def heard(monkeypatch):
         def blocks(self):
             return iter(())
 
-    def record(blocks, on_speech_start=None, timeout=5.0):
+    def record(blocks, on_speech_start=None, timeout=5.0, ignore=None):
         if on_speech_start is not None:
             on_speech_start(100.0)
         return Speech(np.zeros(SAMPLE_RATE, np.int16), 100.0, 101.0)
@@ -145,6 +151,54 @@ def test_listen_skips_api_without_speech(heard, monkeypatch):
 
     assert stt.SpeechToText(client=client).listen() is None
     assert client.requests == []
+
+
+def pause_with_chime():
+    """호출어·질문 대신 "자비서, 저거 뭐야?" 녹음 → 1초 쉼(그 사이 시작음) → 같은 녹음을 만든다.
+
+    (소리, 감지 시각, 시작음 구간, 질문 시작 시각) 을 돌려준다. 시각은 첫 블록이 0초다.
+    시작음은 감지 0.15초 뒤에 말소리와 같은 크기로 섞는다(lookback.py --chime 0 과 같다).
+    """
+    with wave.open(str(DATA / "jarviseo_question.wav"), "rb") as f:
+        voice = np.frombuffer(f.readframes(f.getnframes()), dtype="<i2").astype(np.float64)
+    pcm = np.frombuffer(load_sound(START_WAV), np.int16).astype(np.float64)
+    n = round(len(pcm) * SAMPLE_RATE / SPEAKER_RATE)
+    chime = np.interp(np.arange(n) * SPEAKER_RATE / SAMPLE_RATE, np.arange(len(pcm)), pcm)
+    chime *= np.sqrt(np.mean(voice**2) / np.mean(chime**2))
+    wake_end = 1.0 + len(voice) / SAMPLE_RATE
+    detected, chime_at, question_at = wake_end + 0.12, wake_end + 0.27, wake_end + 1.0
+    audio = np.random.default_rng(0).normal(0, 20, round((question_at + 3.0) * SAMPLE_RATE))
+    for at, sound in [(1.0, voice), (chime_at, chime), (question_at, voice)]:
+        i = round(at * SAMPLE_RATE)
+        audio[i : i + len(sound)] += sound
+    span = (chime_at, chime_at + len(chime) / SAMPLE_RATE + SOUND_TAIL_SEC)
+    return audio.clip(-32768, 32767).astype(np.int16), detected, span, question_at
+
+
+@pytest.mark.parametrize("marked", [False, True])
+def test_listen_after_pause_skips_chime_between_wake_word_and_question(monkeypatch, marked):
+    """호출어 뒤 쉬는 틈에 시작음이 나도, 표시된 구간은 말로 안 봐서 질문부터 잡는다(#104).
+
+    표시하지 않으면 시작음이 쉼을 메워 호출어부터 한 발화가 되고, 말 시작이 호출어 쪽으로 잡혀
+    사진도 그때 것을 고른다. 표시는 Speaker 가 시작음을 낼 때 한다(gate.sounding).
+    """
+    audio, detected, span, question_at = pause_with_chime()
+    gate = MicGate()
+    monkeypatch.setattr(stt, "MIC_GATE", gate)
+    if marked:
+        gate.mark_sound(*span)
+    blocks = [(audio[i : i + BLOCK], i / SAMPLE_RATE) for i in range(0, len(audio) - BLOCK, BLOCK)]
+    starts = []
+
+    with MicStream(source=blocks, history_sec=len(audio) / SAMPLE_RATE + 1) as mic:
+        s = stt.SpeechToText(mic=mic, client=FakeClient())
+        utterance = s.listen(on_speech_start=starts.append, timeout=2.0, since=detected)
+
+    assert utterance.text == "저거 뭐야?"
+    if marked:
+        assert utterance.started_at == pytest.approx(question_at, abs=0.1)
+    else:
+        assert utterance.started_at == detected - stt.WAKE_LAG_SEC  # 호출어 끝으로 잡혔다
 
 
 @pytest.mark.parametrize(

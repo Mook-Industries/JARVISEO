@@ -134,15 +134,21 @@ class SpeechToText:
                 on_speech_start(max(t, floor))
 
         blocks = MIC_GATE.mute(self.mic.blocks(since=since - config.WAKE_LOOKBACK_SEC))
-        speech = record_speech(blocks, started, timeout=timeout)
+
+        def record() -> Speech | None:
+            # 호출 뒤 시작음이 난 구간은 말로 보지 않는다(gate.sounding). 안 그러면 "자비서." 하고
+            # 쉬었다가 질문할 때 시작음이 그 쉼을 메워 호출어와 질문이 한 발화로 붙는다(#104).
+            return record_speech(blocks, started, timeout=timeout, ignore=MIC_GATE.is_sounding)
+
+        speech = record()
         if speech is not None and speech.ended_at <= since + WAKE_ONLY_SEC:
             # 호출어(와 그 앞 소리)에서 말이 끝났다. 받아쓰면 STT 가 호출어를 "자비다"처럼 잘못 써서
             # 질문으로 넘어갈 수 있다. 같은 마이크 줄에서 질문을 더 기다린다.
-            speech = record_speech(blocks, started, timeout=timeout)
+            speech = record()
         utterance = question(speech)
         if utterance is None and speech is not None and is_wake_only(self.last_raw_text):
             # 늘여 말해서 감지 뒤에도 호출어가 이어졌다. 호출어만 받아써졌으면 한 번 더 듣는다.
-            speech = record_speech(blocks, started, timeout=timeout)
+            speech = record()
             utterance = question(speech)
         if utterance is None:
             return None
