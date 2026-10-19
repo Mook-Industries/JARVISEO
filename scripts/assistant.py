@@ -11,6 +11,10 @@ OpenAI 키와 호출어 모델(data/models/jarviseo.onnx, data/README.md)이 필
     python scripts/assistant.py --db postgresql+psycopg://jarviseo:jarviseo@localhost:5432/jarviseo
 
 턴은 data/assistant.db(SQLite)에 남는다. --db 로 Postgres 를 줄 수 있다.
+턴마다 고른 사진을 data/captures/session_<번호>/ 에 남긴다(--no-photos 로 끔).
+    <턴>.jpg        말을 시작한 순간 고른 사진(VLM·가리킴이 받은 원본)
+    <턴>_boxes.jpg  가리킴 후보 박스. 초록 = 고른 대상, 노랑 = 나머지(순위·이름·점수), 십자 = 가운데
+    <턴>_crop.jpg   VLM·성분 판정에 실제로 간 크롭(대상을 고른 턴만)
 기억 검색("아까 본 거 뭐였지?")은 .env 에 JARVISEO_ENABLE_RECALL=true 가 있을 때만 한다.
 Ctrl+C 로 끝내면 단계별 지연 중앙값을 찍는다.
 
@@ -26,10 +30,14 @@ Ctrl+C 로 끝내면 단계별 지연 중앙값을 찍는다.
 import argparse
 import statistics
 import threading
+from pathlib import Path
+
+import cv2
+import numpy as np
 
 from jarviseo import config
 from jarviseo.capture import FrameBuffer, FrameSource, WebcamSource
-from jarviseo.memory import DialogMemory, MemoryStore, VectorMemory
+from jarviseo.memory import DialogMemory, MemoryStore, SessionTurn, VectorMemory
 from jarviseo.nutrition.barcode import make_food_qr_client
 from jarviseo.nutrition.service import IngredientChecker
 from jarviseo.pointing import resolve_target
@@ -41,6 +49,7 @@ from jarviseo.workflow import GraphDeps, JarviseoState, build_graph
 
 STAGES = ("stt", "recall", "vlm", "tts", "total")
 DEFAULT_DB = "sqlite:///data/assistant.db"
+PHOTO_DIR = Path("data/captures")
 
 
 class Camera:
@@ -91,9 +100,72 @@ def show(state: JarviseoState) -> None:
     print("  " + ", ".join(f"{stage} {latency[stage]:.0f}" for stage in STAGES if stage in latency))
 
 
-def run(graph, barge: BargeIn, session_id: int, user_id: int, turns: list) -> None:
+def save_photos(state: JarviseoState, folder: Path, number: int, store: MemoryStore) -> None:
+    """턴에서 쓴 사진·후보 박스·크롭을 jpg 로 남기고 원본 경로를 session_turn.image_path 에."""
+    frame = state.get("frame")
+    if frame is None:
+        return
+    turn_id = state.get("turn_id")
+    name = f"{number:02d}" + (f"_turn{turn_id}" if turn_id is not None else "")
+    folder.mkdir(parents=True, exist_ok=True)
+    original = folder / f"{name}.jpg"
+    _write_jpg(original, frame.image)
+    saved = [original.name]
+
+    target = state.get("target")
+    if target is not None or state.get("detections"):
+        boxes = frame.image.copy()
+        height, width = boxes.shape[:2]
+        cv2.drawMarker(boxes, (width // 2, height // 2), (255, 255, 255), cv2.MARKER_CROSS, 40, 2)
+        if target is not None:
+            chosen = target.chosen.detection if target.chosen is not None else None
+            ranked = [(c.detection, c.total_score) for c in target.candidates]
+        else:
+            chosen, ranked = None, [(d, d.confidence) for d in state["detections"]]
+        for rank, (det, score) in reversed(list(enumerate(ranked, 1))):  # 1위를 맨 위에 그린다
+            picked = det is chosen
+            color, thick = ((0, 200, 0), 4) if picked else ((0, 220, 255), 2)
+            b = det.bbox
+            top_left, bottom_right = (int(b.x1), int(b.y1)), (int(b.x2), int(b.y2))
+            cv2.rectangle(boxes, top_left, bottom_right, color, thick)
+            label = f"{rank} {det.label} {score:.2f}"
+            org = (int(b.x1) + 4, max(int(b.y1) + 24, 24))
+            cv2.putText(boxes, label, org, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4)
+            cv2.putText(boxes, label, org, cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        _write_jpg(folder / f"{name}_boxes.jpg", boxes)
+        saved.append("boxes")
+    crop = state.get("crop")
+    if crop is not None:
+        _write_jpg(folder / f"{name}_crop.jpg", crop)
+        saved.append("crop")
+    print(f"  사진 {original} (+{', '.join(saved[1:])})" if saved[1:] else f"  사진 {original}")
+
+    if turn_id is not None:
+        with store.session() as db:
+            row = db.get(SessionTurn, turn_id)
+            if row is not None:
+                row.image_path = original.as_posix()
+
+
+def _write_jpg(path: Path, image: np.ndarray) -> None:
+    # cv2.imwrite 는 윈도우에서 한글 경로를 못 쓴다. 바이트로 만들어 파이썬이 쓴다.
+    ok, jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    if ok:
+        path.write_bytes(jpeg.tobytes())
+
+
+def run(
+    graph,
+    barge: BargeIn,
+    session_id: int,
+    user_id: int,
+    turns: list,
+    store: MemoryStore,
+    photo_dir: Path | None,
+) -> None:
     """호출을 기다렸다가 그래프로 질문 한 번씩 돌린다. Ctrl+C 로 끝난다."""
     trigger = "WAKEWORD"
+    number = 0
     while True:
         wake = barge.wait(timeout=0.5)
         if wake is None:
@@ -107,6 +179,9 @@ def run(graph, barge: BargeIn, session_id: int, user_id: int, turns: list) -> No
         }
         state = graph.invoke(turn)
         show(state)
+        number += 1
+        if photo_dir is not None:
+            save_photos(state, photo_dir, number, store)
         if "turn_id" in state:
             turns.append(state.get("latency_ms", {}))
         # 대답을 읽다 끊겼거나 기다리는 동안 다시 불렀으면 그 호출이 쌓여 있고, 다음 턴이 된다.
@@ -122,6 +197,7 @@ def main() -> None:
     parser.add_argument("speaker", type=int, nargs="?", help="sounddevice 출력 장치 번호")
     parser.add_argument("--camera", type=int, default=config.CAMERA_INDEX, help="웹캠 번호")
     parser.add_argument("--db", default=DEFAULT_DB, help=f"턴을 남길 DB (기본 {DEFAULT_DB})")
+    parser.add_argument("--no-photos", action="store_true", help=f"{PHOTO_DIR}/ 에 사진 안 남김")
     args = parser.parse_args()
 
     store = MemoryStore(database_url=args.db)
@@ -162,7 +238,10 @@ def main() -> None:
         graph = build_graph(deps)
         detector = WakeWordDetector(mic, on_detect=barge.on_detect)
         detector.start()
+        photo_dir = None if args.no_photos else PHOTO_DIR / f"session_{session_id}"
         print(f"기록 {args.db} (session_id {session_id}), VLM {vlm.model}")
+        if photo_dir is not None:
+            print(f"사진 {photo_dir}/")
         print(f"기억 검색 {'켜짐' if deps.recall_enabled else '꺼짐 (JARVISEO_ENABLE_RECALL)'}")
         print("가리킴 v1(가운데 우선) · 성분 판정 켜짐")
         qr_state = "푸드QR" if qr else "푸드QR 꺼짐(JARVISEO_FOOD_QR_API_KEY 없음)"
@@ -170,7 +249,7 @@ def main() -> None:
         print(f"성분 판정: 캐시 → {qr_state} → 성분표 OCR({ocr_state})")
         print("\n'자비서'를 부르고 이어서 말하세요. 끝내려면 Ctrl+C")
         try:
-            run(graph, barge, session_id, user_id, turns)
+            run(graph, barge, session_id, user_id, turns, store, photo_dir)
         except KeyboardInterrupt:
             pass
         finally:

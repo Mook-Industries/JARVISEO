@@ -13,7 +13,7 @@
 | `stt_compare.py` | 받아쓰기 모델 비교 — 같은 질문 20개를 마이크로 녹음(`--record`)하거나 TTS 로 합성(`--tts`, `--noise` 로 배경 소리 섞기)해 모델별 지연 중앙값·p95·맞은 문장·CER 출력, `--silence` 는 말끝 대기별로 말이 중간에 끊긴 녹음 수. 녹음은 `data/datasets/stt/` |
 | `eval_recall.py` | 기억 질문 평가셋(`data/eval/recall_set.csv`: 지난 대화 기록 20·질문 30)으로 기억 검색 측정 — 1등·5등 안 정답률, 맞는 기록에 답(keyword)이 있는지, 문턱별 정답 유지·기록에 없는 질문에 넘어가는 기록 수, 라우터가 RECALL 로 보내는지. `--set` 으로 #65 장면 설명 평가셋도 잰다. 실제 임베딩, SQLite 임시 DB |
 | `check_vlm.py` | 실제 VLM 확인 — 웹캠 사진(또는 `--image`) 한 장과 질문을 보내 답과 왕복 시간 출력, `--memory` 로 기억 검색 결과를 넘겨 보기 |
-| `assistant.py` | 호출어 → 질문 → (기억 검색) → VLM → 음성 대답을 그래프로 도는 비서 — 턴마다 질문·의도·기억·대답·단계별 지연, 끝낼 때 중앙값 출력. 턴은 `data/assistant.db` |
+| `assistant.py` | 호출어 → 질문 → (기억 검색) → VLM → 음성 대답을 그래프로 도는 비서 — 턴마다 질문·의도·기억·대답·단계별 지연, 끝낼 때 중앙값 출력. 턴은 `data/assistant.db`, 턴마다 고른 사진·가리킴 후보 박스·VLM 에 간 크롭은 `data/captures/session_<번호>/` (`--no-photos` 로 끔) |
 | `voice_loop.py` | Enter(또는 `--wake` 로 호출어) → STT → 에코 → TTS 음성 루프 — 턴마다 단계별 지연, 끝낼 때 중앙값 출력. `--wake` 는 읽는 중 "자비서"로 끼어들기(재생 중 최고 점수·못 넘은 점수 출력), `--long` 긴 대답, `--db` 턴을 DB 에 기록, `--playback-threshold` 재생 중 임계값 |
 | `wakeword/record.py` | 웨이크워드 녹음 — 말할 때마다 잘라 16kHz wav 와 화자·거리·환경 메타데이터 저장, `--tts` 로 합성 |
 | `wakeword/evaluate.py` | 웨이크워드 평가 — 평가용 녹음으로 임계값별 FRR·FAR·시간당 오탐 계산, CSV 저장 |
