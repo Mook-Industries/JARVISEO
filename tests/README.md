@@ -18,7 +18,7 @@ DB 테스트는 여기에 더해 db job 이 pgvector 컨테이너를 띄워 실�
 | `voice/test_stt.py` | STT 요청 모양과 받아쓴 글자 정리 (API 는 가짜로) |
 | `voice/test_tts.py` | TTS 요청 모양·속도 변환·읽을 글자 다듬기와 재생, 스트림 끊김 (API·스피커는 가짜로) |
 | `voice/test_gate.py` | 재생 중 STT 입력 차단·0.3초 유예와 호출어 훅 (마이크·스피커 없이) |
-| `voice/test_mic.py` | `MicStream` 이 마이크 하나를 여럿이 같은 순서로 읽게 하는지, 지나간 블록부터 읽기 |
+| `voice/test_mic.py` | `MicStream` 이 마이크 하나를 여럿이 같은 순서로 읽게 하는지, 지나간 블록부터 읽기, 블록 시각이 느리거나 빠른 장치·늦은 읽기·몰아 주는 드라이버에서도 실제 시각을 따라가는지(#69) |
 | `voice/test_wakeword.py` | 호출어 감지·2초 중복 무시·재생 중 임계값 0.8, 감지 시각부터 `listen()` (가짜 점수로) |
 | `voice/test_collector.py` | 답이 늦으면 "잠깐만요"를 먼저 읽고, 기다리는 동안 다시 부르면 늦은 답을 버리는지 |
 | `memory/test_dialog.py` | 질문·대답이 뒤에서 observation 에 들어가고 기억 검색으로 찾히는지, 빈 대답은 안 넣고 실패해도 안 멈추는지 |
