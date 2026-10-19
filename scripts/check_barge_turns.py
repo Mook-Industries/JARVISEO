@@ -8,11 +8,14 @@ STT·TTS·VLM 만 시간이 흐르는 가짜로 바꾼다. 턴을 도는 방식�
     answer        대답을 읽는 중에 "자비서, 이건 뭐야?"
     clarify       컵 둘 중 어느 것인지 되묻는 중에 다시 부름
     clarify_wait  되묻기를 다 읽고 대답을 기다리는 중에 다시 부름
+    clarify_edge  되묻는 말 끝에 걸쳐 부름. 감지가 재생이 끝난 뒤(0.2초)에 들어온다
     clarify_only  끼어들기 없이 되묻기만 (대답 없음, 비교용)
 
-턴마다 DB 에 남은 trigger_type · 질문 · 대답 · 끊김 · 되묻기 · total_ms 를 찍는다.
+턴마다 DB 에 남은 trigger_type · 질문 · 대답 · 끊김 · 되묻기 · total_ms 를 찍고,
+끼어든 턴은 "다시 부르고 다음 턴이 시작되기까지"를 같이 찍는다.
 고치기 전(#105)에는 clarify·clarify_wait 에서 새 질문이 되묻기 대답으로 들어가 따로 턴이 안 생겼고,
-그 시간이 앞 턴 total 에 붙었다.
+그 시간이 앞 턴 total 에 붙었다. 대답을 기다리는 중 다시 부르면 그 말을 다 받아쓴 뒤에야(실제로는
+"자비서"만 부르고 기다리면 5초를 다 채운 뒤에야) 다음 턴이 시작됐다.
 
 실행:
     python scripts/check_barge_turns.py                 # 장면 넷 다
@@ -49,13 +52,17 @@ SCENES = {
     "answer": ("대답 읽는 중 끼어들기", [CUP], ("하얀 컵", 1.0)),
     "clarify": ("되묻기 읽는 중 끼어들기", TWO_CUPS, ("왼쪽 컵이요", 0.6)),
     "clarify_wait": ("되묻기 대답 기다리는 중 다시 부름", TWO_CUPS, ("왼쪽 컵이요", 2.5)),
+    # 되묻는 말("왼쪽 컵이요, 오른쪽 컵이요?" 16글자 = 1.28초)이 끝나고 0.2초 뒤에 감지
+    "clarify_edge": ("되묻는 말 끝에 걸쳐 부름 (늦은 감지)", TWO_CUPS, ("왼쪽 컵이요", 1.48)),
     "clarify_only": ("끼어들기 없이 되묻기만", TWO_CUPS, None),
 }
 
 STT_SEC = 0.4  # 받아쓰기 왕복
+SILENCE_SEC = 0.7  # 말이 끝나고 VAD 가 끝으로 보기까지(record_speech 의 silence_sec)
 TTS_FIRST_SEC = 0.3  # 첫 소리까지
 TTS_CHAR_SEC = 0.08  # 한 글자 읽는 시간
 VLM_SEC = 1.0
+STARTS: list[float] = []  # 끼어든 턴마다 다시 부르고 다음 턴이 시작되기까지(초)
 
 
 class Clock:
@@ -71,6 +78,8 @@ class TimedSpeechToText:
 
     마이크 줄(MicStream)처럼 지나간 말도 since 로 다시 읽을 수 있다. since 가 없으면 지금 이어지고
     있거나 timeout 안에 시작하는 말을 받는다. 받아쓴 글자는 실제처럼 호출어를 지운다.
+    실제 listen() 처럼 since 로 다시 읽은 말이 "자비서"뿐이면 그 뒤 timeout 안의 말을 한 번 더
+    기다리고, stop() 이 True 가 되면 말하는 중이어도 바로 멈춘다.
     """
 
     def __init__(self, clock: Clock) -> None:
@@ -83,23 +92,46 @@ class TimedSpeechToText:
         self.said.append((start, end, text))
 
     def listen(
-        self, on_speech_start=None, timeout=5.0, since=None, min_letters=MIN_LETTERS, hints=()
+        self,
+        on_speech_start=None,
+        timeout=5.0,
+        since=None,
+        min_letters=MIN_LETTERS,
+        hints=(),
+        stop=None,
     ):
         self.last_latency_ms = self.last_raw_text = None
         began = time.monotonic()
         after = began if since is None else since - config.WAKE_LOOKBACK_SEC
+        deadline = after + timeout  # 이때까지 말이 시작돼야 한다(record_speech 의 timeout)
+
+        def stopped() -> bool:
+            if stop is not None and stop():
+                self.clock.log("듣기 멈춤 (다시 부름)")
+                return True
+            return False
+
         while True:
+            if stopped():
+                return None
             heard = next(((s, e, x) for s, e, x in self.said if e > after), None)
-            if heard is not None and heard[0] <= began + timeout:
+            if heard is not None and since is not None and not clean(heard[2]):
+                after, deadline = heard[1], heard[1] + SILENCE_SEC + timeout  # "자비서"뿐
+                continue
+            if heard is not None and heard[0] <= deadline:
                 break
-            if time.monotonic() > began + timeout:
+            if time.monotonic() > deadline:
                 self.clock.log(f"듣기: {timeout:g}초 동안 말 없음")
                 return None
             time.sleep(0.01)
         start, end, raw = heard
         if on_speech_start is not None:
             on_speech_start(start)
-        time.sleep(max(0.0, end - time.monotonic()) + STT_SEC)
+        while time.monotonic() < end:
+            if stopped():
+                return None
+            time.sleep(0.01)
+        time.sleep(STT_SEC)
         self.last_latency_ms, self.last_raw_text = STT_SEC * 1000, raw
         self.clock.log(f"받아씀 {raw!r}")
         text = clean(raw)
@@ -187,6 +219,10 @@ def _run_turns(graph, barge: BargeIn, session_id: int, user_id: int) -> None:
     """scripts/assistant.py 의 run() 과 같다. 쌓인 호출이 없으면 끝난다."""
     trigger = "WAKEWORD"
     while (wake := barge.wait(timeout=1.0)) is not None:
+        if trigger == "BARGE_IN":
+            waited = time.monotonic() - wake.t
+            print(f"    -- 다시 부르고 {waited:.2f}초 뒤 다음 턴 시작")
+            STARTS.append(waited)
         turn = {"session_id": session_id, "user_id": user_id, "wake_at": wake.t}
         state = graph.invoke({**turn, "trigger_type": trigger})
         trigger = "BARGE_IN" if state.get("interrupted") else "WAKEWORD"
@@ -209,6 +245,9 @@ def _show(store: MemoryStore, session_id: int, called_again: bool) -> None:
                 f"{turn.answer_text!r}  끊김 {_yes(turn.voice.is_interrupted)} "
                 f"되묻기 {_yes(turn.inference.is_reask)}  total {total}"
             )
+        if STARTS:
+            print(f"  다시 부르고 다음 턴이 시작되기까지 {STARTS[-1]:.2f}초")
+            STARTS.clear()
         if called_again:
             new = clean(NEW_QUESTION)
             answered = any(t.question_text == new and t.answer_text for t in turns)
