@@ -26,6 +26,7 @@ from pathlib import Path
 from jarviseo.types import AllergenJudgement, AllergenVerdict, ProductInfo
 
 __all__ = [
+    "user_labels",
     "KNOWN_ALLERGENS",
     "NOT_ALLERGEN",
     "Synonyms",
@@ -191,6 +192,21 @@ def find_allergens(text: str, synonyms: dict[str, list[str]]) -> dict[str, list[
                         hits.append(term)
             start = compact.find(term, start + 1)
     return found
+
+
+def user_labels(user_allergens: list[str], synonyms: dict[str, list[str]]) -> dict[str, str]:
+    """판정용 표준 이름 → 사용자가 등록한 이름. 안내 문장에서 사용자의 말로 돌려주려고 쓴다.
+
+    "계란"으로 등록하면 판정은 법정 표시명 "알류"로 하지만, 사용자에게는 "계란"으로 말한다.
+    """
+    canonical = {t: a for a, ts in synonyms.items() for t in ts}
+    labels: dict[str, str] = {}
+    for a in user_allergens:
+        name = normalize_term(a)
+        key = canonical.get(name, name)
+        if key and key not in labels:
+            labels[key] = a.strip()
+    return labels
 
 
 def judge_allergens(

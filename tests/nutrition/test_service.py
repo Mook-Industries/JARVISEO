@@ -74,9 +74,18 @@ def test_barcode_hit_judges_without_ocr(monkeypatch):
     r = checker(reader).check(CROP, ["우유"])
     assert reader.calls == 0
     assert r.judgement.verdict is V.CONTAINS and r.judgement.source is IngredientSource.API
-    assert r.message.startswith("주의하세요. 버터쿠키에 우유가 들어 있어요.")
+    assert r.message == "해당 제품에는 우유가 들어 있어요."
     assert r.ingredients == ["밀가루", "버터"] and r.retake is None
     assert set(r.timings_ms) == {"barcode", "match"}
+
+
+def test_message_uses_registered_allergen_name(monkeypatch):
+    """'계란'으로 등록한 사용자에게는 '알류'가 아니라 '계란'으로 말한다."""
+    info = ProductInfo(barcode=CODE, product_name="라면", raw_ingredients="소맥분, 계란분말",
+                       allergen_notice="밀, 알류")  # fmt: skip
+    monkeypatch.setattr(service, "lookup_product", lambda image, **_: BarcodeLookup(None, info))
+    r = checker(FakeReader((LABEL, 0.9))).check(CROP, ["계란"])
+    assert r.message == "해당 제품에는 계란이 들어 있어요."
 
 
 # --- 성분표 OCR ----------------------------------------------------------------
@@ -89,7 +98,7 @@ def test_judges_after_single_ocr_read(monkeypatch):
     r = checker(reader).check(CROP, ["땅콩"])
     assert reader.calls == 1 and not r.reprocessed
     assert r.judgement.verdict is V.MAY_CONTAIN and r.judgement.source is IngredientSource.OCR
-    assert "땅콩을 쓰는 시설" in r.message and r.retake is None
+    assert "같은 시설에서 쓰는 땅콩이" in r.message and r.retake is None
     assert r.ocr_conf == pytest.approx(0.9) and "원재료명" in r.ocr_text
     assert set(r.timings_ms) == {"barcode", "ocr", "match"}
 
@@ -132,7 +141,7 @@ def test_partial_read_with_contains_warns_now(monkeypatch):
     monkeypatch.setattr(service, "lookup_product", miss())
     r = checker(FakeReader((LABEL, 0.4))).check(CROP, ["우유"])
     assert r.judgement.verdict is V.CONTAINS and r.retake is None
-    assert r.message.startswith("주의하세요.")
+    assert r.message.startswith("해당 제품에는")
 
 
 def test_reprocess_off_reads_once(monkeypatch):
