@@ -74,9 +74,18 @@ def test_barcode_hit_judges_without_ocr(monkeypatch):
     r = checker(reader).check(CROP, ["우유"])
     assert reader.calls == 0
     assert r.judgement.verdict is V.CONTAINS and r.judgement.source is IngredientSource.API
-    assert r.message.startswith("주의하세요. 버터쿠키에 우유가 들어 있어요.")
+    assert r.message == "해당 제품에는 우유가 들어 있어요."
     assert r.ingredients == ["밀가루", "버터"] and r.retake is None
     assert set(r.timings_ms) == {"barcode", "match"}
+
+
+def test_message_uses_registered_allergen_name(monkeypatch):
+    """'계란'으로 등록한 사용자에게는 '알류'가 아니라 '계란'으로 말한다."""
+    info = ProductInfo(barcode=CODE, product_name="라면", raw_ingredients="소맥분, 계란분말",
+                       allergen_notice="밀, 알류")  # fmt: skip
+    monkeypatch.setattr(service, "lookup_product", lambda image, **_: BarcodeLookup(None, info))
+    r = checker(FakeReader((LABEL, 0.9))).check(CROP, ["계란"])
+    assert r.message == "해당 제품에는 계란이 들어 있어요."
 
 
 # --- 성분표 OCR ----------------------------------------------------------------
@@ -89,7 +98,7 @@ def test_judges_after_single_ocr_read(monkeypatch):
     r = checker(reader).check(CROP, ["땅콩"])
     assert reader.calls == 1 and not r.reprocessed
     assert r.judgement.verdict is V.MAY_CONTAIN and r.judgement.source is IngredientSource.OCR
-    assert "땅콩을 쓰는 시설" in r.message and r.retake is None
+    assert "같은 시설에서 쓰는 땅콩이" in r.message and r.retake is None
     assert r.ocr_conf == pytest.approx(0.9) and "원재료명" in r.ocr_text
     assert set(r.timings_ms) == {"barcode", "ocr", "match"}
 
@@ -132,7 +141,7 @@ def test_partial_read_with_contains_warns_now(monkeypatch):
     monkeypatch.setattr(service, "lookup_product", miss())
     r = checker(FakeReader((LABEL, 0.4))).check(CROP, ["우유"])
     assert r.judgement.verdict is V.CONTAINS and r.retake is None
-    assert r.message.startswith("주의하세요.")
+    assert r.message.startswith("해당 제품에는")
 
 
 def test_reprocess_off_reads_once(monkeypatch):
@@ -350,3 +359,49 @@ def test_verified_product_skips_ocr_next_time(monkeypatch, store):
     reader = FakeReader((plain, 0.95))
     r = checker(reader, store=store).check(CROP, ["밀"])
     assert reader.calls == 0 and r.judgement.verdict is V.NOT_DETECTED
+
+
+# --- 성분표 영역 자동 찾기 (#75) ---------------------------------------------
+
+
+class ShapeReader(FakeReader):
+    """FakeReader + 받은 이미지 크기 기록. 영역을 잘라 읽었는지 본다."""
+
+    def __init__(self, *passes):
+        super().__init__(*passes)
+        self.shapes = []
+
+    def readtext(self, image, **kwargs):
+        self.shapes.append(image.shape[:2])
+        return super().readtext(image, **kwargs)
+
+
+def test_auto_region_reads_only_found_panel(monkeypatch):
+    """영역을 찾으면 그 부분만 잘라 읽는다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    reader = ShapeReader((LABEL, 0.9))
+    r = checker(reader, auto_region=True).check(CROP, ["땅콩"])
+    assert r.panel_region is not None and "region" in r.timings_ms
+    assert reader.calls == 2  # 영역 찾기 1번 + 성분표 읽기 1번
+    # 영역 찾기는 사진 전체를 키워 읽는다(긴 변 1600 목표, 최대 3배 → 400px 은 3배)
+    assert reader.shapes[0] == (CROP.shape[0] * 3, CROP.shape[1] * 3)
+    assert reader.shapes[1] != (CROP.shape[0] * 2, CROP.shape[1] * 2)  # 전체 2배가 아니다
+    assert r.judgement.verdict is V.MAY_CONTAIN
+
+
+def test_auto_region_without_anchor_reads_whole_photo(monkeypatch):
+    """단서가 없으면 사진 전체를 읽는다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    reader = ShapeReader((["밀가루, 설탕"], 0.95))
+    r = checker(reader, auto_region=True, max_reprocess=0).check(CROP, ["땅콩"])
+    assert r.panel_region is None
+    assert reader.shapes[1] == (CROP.shape[0] * 2, CROP.shape[1] * 2)  # 기존처럼 전체 2배
+    assert r.retake == RETAKE_WHOLE
+
+
+def test_auto_region_off_reads_once(monkeypatch):
+    """영역 찾기를 끄면 OCR 은 한 번만 돈다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    reader = ShapeReader((LABEL, 0.9))
+    r = checker(reader, auto_region=False).check(CROP, ["땅콩"])
+    assert reader.calls == 1 and r.panel_region is None
