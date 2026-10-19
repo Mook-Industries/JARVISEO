@@ -371,13 +371,14 @@ class MemoryStore:
                 inference.frame_offset_ms = round((frame.timestamp - utterance.started_at) * 1000)
 
             # 열이 속한 테이블의 행에 지연을 적는다.
+            # total 은 그래프가 대답 첫 소리에서 잰 값만 적는다(workflow/nodes/voice.py speak).
+            # 대답 소리가 안 난 턴(답을 버림, 되묻다 다시 불림, 합성 실패)은 비워 둔다. 단계 합으로
+            # 채우면 말하고 기다린 시간이 빠져서 실제보다 짧은 값이 남는다(#105).
             row_by_table = {"session_turn": turn, "turn_voice": voice, "turn_inference": inference}
             for stage, ms in (response.latency_ms or {}).items():
                 column = STAGE_COLUMNS.get(stage)
                 if column is not None:
                     setattr(row_by_table[column.class_.__tablename__], column.key, round(ms))
-            if turn.total_ms is None and response.latency_ms:
-                turn.total_ms = round(sum(response.latency_ms.values()))
 
             target = response.target
             if target is not None:

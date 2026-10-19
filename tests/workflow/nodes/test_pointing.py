@@ -305,7 +305,9 @@ def test_clarify_cut_off_by_new_call_ends_turn_without_reply(store):
     assert result["clarify_replies"] == []  # 받아쓴 말을 대답으로 넣지 않았다
     assert deps.dialog.remembered == []
     with store.session() as db:
-        assert db.get(SessionTurn, result["turn_id"]).answer_text == ""
+        logged = db.get(SessionTurn, result["turn_id"])
+        assert logged.answer_text == ""
+        assert logged.total_ms is None  # 대답 소리가 안 났다. 단계 합으로 채우지 않는다
         assert db.get(TurnVoice, result["turn_id"]).is_interrupted is True
         assert db.get(TurnInference, result["turn_id"]).is_reask is True
 
