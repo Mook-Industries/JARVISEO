@@ -180,6 +180,11 @@ def find_region(
     )
 
 
-def locate_panel(image: np.ndarray, reader, **params: float) -> tuple[BBox, list[str]]:
-    """사진 → (성분표 영역, 찾은 단서 이름). ``word_boxes`` + ``find_region``."""
-    return find_region(word_boxes(image, reader), image.shape, **params)
+def locate_panel(image: np.ndarray, reader=None, **params: float) -> tuple[BBox, list[str]]:
+    """사진 → (성분표 영역, 찾은 단서 이름). ``word_boxes`` + ``find_region``.
+
+    reader 가 없으면 ocr.py 의 기본 엔진을 쓴다(성분표 읽기와 같은 모델을 한 번만 띄운다).
+    """
+    from jarviseo.nutrition.ocr import _get_reader
+
+    return find_region(word_boxes(image, reader or _get_reader()), image.shape, **params)

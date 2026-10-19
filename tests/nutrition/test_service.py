@@ -350,3 +350,49 @@ def test_verified_product_skips_ocr_next_time(monkeypatch, store):
     reader = FakeReader((plain, 0.95))
     r = checker(reader, store=store).check(CROP, ["밀"])
     assert reader.calls == 0 and r.judgement.verdict is V.NOT_DETECTED
+
+
+# --- 성분표 영역 자동 찾기 (#75) ---------------------------------------------
+
+
+class ShapeReader(FakeReader):
+    """FakeReader + 받은 이미지 크기 기록. 영역을 잘라 읽었는지 본다."""
+
+    def __init__(self, *passes):
+        super().__init__(*passes)
+        self.shapes = []
+
+    def readtext(self, image, **kwargs):
+        self.shapes.append(image.shape[:2])
+        return super().readtext(image, **kwargs)
+
+
+def test_auto_region_reads_only_found_panel(monkeypatch):
+    """영역을 찾으면 그 부분만 잘라 읽는다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    reader = ShapeReader((LABEL, 0.9))
+    r = checker(reader, auto_region=True).check(CROP, ["땅콩"])
+    assert r.panel_region is not None and "region" in r.timings_ms
+    assert reader.calls == 2  # 영역 찾기 1번 + 성분표 읽기 1번
+    # 영역 찾기는 사진 전체를 키워 읽는다(긴 변 1600 목표, 최대 3배 → 400px 은 3배)
+    assert reader.shapes[0] == (CROP.shape[0] * 3, CROP.shape[1] * 3)
+    assert reader.shapes[1] != (CROP.shape[0] * 2, CROP.shape[1] * 2)  # 전체 2배가 아니다
+    assert r.judgement.verdict is V.MAY_CONTAIN
+
+
+def test_auto_region_without_anchor_reads_whole_photo(monkeypatch):
+    """단서가 없으면 사진 전체를 읽는다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    reader = ShapeReader((["밀가루, 설탕"], 0.95))
+    r = checker(reader, auto_region=True, max_reprocess=0).check(CROP, ["땅콩"])
+    assert r.panel_region is None
+    assert reader.shapes[1] == (CROP.shape[0] * 2, CROP.shape[1] * 2)  # 기존처럼 전체 2배
+    assert r.retake == RETAKE_WHOLE
+
+
+def test_auto_region_off_reads_once(monkeypatch):
+    """영역 찾기를 끄면 OCR 은 한 번만 돈다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    reader = ShapeReader((LABEL, 0.9))
+    r = checker(reader, auto_region=False).check(CROP, ["땅콩"])
+    assert reader.calls == 1 and r.panel_region is None
