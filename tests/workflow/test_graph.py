@@ -51,7 +51,8 @@ def turn_input(store):
     return {"session_id": store.start_session(user_id), "user_id": user_id}
 
 
-def test_일반_질문은_사진과_함께_묻고_답을_읽고_기록한다(file_store):
+def test_general_question_asks_with_photo_speaks_and_logs(file_store):
+    """일반 질문은 사진과 함께 묻고 답을 읽고 기록한다."""
     tts = FakeTextToSpeech()
     vlm = FakeVLMClient(["빨간 컵이에요."])
     memory = VectorMemory(file_store, embedder=FakeEmbedder())
@@ -88,7 +89,7 @@ def test_일반_질문은_사진과_함께_묻고_답을_읽고_기록한다(fil
         assert db.query(Observation).one().description == "질문: 이거 뭐야?\n대답: 빨간 컵이에요."
 
 
-def test_턴마다_vlm_을_한_번만_부른다(file_store):
+def test_calls_vlm_once_per_turn(file_store):
     """대답 한 번만 부른다. 기억에 넣으려고 장면 설명을 또 받지 않는다(#66)."""
     requests = []
 
@@ -119,7 +120,8 @@ def test_턴마다_vlm_을_한_번만_부른다(file_store):
         assert db.query(Observation).count() == 2
 
 
-def test_지난_대화를_기억해_두었다가_나중에_묻으면_근거로_넘긴다(file_store):
+def test_remembers_dialog_and_passes_it_as_evidence_later(file_store):
+    """지난 대화를 기억해 두었다가 나중에 묻으면 근거로 넘긴다."""
     vlm = FakeVLMClient(["검은 백팩이에요.", "검은 백팩이었어요."])
     # 가짜 임베딩(글자 두 개 묶음) 점수는 실제와 달라서 문턱을 끈다
     dialog = DialogMemory(VectorMemory(file_store, embedder=FakeEmbedder(), min_score=0.0))
@@ -153,7 +155,8 @@ def test_지난_대화를_기억해_두었다가_나중에_묻으면_근거로_�
     ],
     ids=["recall", "sorry", "dropped"],
 )
-def test_기억할_내용이_없는_턴은_기억에_넣지_않는다(file_store, question, vlm, called_since):
+def test_turn_without_content_is_not_remembered(file_store, question, vlm, called_since):
+    """기억할 내용이 없는 턴은 기억에 넣지 않는다."""
     tts = FakeTextToSpeech()
     dialog = DialogMemory(VectorMemory(file_store, embedder=FakeEmbedder()))
     collector = ResponseCollector(tts, called_since=called_since) if called_since else None
@@ -176,7 +179,8 @@ def test_기억할_내용이_없는_턴은_기억에_넣지_않는다(file_store
         assert db.query(Observation).count() == 0
 
 
-def test_미리_정한_안내만_읽은_턴은_기억에_넣지_않는다(file_store):
+def test_canned_notice_turn_is_not_remembered(file_store):
+    """미리 정한 안내만 읽은 턴은 기억에 넣지 않는다."""
     # 사진이 없어 재촬영을 포기했다. "화면이 흐려서…"는 기억할 내용이 아니다.
     tts = FakeTextToSpeech()
     dialog = DialogMemory(VectorMemory(file_store, embedder=FakeEmbedder()))
@@ -199,7 +203,8 @@ def test_미리_정한_안내만_읽은_턴은_기억에_넣지_않는다(file_s
         assert db.query(Observation).count() == 0
 
 
-def test_기억을_묻는_질문은_기억을_찾아_vlm_에_넘긴다(file_store):
+def test_recall_question_passes_memories_to_vlm(file_store):
+    """기억을 묻는 질문은 기억을 찾아 VLM 에 넘긴다."""
     vlm = FakeVLMClient(["컵이에요.", "책상 위에 있었어요."])
     memory = VectorMemory(file_store, embedder=FakeEmbedder())
     deps = GraphDeps(
@@ -223,7 +228,8 @@ def test_기억을_묻는_질문은_기억을_찾아_vlm_에_넘긴다(file_stor
     assert result["response"].memories == [hit]
 
 
-def test_기억_기능이_꺼져_있으면_기억을_묻는_질문도_general():
+def test_recall_disabled_routes_to_general():
+    """기억 기능이 꺼져 있으면 기억을 묻는 질문도 GENERAL 이다."""
     vlm = FakeVLMClient()
     stt = FakeSpeechToText(["아까 본 거 뭐였지?"])
     graph = build_graph(GraphDeps(stt=stt, tts=FakeTextToSpeech(), vlm=vlm, recall_enabled=False))
@@ -232,7 +238,8 @@ def test_기억_기능이_꺼져_있으면_기억을_묻는_질문도_general():
     assert vlm.asked[0][2] is None
 
 
-def test_기억_저장소가_없으면_빈_기억으로_묻는다():
+def test_no_memory_store_asks_with_empty_memories():
+    """기억 저장소가 없으면 빈 기억으로 묻는다."""
     vlm = FakeVLMClient()
     deps = GraphDeps(
         stt=FakeSpeechToText(["아까 본 거 뭐였지?"]),
@@ -247,7 +254,8 @@ def test_기억_저장소가_없으면_빈_기억으로_묻는다():
 
 
 @pytest.mark.parametrize("texts", [[], ["음."]])
-def test_질문이_없으면_아무것도_읽지_않고_기록도_남기지_않는다(file_store, texts):
+def test_no_question_speaks_and_logs_nothing(file_store, texts):
+    """질문이 없으면 아무것도 읽지 않고 기록도 남기지 않는다."""
     tts = FakeTextToSpeech()
     graph = build_graph(
         GraphDeps(stt=FakeSpeechToText(texts), tts=tts, vlm=FakeVLMClient(), store=file_store)
@@ -261,7 +269,8 @@ def test_질문이_없으면_아무것도_읽지_않고_기록도_남기지_않�
         assert db.query(SessionTurn).count() == 0
 
 
-def test_호출어만_부르면_되묻고_다시_듣는다():
+def test_wake_word_only_asks_and_listens_again():
+    """호출어만 부르면 되묻고 다시 듣는다."""
     tts = FakeTextToSpeech()
     stt = FakeSpeechToText(["자비서.", "이거 뭐야?"])
     graph = build_graph(GraphDeps(stt=stt, tts=tts, vlm=FakeVLMClient(["컵이에요."])))
@@ -272,7 +281,8 @@ def test_호출어만_부르면_되묻고_다시_듣는다():
     assert result["utterance"].text == "이거 뭐야?"
 
 
-def test_vlm_이_실패하면_사과_문장을_읽는다():
+def test_vlm_failure_reads_apology():
+    """VLM 이 실패하면 사과 문장을 읽는다."""
     tts = FakeTextToSpeech()
     graph = build_graph(GraphDeps(stt=FakeSpeechToText(), tts=tts, vlm=FakeVLMClient([None])))
 
@@ -281,7 +291,8 @@ def test_vlm_이_실패하면_사과_문장을_읽는다():
     assert tts.spoken == [SORRY]
 
 
-def test_답이_늦으면_잠깐만요를_먼저_읽고_기록에_남긴다(file_store):
+def test_slow_answer_reads_filler_and_logs_it(file_store):
+    """답이 늦으면 "잠깐만요"를 먼저 읽고 기록에 남긴다."""
     tts = FakeTextToSpeech()
     deps = GraphDeps(
         stt=FakeSpeechToText(),
@@ -298,7 +309,8 @@ def test_답이_늦으면_잠깐만요를_먼저_읽고_기록에_남긴다(file
         assert db.get(TurnVoice, result["turn_id"]).is_filler_sent is True
 
 
-def test_답을_기다리는_동안_다시_부르면_답을_버리고_끊긴_턴으로_남긴다(file_store):
+def test_call_while_waiting_drops_answer_and_logs_interrupted(file_store):
+    """답을 기다리는 동안 다시 부르면 답을 버리고 끊긴 턴으로 남긴다."""
     tts = FakeTextToSpeech()
     deps = GraphDeps(
         stt=FakeSpeechToText(),

@@ -24,11 +24,13 @@ def syn() -> dict[str, list[str]]:
 # --- 표기 찾기 -----------------------------------------------------------------
 
 
-def test_동의어로_찾는다(syn):
+def test_finds_by_synonym(syn):
+    """동의어로 찾는다."""
     assert find_allergens("밀가루, 탈지분유, 설탕", syn) == {"밀": ["밀가루"], "우유": ["탈지분유"]}
 
 
-def test_공백과_쉼표가_없어도_찾는다(syn):
+def test_finds_without_spaces_or_commas(syn):
+    """공백과 쉼표가 없어도 찾는다."""
     # OCR 이 쉼표를 빼먹고 붙여 낸 실제 모양
     assert "새우" in find_allergens("해바라기유 양파분말새우분말", syn)
     assert find_allergens("탈지 분유", syn) == {"우유": ["탈지분유"]}
@@ -44,13 +46,15 @@ def test_공백과_쉼표가_없어도_찾는다(syn):
         ("메밀가루", "메밀", "밀"),  # 메밀가루 ⊃ 밀가루
     ],
 )
-def test_긴_표기가_먼저라_짧은_표기_오탐이_없다(syn, text, expected, not_expected):
+def test_longer_term_first_avoids_short_false_positive(syn, text, expected, not_expected):
+    """긴 표기가 먼저라 짧은 표기 오탐이 없다."""
     found = find_allergens(text, syn)
     assert expected in found
     assert not_expected not in found
 
 
-def test_다른_자리에_있으면_짧은_표기도_잡는다(syn):
+def test_catches_short_term_elsewhere(syn):
+    """다른 자리에 있으면 짧은 표기도 잡는다."""
     # 밀크 자리는 우유가 가져가도, 따로 적힌 밀가루는 밀이다
     assert find_allergens("밀크초콜릿, 밀가루", syn) == {"우유": ["밀크"], "밀": ["밀가루"]}
 
@@ -58,19 +62,22 @@ def test_다른_자리에_있으면_짧은_표기도_잡는다(syn):
 # --- 판정 ---------------------------------------------------------------------
 
 
-def test_원재료에_있으면_함유(syn):
+def test_in_ingredients_is_contains(syn):
+    """원재료에 있으면 함유다."""
     j = judge_allergens(["우유", "땅콩"], syn, ingredients="밀가루, 탈지분유, 유청")
     assert j.verdict is V.CONTAINS
     assert j.matched_allergens == ["우유"]
     assert j.matched_terms == ["탈지분유", "유청"]
 
 
-def test_알레르기_표시에만_있어도_함유(syn):
+def test_only_in_allergen_label_is_contains(syn):
+    """알레르기 표시에만 있어도 함유다."""
     j = judge_allergens(["대두"], syn, ingredients="설탕, 소금", notice="우유, 대두 함유")
     assert j.verdict is V.CONTAINS and j.matched_allergens == ["대두"]
 
 
-def test_같은_제조시설에만_있으면_혼입_가능(syn):
+def test_only_same_facility_is_may_contain(syn):
+    """같은 제조시설 문구에만 있으면 혼입 가능이다."""
     j = judge_allergens(
         ["땅콩"],
         syn,
@@ -81,29 +88,34 @@ def test_같은_제조시설에만_있으면_혼입_가능(syn):
     assert j.may_contain_allergens == ["땅콩"] and j.matched_allergens == []
 
 
-def test_함유와_혼입이_같은_알레르겐이면_함유로만(syn):
+def test_contains_wins_over_may_contain_for_same_allergen(syn):
+    """함유와 혼입이 같은 알레르겐이면 함유로만 본다."""
     j = judge_allergens(["우유", "땅콩"], syn, ingredients="탈지분유", cross="우유, 땅콩 사용 시설")
     assert j.verdict is V.CONTAINS
     assert j.matched_allergens == ["우유"]
     assert j.may_contain_allergens == ["땅콩"]  # 우유는 함유에만
 
 
-def test_못_찾으면_미검출(syn):
+def test_not_found_is_not_detected(syn):
+    """못 찾으면 미검출이다."""
     j = judge_allergens(["땅콩"], syn, ingredients="밀가루, 설탕, 탈지분유")
     assert j.verdict is V.NOT_DETECTED and j.reason == ""
 
 
-def test_등록_알레르기가_없으면_확인_불가(syn):
+def test_no_registered_allergen_is_undetermined(syn):
+    """등록 알레르기가 없으면 확인 불가다."""
     j = judge_allergens([], syn, ingredients="탈지분유")
     assert j.verdict is V.UNDETERMINED and j.reason == "no_user_allergens"
 
 
-def test_판독_불가면_확인_불가(syn):
+def test_unreadable_is_undetermined(syn):
+    """판독 불가면 확인 불가다."""
     j = judge_allergens(["땅콩"], syn, ingredients="밀가루", readable=False, reason="low_ocr_conf")
     assert j.verdict is V.UNDETERMINED and j.reason == "low_ocr_conf"
 
 
-def test_판독_불가면_혼입_문장을_찾았어도_확인_불가(syn):
+def test_unreadable_with_may_contain_is_undetermined(syn):
+    """판독 불가면 혼입 문장을 찾았어도 확인 불가다."""
     # '혼입 가능'으로 끝내면 "원재료에는 없어요"라고 말하게 되는데 원재료를 못 읽었다
     j = judge_allergens(
         ["땅콩"], syn, ingredients="밀가루", cross="같은 제조시설에서 땅콩 사용", readable=False
@@ -112,18 +124,21 @@ def test_판독_불가면_혼입_문장을_찾았어도_확인_불가(syn):
     assert j.may_contain_allergens == ["땅콩"]  # 정보는 남긴다
 
 
-def test_판독_불가여도_함유를_찾았으면_함유(syn):
+def test_unreadable_but_found_contains_is_contains(syn):
+    """판독 불가여도 함유를 찾았으면 함유다."""
     # 경고는 확실하므로 판독 품질과 상관없이 낸다
     j = judge_allergens(["우유"], syn, ingredients="탈지분유", readable=False)
     assert j.verdict is V.CONTAINS
 
 
-def test_원재료_글자가_없으면_확인_불가(syn):
+def test_no_ingredient_text_is_undetermined(syn):
+    """원재료 글자가 없으면 확인 불가다."""
     j = judge_allergens(["땅콩"], syn, ingredients="  ", cross="같은 시설에서 우유 사용")
     assert j.verdict is V.UNDETERMINED and j.reason == "no_ingredients"
 
 
-def test_내용_모를_원료가_있으면_확인_불가(syn):
+def test_unknown_compound_ingredient_is_undetermined(syn):
+    """내용 모를 원료가 있으면 확인 불가다."""
     j = judge_allergens(["땅콩"], syn, ingredients="밀가루, 기타가공품, 설탕")
     assert j.verdict is V.UNDETERMINED and j.reason == "opaque_ingredient"
     # 괄호로 내용이 적혀 있으면 읽을 수 있다
@@ -131,17 +146,20 @@ def test_내용_모를_원료가_있으면_확인_불가(syn):
     assert j.verdict is V.NOT_DETECTED
 
 
-def test_사전의_다른_표기로_등록해도_표준명으로_본다(syn):
+def test_registered_synonym_maps_to_standard_name(syn):
+    """사전의 다른 표기로 등록해도 표준명으로 본다."""
     j = judge_allergens(["계란"], syn, ingredients="밀가루, 전란액")
     assert j.verdict is V.CONTAINS and j.matched_allergens == ["알류"]
 
 
-def test_사전에_없는_알레르기도_이름으로_찾는다(syn):
+def test_finds_unlisted_allergen_by_name(syn):
+    """사전에 없는 알레르기도 이름으로 찾는다."""
     j = judge_allergens(["키위"], syn, ingredients="설탕, 키위농축액")
     assert j.verdict is V.CONTAINS and j.matched_allergens == ["키위"]
 
 
-def test_바코드_조회_결과_판정(syn):
+def test_judges_barcode_lookup_result(syn):
+    """바코드 조회 결과로 판정한다."""
     info = ProductInfo(
         barcode="8801234567893",
         product_name="테스트 과자",

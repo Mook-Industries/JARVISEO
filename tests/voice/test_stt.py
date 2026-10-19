@@ -59,7 +59,8 @@ def heard(monkeypatch):
     monkeypatch.setattr(vad, "record_speech", record)
 
 
-def test_transcribe_는_모델·언어·호출어_힌트와_WAV_를_보낸다():
+def test_transcribe_sends_model_language_hints_and_wav():
+    """`transcribe()` 는 모델 · 언어 · 호출어 힌트와 WAV 를 보낸다."""
     client = FakeClient()
     audio = np.arange(-800, 800, dtype=np.int16)
 
@@ -83,7 +84,8 @@ def test_transcribe_는_모델·언어·호출어_힌트와_WAV_를_보낸다():
     )
 
 
-def test_listen_은_호출어를_뺀_질문을_주고_원문과_지연을_남긴다(heard):
+def test_listen_strips_wake_word_and_keeps_raw_and_latency(heard):
+    """`listen()` 은 호출어를 뺀 질문을 주고 원문과 지연을 남긴다."""
     starts = []
     s = stt.SpeechToText(client=FakeClient("아, 들려? 자비스 저거 뭐야?"))
 
@@ -100,7 +102,8 @@ def test_listen_은_호출어를_뺀_질문을_주고_원문과_지연을_남긴
 
 
 @pytest.mark.parametrize("raw", ["음...", "자비서", "어?"])
-def test_listen_은_필러나_호출어뿐이면_None_을_준다(heard, raw):
+def test_listen_returns_none_for_filler_or_wake_word_only(heard, raw):
+    """`listen()` 은 필러나 호출어뿐이면 None 을 준다."""
     s = stt.SpeechToText(client=FakeClient(raw))
 
     assert s.listen() is None
@@ -108,7 +111,7 @@ def test_listen_은_필러나_호출어뿐이면_None_을_준다(heard, raw):
 
 
 @pytest.mark.parametrize(("raw", "want"), [("컵.", "컵."), ("자비서, 컵", "컵"), ("음...", None)])
-def test_listen_은_min_letters_를_주면_한_글자_대답도_받는다(heard, raw, want):
+def test_listen_accepts_one_letter_with_min_letters(heard, raw, want):
     """되묻기("컵이요, 병이요?")의 대답은 "컵" 한 글자일 수 있다. 필러뿐이면 그래도 None."""
     assert stt.SpeechToText(client=FakeClient(raw)).listen() is None
 
@@ -117,7 +120,7 @@ def test_listen_은_min_letters_를_주면_한_글자_대답도_받는다(heard,
     assert (utterance and utterance.text) == want
 
 
-def test_listen_은_hints_를_호출어_대신_받아쓰기_힌트로_준다(heard):
+def test_listen_uses_hints_instead_of_wake_word(heard):
     """되묻기 대답을 들을 때 후보 이름을 주면 "컵"이 "컷"으로 받아써지는 일이 준다."""
     client = FakeClient("컵.")
 
@@ -127,14 +130,16 @@ def test_listen_은_hints_를_호출어_대신_받아쓰기_힌트로_준다(hea
     assert client.requests[0]["prompt"] == "컵, 병"
 
 
-def test_listen_은_받아쓰기가_실패하면_None_을_준다(heard):
+def test_listen_returns_none_on_transcription_failure(heard):
+    """`listen()` 은 받아쓰기가 실패하면 None 을 준다."""
     s = stt.SpeechToText(client=FakeClient(error=OpenAIError("연결 실패")))
 
     assert s.listen() is None
     assert s.last_latency_ms is None
 
 
-def test_listen_은_말이_없으면_API_를_부르지_않는다(heard, monkeypatch):
+def test_listen_skips_api_without_speech(heard, monkeypatch):
+    """`listen()` 은 말이 없으면 API 를 부르지 않는다."""
     monkeypatch.setattr(vad, "record_speech", lambda *args, **kwargs: None)
     client = FakeClient()
 
@@ -157,11 +162,13 @@ def test_listen_은_말이_없으면_API_를_부르지_않는다(heard, monkeypa
         ("서울 날씨 어때?", "서울 날씨 어때?"),
     ],
 )
-def test_호출어와_필러를_빼고_공백을_정리한다(raw, want):
+def test_strips_wake_word_filler_and_spaces(raw, want):
+    """호출어와 필러를 빼고 공백을 정리한다."""
     assert clean(raw) == want
 
 
-def test_비었거나_한_글자면_질문이_아니다():
+def test_empty_or_one_letter_is_not_question():
+    """비었거나 한 글자면 질문이 아니다."""
     assert not is_question("")
     assert not is_question("뭐?")
     assert is_question("뭐야?")

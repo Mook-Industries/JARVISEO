@@ -31,11 +31,13 @@ def write_json(tmp_path: Path, data: dict) -> Path:
 # --- 실제 사전 ---------------------------------------------------------------
 
 
-def test_사전의_키는_표시대상_목록과_같다(synonyms):
+def test_dictionary_keys_match_labeling_list(synonyms):
+    """사전의 키는 표시대상 목록과 같다."""
     assert set(synonyms) == set(KNOWN_ALLERGENS)
 
 
-def test_각_목록은_표준명으로_시작한다(synonyms):
+def test_each_list_starts_with_standard_name(synonyms):
+    """각 목록은 표준명으로 시작한다."""
     for name, terms in synonyms.items():
         assert terms[0] == name
 
@@ -56,11 +58,12 @@ def test_각_목록은_표준명으로_시작한다(synonyms):
         ("돈육", "돼지고기"),
     ],
 )
-def test_대표_표기가_맞는_알레르겐에_있다(synonyms, term, allergen):
+def test_common_terms_map_to_right_allergen(synonyms, term, allergen):
+    """대표 표기가 맞는 알레르겐에 있다."""
     assert term in synonyms[allergen]
 
 
-def test_짧은_표기가_다른_알레르겐의_긴_표기에_들어있는_경우(synonyms):
+def test_short_term_inside_longer_term_of_other_allergen(synonyms):
     """단순 '포함' 검사로 찾으면 오탐이 나는 조합. 판정은 긴 표기부터 맞춰야 한다.
 
     예: "밀크"를 '밀'로, "땅콩버터"를 '우유(버터)'로 잘못 잡는다.
@@ -86,17 +89,20 @@ def test_짧은_표기가_다른_알레르겐의_긴_표기에_들어있는_경�
 # --- load_synonyms 동작 --------------------------------------------------------
 
 
-def test_메모용_키는_건너뛴다(tmp_path):
+def test_skips_note_keys(tmp_path):
+    """메모용 키는 건너뛴다."""
     path = write_json(tmp_path, {"_meta": {"설명": "x"}, "우유": ["탈지분유"]})
     assert load_synonyms(path) == {"우유": ["우유", "탈지분유"]}
 
 
-def test_공백과_중복을_정리한다(tmp_path):
+def test_strips_spaces_and_duplicates(tmp_path):
+    """공백과 중복을 정리한다."""
     path = write_json(tmp_path, {"우유": ["탈지 분유", "탈지분유", " ", "우유"]})
     assert load_synonyms(path) == {"우유": ["우유", "탈지분유"]}
 
 
-def test_맥에서_만든_자모분리_한글도_같게_본다(tmp_path):
+def test_treats_mac_nfd_hangul_as_same(tmp_path):
+    """맥에서 만든 자모 분리(NFD) 한글도 같게 본다."""
     nfd = unicodedata.normalize("NFD", "탈지분유")
     assert nfd != "탈지분유"
     path = write_json(tmp_path, {unicodedata.normalize("NFD", "우유"): [nfd]})
@@ -104,20 +110,23 @@ def test_맥에서_만든_자모분리_한글도_같게_본다(tmp_path):
     assert normalize_term(nfd) == "탈지분유"
 
 
-def test_모르는_알레르겐_키는_예외(tmp_path):
+def test_unknown_allergen_key_raises(tmp_path):
+    """모르는 알레르겐 키는 예외다."""
     path = write_json(tmp_path, {"우우": ["탈지분유"]})  # 오타
     with pytest.raises(ValueError, match="알 수 없는 알레르겐"):
         load_synonyms(path)
 
 
-def test_한_표기가_두_알레르겐에_있으면_예외(tmp_path):
+def test_term_in_two_allergens_raises(tmp_path):
+    """한 표기가 두 알레르겐에 있으면 예외다."""
     path = write_json(tmp_path, {"우유": ["버터"], "땅콩": ["버터"]})
     with pytest.raises(ValueError, match="중복"):
         load_synonyms(path)
 
 
 @pytest.mark.parametrize("bad", ["탈지분유", ["탈지분유", 3], {"a": "b"}])
-def test_값이_문자열_배열이_아니면_예외(tmp_path, bad):
+def test_non_string_list_value_raises(tmp_path, bad):
+    """값이 문자열 배열이 아니면 예외다."""
     path = write_json(tmp_path, {"우유": bad})
     with pytest.raises(ValueError, match="문자열 배열"):
         load_synonyms(path)
@@ -126,7 +135,8 @@ def test_값이_문자열_배열이_아니면_예외(tmp_path, bad):
 # --- _제외: 알레르겐 표기를 품었지만 알레르겐이 아닌 성분 (#49 평가에서 발견) ---------
 
 
-def test_로커스트콩검은_대두가_아니다(synonyms):
+def test_locust_bean_gum_is_not_soybean(synonyms):
+    """로커스트콩검은 대두가 아니다."""
     from jarviseo.nutrition.allergen import find_allergens
 
     assert "대두" not in find_allergens("카라기난, 로커스트콩검, 구아검", synonyms)
@@ -134,14 +144,16 @@ def test_로커스트콩검은_대두가_아니다(synonyms):
     assert "대두" in find_allergens("로커스트콩검, 콩", synonyms)
 
 
-def test_제외_목록은_알레르겐_키로_섞이지_않는다(tmp_path):
+def test_exclusion_list_is_not_an_allergen_key(tmp_path):
+    """제외 목록은 알레르겐 키로 섞이지 않는다."""
     path = write_json(tmp_path, {"_제외": ["로커스트콩검"], "대두": ["콩"]})
     syn = load_synonyms(path)
     assert syn == {"대두": ["대두", "콩"]}
     assert syn.not_allergen == ["로커스트콩검"]
 
 
-def test_제외_표기가_알레르겐_표기와_같으면_예외(tmp_path):
+def test_exclusion_equal_to_allergen_term_raises(tmp_path):
+    """제외 표기가 알레르겐 표기와 같으면 예외다."""
     path = write_json(tmp_path, {"_제외": ["콩"], "대두": ["콩"]})
     with pytest.raises(ValueError, match="중복"):
         load_synonyms(path)

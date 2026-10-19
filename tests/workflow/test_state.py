@@ -5,22 +5,26 @@ from langgraph.graph import END, START, StateGraph
 from jarviseo.workflow.state import JarviseoState, merge_latency
 
 
-def test_다른_단계는_나란히_남는다():
+def test_different_stages_are_kept_side_by_side():
+    """다른 단계는 나란히 남는다."""
     assert merge_latency({"stt": 800.0}, {"vlm": 1200.0}) == {"stt": 800.0, "vlm": 1200.0}
 
 
-def test_같은_단계가_또_돌면_시간을_더한다():
+def test_repeated_stage_adds_time():
+    """같은 단계가 또 돌면 시간을 더한다."""
     # 되묻고 다시 고르면 resolve 가 두 번 돈다. 그 단계에 쓴 시간은 둘을 더한 값이다.
     assert merge_latency({"resolve": 3.0}, {"resolve": 2.0}) == {"resolve": 5.0}
 
 
-def test_원래_딕셔너리는_바꾸지_않는다():
+def test_original_dict_is_not_mutated():
+    """원래 딕셔너리는 바꾸지 않는다."""
     old = {"stt": 800.0}
     merge_latency(old, {"stt": 1.0})
     assert old == {"stt": 800.0}
 
 
-def test_그래프_안에서도_지연과_대답이_합쳐진다():
+def test_latency_and_replies_merge_in_graph():
+    """그래프 안에서도 지연과 대답이 합쳐진다."""
     graph = StateGraph(JarviseoState)
     graph.add_node("a", lambda state: {"latency_ms": {"stt": 800.0}, "clarify_replies": ["왼쪽"]})
     graph.add_node("b", lambda state: {"latency_ms": {"stt": 200.0}, "clarify_replies": ["거"]})

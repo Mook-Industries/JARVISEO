@@ -50,7 +50,8 @@ def sent(client):
     return texts[0], images
 
 
-def test_ask_는_사진_한_장과_질문을_보내고_답을_돌려준다():
+def test_ask_sends_photo_and_question_and_returns_answer():
+    """`ask()` 는 사진 한 장과 질문을 보내고 답을 돌려준다."""
     client = FakeClient(text="  빨간 머그컵이에요.\n")
     vlm = VLMClient(client=client)
 
@@ -67,7 +68,8 @@ def test_ask_는_사진_한_장과_질문을_보내고_답을_돌려준다():
     assert vlm.last_latency_ms >= 0
 
 
-def test_사진이_없으면_글자만_보낸다():
+def test_sends_text_only_without_photo():
+    """사진이 없으면 글자만 보낸다."""
     client = FakeClient()
 
     VLMClient(client=client).ask(None, "오늘 며칠이야?")
@@ -75,7 +77,8 @@ def test_사진이_없으면_글자만_보낸다():
     assert sent(client)[1] == []
 
 
-def test_기억_검색_결과가_있으면_기록과_지금_시각을_붙인다():
+def test_memories_add_records_and_current_time():
+    """기억 검색 결과가 있으면 기록과 지금 시각을 붙인다."""
     client = FakeClient()
     vlm = VLMClient(client=client)
 
@@ -93,18 +96,22 @@ def test_기억_검색_결과가_있으면_기록과_지금_시각을_붙인다(
     assert "찾은 기록 없음" in sent(client)[0]
 
 
-def test_api_가_실패하면_none_을_주고_멈추지_않는다():
+def test_api_failure_returns_none_without_crash():
+    """API 가 실패하면 None 을 주고 멈추지 않는다."""
     vlm = VLMClient(client=FakeClient(error=OpenAIError("연결 끊김")))
 
     assert vlm.ask(frame(), "이거 뭐야?") is None
     assert vlm.last_latency_ms is None
 
 
-def test_답이_비었으면_none():
+def test_empty_answer_returns_none():
+    """답이 비었으면 None 이다."""
     assert VLMClient(client=FakeClient(text="  ")).ask(frame(), "이거 뭐야?") is None
 
 
-def test_사진은_긴_변을_줄이고_비율은_그대로_둔다():
+def test_photo_long_side_shrinks_keeping_ratio():
+    """사진은 긴 변을 줄이고 비율은 그대로 둔다."""
+
     def decode(url):
         jpeg = base64.b64decode(url.split(",", 1)[1])
         return cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
@@ -114,7 +121,8 @@ def test_사진은_긴_변을_줄이고_비율은_그대로_둔다():
     assert decode(encode_image(np.zeros((100, 200, 3), np.uint8), 960)).shape == (100, 200, 3)
 
 
-def test_fake_의_공개_메서드와_결과_속성이_실제와_같다():
+def test_fake_matches_real_methods_and_attributes():
+    """Fake 의 공개 메서드와 결과 속성이 실제와 같다."""
     for name, method in vars(VLMClient).items():
         if callable(method) and not name.startswith("_"):
             assert inspect.signature(getattr(FakeVLMClient, name)) == inspect.signature(method)
@@ -125,7 +133,8 @@ def test_fake_의_공개_메서드와_결과_속성이_실제와_같다():
     assert last_attrs(FakeVLMClient()) == last_attrs(VLMClient(client=object()))
 
 
-def test_fake_는_답을_차례로_주고_받은_질문을_모은다():
+def test_fake_returns_answers_in_order_and_records_questions():
+    """Fake 는 답을 차례로 주고 받은 질문을 모은다."""
     vlm = FakeVLMClient(["컵이에요.", None, "책이에요."])
 
     assert vlm.ask(None, "하나") == "컵이에요."

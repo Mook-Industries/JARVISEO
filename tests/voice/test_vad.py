@@ -20,7 +20,8 @@ def blocks_of(audio: np.ndarray):
         yield audio[n * BLOCK : (n + 1) * BLOCK], T0 + n * BLOCK_SEC
 
 
-def test_말이_없으면_timeout_뒤에_None_을_준다():
+def test_no_speech_returns_none_after_timeout():
+    """말이 없으면 `timeout` 뒤에 None 을 준다."""
     judged = []
 
     def never(block):
@@ -33,7 +34,8 @@ def test_말이_없으면_timeout_뒤에_None_을_준다():
     assert len(judged) * BLOCK_SEC == pytest.approx(2.0, abs=BLOCK_SEC)  # 10초를 다 읽지 않는다
 
 
-def test_말이_길면_max_sec_에서_자른다():
+def test_long_speech_cut_at_max_sec():
+    """말이 길면 `max_sec` 에서 자른다."""
     audio = np.zeros(SAMPLE_RATE * 15, np.int16)
 
     speech = record_speech(blocks_of(audio), max_sec=10.0, is_speech=lambda block: True)
@@ -41,7 +43,7 @@ def test_말이_길면_max_sec_에서_자른다():
     assert speech.ended_at - speech.started_at == pytest.approx(10.0, abs=BLOCK_SEC)
 
 
-def test_녹음_파일로_started_at_을_검증한다():
+def test_recording_verifies_started_at():
     """jarviseo_question.wav 는 gpt-4o-mini-tts 로 만든 "자비서, 저거 뭐야?" 다.
 
     앞뒤 무음을 잘라 둬서, 앞에 1초를 붙이면 실제 말 시작은 정확히 1초 지점이다.
@@ -61,7 +63,8 @@ def test_녹음_파일로_started_at_을_검증한다():
     assert speech.ended_at == pytest.approx(T0 + (lead + len(voice)) / SAMPLE_RATE, abs=0.15)
 
 
-def test_voiced_seconds_는_무음은_0_녹음_음성은_말한_만큼_센다():
+def test_voiced_seconds_counts_speech_only():
+    """`voiced_seconds` 는 무음은 0, 녹음 음성은 말한 만큼 센다."""
     with wave.open(str(DATA / "jarviseo_question.wav"), "rb") as f:
         voice = np.frombuffer(f.readframes(f.getnframes()), dtype="<i2")
     # 망가진 합성 클립은 소리 크기(RMS)가 이 정도였다

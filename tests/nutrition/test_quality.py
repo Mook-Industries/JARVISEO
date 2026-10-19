@@ -19,18 +19,21 @@ def text_image(width: int = 600, lines: int = 8) -> np.ndarray:
     return img
 
 
-def test_선명한_글자_사진은_통과한다():
+def test_sharp_text_photo_passes():
+    """선명한 글자 사진은 통과한다."""
     q = assess_quality(text_image())
     assert q.ok, q
 
 
 @pytest.mark.parametrize("sigma", [1.5, 3.0, 6.0])
-def test_흐린_사진은_걸러진다(sigma):
+def test_blurry_photo_is_rejected(sigma):
+    """흐린 사진은 걸러진다."""
     q = assess_quality(cv2.GaussianBlur(text_image(), (0, 0), sigma))
     assert q.reason == "blurry", q
 
 
-def test_반사가_심하면_걸러진다():
+def test_strong_glare_is_rejected():
+    """반사가 심하면 걸러진다."""
     img = text_image()
     h, w = img.shape[:2]
     img[:, : w // 3] = 255  # 왼쪽 1/3 이 하얗게 날아감
@@ -38,30 +41,35 @@ def test_반사가_심하면_걸러진다():
     assert q.reason == "glare", q
 
 
-def test_단색_이미지는_흐린_것으로_본다():
+def test_flat_image_counts_as_blurry():
+    """단색 이미지는 흐린 것으로 본다."""
     assert assess_quality(np.full((100, 100, 3), 128, np.uint8)).reason == "blurry"
 
 
-def test_큰_사진도_같은_기준으로_잰다():
+def test_large_photo_uses_same_threshold():
+    """큰 사진도 같은 기준으로 잰다."""
     # 해상도가 커져도(카메라 원본) 선명한 사진이 흐린 것으로 나오면 안 된다
     big = cv2.resize(text_image(), None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
     assert assess_quality(big).ok
 
 
-def test_가장_선명한_프레임을_고른다():
+def test_picks_sharpest_frame():
+    """가장 선명한 프레임을 고른다."""
     sharp = text_image()
     frames = [cv2.GaussianBlur(sharp, (0, 0), 2), sharp, cv2.GaussianBlur(sharp, (0, 0), 1)]
     i, q = best_frame(frames)
     assert i == 1 and q.ok
 
 
-def test_모두_나쁘면_그중_나은_것을_고른다():
+def test_picks_best_of_bad_frames():
+    """모두 나쁘면 그중 나은 것을 고른다."""
     sharp = text_image()
     frames = [cv2.GaussianBlur(sharp, (0, 0), 4), cv2.GaussianBlur(sharp, (0, 0), 1.5)]
     i, q = best_frame(frames)
     assert i == 1 and not q.ok
 
 
-def test_프레임이_없으면_예외():
+def test_no_frames_raises():
+    """프레임이 없으면 예외다."""
     with pytest.raises(ValueError):
         best_frame([])
