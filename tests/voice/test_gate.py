@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from jarviseo.voice import stt
-from jarviseo.voice.gate import MIC_GATE, MicGate
+from jarviseo.voice.gate import MIC_GATE, SOUND_TAIL_SEC, MicGate
 from jarviseo.voice.mic import BLOCK, SAMPLE_RATE
 from jarviseo.voice.speaker import PIECE_BYTES, Speaker
 from jarviseo.voice.tts import TextToSpeech
@@ -183,6 +183,32 @@ def test_stop_before_playback_does_not_affect_next(speaker_log):
 
     assert speaker_log == [b"\x01\x00", "stop"]
     assert not speaker.interrupted
+
+
+def test_sounding_marks_delayed_span_without_muting():
+    """`sounding(delay)` 은 delay 뒤부터 끝난 뒤 delay + 울림까지 표시만 하고 마이크는 안 막는다."""
+    gate = MicGate()
+    entered = time.monotonic()
+    with gate.sounding(delay=0.1):
+        assert gate.is_sounding(entered + 0.1)
+        assert gate.is_sounding(entered + 10.0)  # 내는 동안은 끝을 모른다
+    left = time.monotonic()
+    block = np.ones(BLOCK, np.int16)
+
+    assert not gate.is_sounding(entered)  # 아직 스피커에서 안 나왔다
+    assert gate.is_sounding(left + 0.1 + SOUND_TAIL_SEC - 0.01)
+    assert not gate.is_sounding(left + 0.1 + SOUND_TAIL_SEC)
+    assert all(b.any() for b, _ in gate.mute([(block, entered + 0.2)]))
+
+
+def test_sounding_error_still_ends_span():
+    """시작음을 내다 예외가 나도 표시한 구간은 끝난다. 안 그러면 VAD 가 말을 계속 놓친다."""
+    gate = MicGate()
+
+    with pytest.raises(RuntimeError), gate.sounding():
+        raise RuntimeError("재생 실패")
+
+    assert not gate.is_sounding(time.monotonic() + SOUND_TAIL_SEC)
 
 
 def test_reopen_only_shrinks_closed_span():
