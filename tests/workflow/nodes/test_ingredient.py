@@ -28,7 +28,8 @@ from jarviseo.workflow import GraphDeps, build_graph
 from jarviseo.workflow.messages import INGREDIENT_UNAVAILABLE
 
 FULL = (1080, 1920, 3)
-CROP = (400, 300, 3)  # 아래 과자 박스 (400,500)-(700,900)
+# 아래 과자 박스 (400,500)-(700,900) 300×400 에 사방 15% 여백. 성분 판정은 크기를 줄이지 않는다
+CROP = (520, 390, 3)
 MESSAGE = "땅콩이 들어 있어요. 땅콩 알레르기가 있으면 드시지 마세요."
 SNACK = Detection("bottle", 0.9, BBox(400, 500, 700, 900))
 
