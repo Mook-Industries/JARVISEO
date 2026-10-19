@@ -43,7 +43,6 @@ from jarviseo.nutrition.allergen import (
 from jarviseo.nutrition.barcode import (
     BarcodeLookup,
     FoodQrClient,
-    MfdsClient,
     lookup_product,
     make_food_qr_client,
 )
@@ -125,7 +124,6 @@ class IngredientChecker:
 
     Args:
         store: ``MemoryStore``. 제품 캐시를 쓴다. 없으면 캐시 없이 동작한다.
-        client: ``MfdsClient``. 없으면 식품안전나라를 부르지 않는다(오프라인·테스트).
         food_qr: ``FoodQrClient``. 캐시 다음 가장 먼저 묻는다(포장 알레르기 표시 그대로).
             앱에서는 ``barcode.make_food_qr_client()`` 로 만든다(인증키가 없으면 None).
         synonyms: 동의어 사전. 없으면 ``config.ALLERGEN_SYNONYMS_PATH`` 에서 읽는다.
@@ -138,7 +136,6 @@ class IngredientChecker:
     def __init__(
         self,
         store=None,
-        client: MfdsClient | None = None,
         synonyms: dict[str, list[str]] | None = None,
         reader: OcrReader | None = None,
         conf_threshold: float = config.OCR_CONF_THRESHOLD,
@@ -152,7 +149,6 @@ class IngredientChecker:
         self.try_rotation = try_rotation
         self.auto_region = auto_region
         self.store = store
-        self.client = client
         self.food_qr = food_qr
         self.synonyms = synonyms or load_synonyms(config.ALLERGEN_SYNONYMS_PATH)
         self.reader = reader
@@ -208,7 +204,6 @@ class IngredientChecker:
         lookup = lookup_product(
             crop,
             store=self.store,
-            client=self.client,
             food_qr=self.food_qr,
         )
         timings["barcode"] = _ms(t0)
@@ -225,7 +220,7 @@ class IngredientChecker:
     def _needs_label(result: IngredientCheck, info: ProductInfo, user_allergens: list[str]) -> bool:
         """조회한 정보만으로 '미검출'이라고 말하면 안 되는 경우인가.
 
-        식품안전나라 원재료는 '면류, 분말스프'처럼 상위 분류 이름만 오는 제품이 많다.
+        조회 원재료가 '면류, 분말스프'처럼 상위 분류 이름만 오는 제품이 있다.
         그 안의 밀·대두는 보이지 않아서, 알레르기 표시 없이 원재료만 보고 '못 찾았다'고 하면
         먹어도 된다는 말로 들린다. 그래서 포장의 알레르기 표시를 받지 못한 정보로는
         '미검출'을 말하지 않고 성분표 OCR 로 넘어간다. 함유·혼입은 그대로 바로 경고한다.

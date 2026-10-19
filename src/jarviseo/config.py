@@ -104,17 +104,10 @@ EMBED_MODEL = _get("JARVISEO_EMBED_MODEL", "text-embedding-3-small")
 MEMORY_MIN_SCORE = _get_float("JARVISEO_MEMORY_MIN_SCORE", 0.15)
 
 # --- 식품 성분 판정 ------------------------------------------
-# 식품안전나라 OpenAPI. C005(바코드 → 품목제조보고번호) → C002/C006(원재료명).
-# 발급 전에는 "sample" 로 두면 샘플 데이터 몇 건만 응답한다.
-# C005 바코드 데이터는 2018년 이후 갱신이 멈춰 있어, 못 찾으면 OCR 로 넘어간다.
-# .env 에 빈 값으로 적혀 있으면 os.getenv 가 "" 를 돌려주므로 or 로 한 번 더 받는다.
-MFDS_API_KEY = _get("JARVISEO_MFDS_API_KEY") or "sample"
-MFDS_BASE_URL = _get("JARVISEO_MFDS_BASE_URL", "http://openapi.foodsafetykorea.go.kr/api")
-# 외부 API 가 느리면 사용자는 그동안 침묵을 듣는다. 짧게 끊고 OCR 로 넘어간다.
-MFDS_TIMEOUT_SEC = _get_float("JARVISEO_MFDS_TIMEOUT_SEC", 3.0)
 # 푸드QR 알레르기정보 (식약처). 바코드로 포장에 표시된 알레르기 유발물질 목록을 그대로 준다.
-# 식품안전나라 원재료는 '면류, 분말스프'처럼 상위 분류만 오는 제품이 많아 알레르겐을 못 찾는다.
-# 그래서 캐시 다음 첫 번째로 묻는다. 키가 없으면 건너뛴다. (portal.foodqr.kr 에서 발급)
+# 원재료가 상위 분류('면류, 분말스프')로 뭉개지지 않아 판정 근거로 바로 쓴다.
+# 캐시 다음에 묻는다. 키가 없으면 건너뛴다. (portal.foodqr.kr 에서 발급)
+# 외부 API 가 느리면 사용자는 그동안 침묵을 듣는다. 짧게 끊고 OCR 로 넘어간다.
 FOOD_QR_API_KEY = _get("JARVISEO_FOOD_QR_API_KEY") or _get("FOOD_QR_API_KEY")
 FOOD_QR_BASE_URL = _get("JARVISEO_FOOD_QR_BASE_URL", "https://foodqr.kr/openapi/service")
 FOOD_QR_TIMEOUT_SEC = _get_float("JARVISEO_FOOD_QR_TIMEOUT_SEC", 3.0)
