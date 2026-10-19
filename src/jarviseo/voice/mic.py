@@ -33,6 +33,10 @@ DRIFT_TOLERANCE_SEC = 0.01
 # 늦었는지는 최근 이만큼 받은 블록들 중 가장 덜 늦은 것으로 본다. 읽는 쪽이 잠깐 밀려서
 # 늦게 받은 블록만 보고 당기면 안 되기 때문이다.
 DRIFT_WINDOW_SEC = 1.0
+# MicStream 이 들고 있는 최근 소리(초). 호출어 바로 뒤 질문은 호출 1초 앞부터 다시 읽는다.
+# 되묻기 대답을 기다리다 다시 부른 질문(#105)은 그 대답을 받아쓴 뒤(질문 끝 + 왕복 최대 2초쯤)에야
+# 다시 읽어서, 호출보다 3~4초 늦게 읽어도 남아 있어야 한다. 6초는 192KB 다.
+HISTORY_SEC = 6.0
 
 
 class BlockClock:
@@ -132,7 +136,7 @@ class MicStream:
     def __init__(
         self,
         device: int | None = None,
-        history_sec: float = 3.0,
+        history_sec: float = HISTORY_SEC,
         source: Iterable[tuple[np.ndarray, float]] | None = None,
     ) -> None:
         """source 는 테스트에서 마이크 대신 (블록, 시각) 을 흘릴 때만 넘긴다. 다 흘리면 닫힌다."""
