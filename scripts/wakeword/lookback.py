@@ -10,15 +10,23 @@ config.WAKE_LOOKBACK_SEC 를 바꿔 가며 비교할 수 있다.
     gap 1.0   "자비서." 하고 쉬었다가 질문. 호출어만 받아써지면 listen() 이 한 번 더 듣는다.
 
 WAKE_LOOKBACK_SEC=1.0 의 근거다(docs/experiments.md "끼어들기·턴 음성 기록 (D11)").
-OpenAI 받아쓰기를 (n × gap 수 × lookback 수)번 넘게 부른다. 키가 필요하다.
+
+--chime 은 시작음(#104)이 마이크에 같이 들어간 소리도 받아써 본다. 감지 CHIME_DELAY_SEC 뒤에
+시작음을 섞고, 크기는 질문 말소리보다 몇 dB 작게 할지로 준다(0 이면 같은 크기, 음수면 더 크게).
+시작음은 게이트를 닫지 않아서 이렇게 질문과 겹친다. 시작음 없는 결과도 늘 같이 잰다.
+섞은 구간은 Speaker 가 하듯 MIC_GATE 에 표시해서 VAD 가 말로 보지 않게 한다(gate.sounding).
+--unmarked 를 주면 표시하지 않는다(고치기 전).
+OpenAI 받아쓰기를 (n × gap 수 × lookback 수 × 시작음 조건 수)번 넘게 부른다. 키가 필요하다.
 
 실행:
     python scripts/wakeword/lookback.py          # 지금 설정(1초), 붙여·쉬고 4개씩
     python scripts/wakeword/lookback.py --lookback 0 0.4 1.0 --gap 0.05 --n 10
+    python scripts/wakeword/lookback.py --n 10 --chime 10 0 -6
 """
 
 import argparse
 import csv
+import math
 import re
 
 import numpy as np
@@ -26,13 +34,18 @@ from lag import EVAL, first_detect, read_wav, real_wakes, speech_span
 from record import ROOT, SAMPLE_RATE
 
 from jarviseo import config
+from jarviseo.voice.chime import START_WAV, load_sound
+from jarviseo.voice.gate import MIC_GATE, SOUND_TAIL_SEC
 from jarviseo.voice.mic import BLOCK, MicStream
+from jarviseo.voice.speaker import SAMPLE_RATE as SPEAKER_RATE
 from jarviseo.voice.stt import SpeechToText
 
 TRAIN = ROOT / "train"
 LEAD_SEC, TAIL_SEC = 1.5, 1.0  # 호출어 앞 무음, 질문 뒤 무음(말 끝 판정 0.7초보다 길게)
 PAD_SEC = 0.03  # 말소리 구간 앞뒤로 남기는 길이. 첫 자음·끝 모음이 잘리지 않게
 NOISE = 20  # 실제 마이크처럼 아주 작은 잡음을 깐다(int16 표준편차)
+# 호출 감지 → 시작음 첫 소리. 노트북 스피커(MME)에서 스트림 열기 약 0.04초 + 출력 지연 약 0.09초.
+CHIME_DELAY_SEC = 0.15
 
 
 def tight(audio: np.ndarray) -> np.ndarray:
@@ -54,6 +67,29 @@ def same(a: str, b: str) -> bool:
     return re.sub(r"[\s.,!?~]", "", a) == re.sub(r"[\s.,!?~]", "", b)
 
 
+def start_chime() -> np.ndarray:
+    """시작음(24kHz)을 마이크와 같은 16kHz 로 바꾼다. 834Hz 소리라 선형 보간으로 충분하다."""
+    pcm = np.frombuffer(load_sound(START_WAV), np.int16).astype(np.float64)
+    n = round(len(pcm) * SAMPLE_RATE / SPEAKER_RATE)
+    return np.interp(np.arange(n) * SPEAKER_RATE / SAMPLE_RATE, np.arange(len(pcm)), pcm)
+
+
+def rms(audio: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
+
+
+def with_chime(
+    audio: np.ndarray, chime: np.ndarray, at: float, question: np.ndarray, snr: float
+) -> np.ndarray:
+    """at 초부터 시작음을 섞는다. 시작음 크기는 질문 말소리보다 snr dB 작다."""
+    at_sample = round(at * SAMPLE_RATE)
+    end = min(len(audio), at_sample + len(chime))
+    scaled = chime * rms(question) / rms(chime) / 10 ** (snr / 20)
+    mixed = audio.astype(np.float64)
+    mixed[at_sample:end] += scaled[: end - at_sample]
+    return mixed.clip(-32768, 32767).astype(np.int16)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="호출어 + 질문을 listen(since) 로 받아써 보기")
     parser.add_argument("--lookback", type=float, nargs="+", default=[config.WAKE_LOOKBACK_SEC])
@@ -61,11 +97,23 @@ def main() -> None:
     parser.add_argument("--n", type=int, default=4, help="gap 마다 몇 쌍")
     parser.add_argument("--start", type=int, default=0, help="몇 번째 녹음·문장부터 쓸지")
     parser.add_argument("--threshold", type=float, default=config.WAKEWORD_THRESHOLD)
+    parser.add_argument(
+        "--chime",
+        type=float,
+        nargs="+",
+        default=[],
+        help="시작음을 질문보다 몇 dB 작게 섞을지 (여러 개, 시작음 없는 것은 늘 잰다)",
+    )
+    parser.add_argument(
+        "--unmarked", action="store_true", help="시작음 구간을 VAD 에 알리지 않는다 (고치기 전)"
+    )
     args = parser.parse_args()
 
     wakes, texts = real_wakes("정상"), questions()
+    chime = start_chime() if args.chime else None
+    chimes: list[float | None] = [None, *args.chime]
     rng = np.random.default_rng(0)
-    right: dict[tuple[float, float], list[bool]] = {}
+    right: dict[tuple[float, float, float | None], list[bool]] = {}
     k = args.start
     for gap in args.gap:
         for _ in range(args.n):
@@ -87,28 +135,38 @@ def main() -> None:
             if t is None:
                 print("  호출어 감지 못 함")
                 continue
-            blocks = [
-                (audio[i : i + BLOCK], i / SAMPLE_RATE)
-                for i in range(0, len(audio) - BLOCK + 1, BLOCK)
-            ]
-            for lookback in args.lookback:
-                config.WAKE_LOOKBACK_SEC = lookback  # listen() 이 부를 때마다 읽는다
-                with MicStream(source=blocks, history_sec=len(audio) / SAMPLE_RATE + 1) as mic:
-                    stt = SpeechToText(mic=mic)
-                    utterance = stt.listen(since=t, timeout=2.0)
-                ok = utterance is not None and same(utterance.text, row["text"])
-                right.setdefault((gap, lookback), []).append(ok)
-                got = "None" if utterance is None else repr(utterance.text)
-                when = (
-                    ""
-                    if utterance is None
-                    else f", 말 시작 {utterance.started_at - asked_at:+.2f}s"
-                )
-                print(f"  앞 {lookback}s  원문 {stt.last_raw_text!r} → {got}{when}")
+            for snr in chimes:
+                heard = audio
+                MIC_GATE.mark_sound(-math.inf, -math.inf)
+                if snr is not None:
+                    at = t + CHIME_DELAY_SEC
+                    heard = with_chime(audio, chime, at, question, snr)
+                    if not args.unmarked:
+                        MIC_GATE.mark_sound(at, at + len(chime) / SAMPLE_RATE + SOUND_TAIL_SEC)
+                blocks = [
+                    (heard[i : i + BLOCK], i / SAMPLE_RATE)
+                    for i in range(0, len(heard) - BLOCK + 1, BLOCK)
+                ]
+                for lookback in args.lookback:
+                    config.WAKE_LOOKBACK_SEC = lookback  # listen() 이 부를 때마다 읽는다
+                    with MicStream(source=blocks, history_sec=len(heard) / SAMPLE_RATE + 1) as mic:
+                        stt = SpeechToText(mic=mic)
+                        utterance = stt.listen(since=t, timeout=2.0)
+                    ok = utterance is not None and same(utterance.text, row["text"])
+                    right.setdefault((gap, lookback, snr), []).append(ok)
+                    got = "None" if utterance is None else repr(utterance.text)
+                    when = (
+                        ""
+                        if utterance is None
+                        else f", 말 시작 {utterance.started_at - asked_at:+.2f}s"
+                    )
+                    label = "" if snr is None else f" 시작음 {snr:+g}dB"
+                    print(f"  앞 {lookback}s{label}  원문 {stt.last_raw_text!r} → {got}{when}")
 
     print("\n글자가 같은 것 (띄어쓰기·문장부호 무시, STT 가 비슷한 말로 받아쓴 것은 틀림으로 셈)")
-    for (gap, lookback), oks in sorted(right.items()):
-        print(f"  쉼 {gap}s, 앞 {lookback}s: {sum(oks)}/{len(oks)}")
+    for (gap, lookback, snr), oks in sorted(right.items(), key=lambda kv: str(kv[0])):
+        label = "시작음 없음" if snr is None else f"시작음 {snr:+g}dB"
+        print(f"  쉼 {gap}s, 앞 {lookback}s, {label}: {sum(oks)}/{len(oks)}")
 
 
 if __name__ == "__main__":
