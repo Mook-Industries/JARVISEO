@@ -62,4 +62,3 @@ def fit_for_vlm(
     # 줄일 때는 픽셀을 평균 내는 INTER_AREA, 키울 때는 계단 무늬가 덜한 INTER_CUBIC.
     interpolation = cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC
     return cv2.resize(image, size, interpolation=interpolation)
-

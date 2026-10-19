@@ -102,5 +102,3 @@ def test_fit_for_vlm_keeps_portrait_orientation():
     """세로 사진은 세로로 남는다(cv2.resize 의 (너비, 높이) 순서를 뒤집지 않았다)."""
     height, width = fit_for_vlm(_image(1600, 800)).shape[:2]
     assert (height, width) == (768, 384)
-
-    
