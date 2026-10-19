@@ -25,7 +25,12 @@ import cv2
 import numpy as np
 
 from jarviseo import config
-from jarviseo.nutrition.allergen import judge_allergens, judge_product, load_synonyms
+from jarviseo.nutrition.allergen import (
+    judge_allergens,
+    judge_product,
+    load_synonyms,
+    user_labels,
+)
 from jarviseo.nutrition.barcode import (
     BarcodeLookup,
     FoodQrClient,
@@ -217,7 +222,9 @@ class IngredientChecker:
         t0 = time.perf_counter()
         judgement = judge_product(info, user_allergens, self.synonyms)
         timings["match"] = _ms(t0)
-        judgement.response_text = build_message(judgement, info.product_name)
+        judgement.response_text = build_message(
+            judgement, info.product_name, user_labels(user_allergens, self.synonyms)
+        )
         return IngredientCheck(
             judgement=judgement,
             message=judgement.response_text,
@@ -334,7 +341,9 @@ class IngredientChecker:
             result.message = result.retake
             return result
 
-        judgement.response_text = build_message(judgement, product_name)
+        judgement.response_text = build_message(
+            judgement, product_name, user_labels(user_allergens, self.synonyms)
+        )
         result.message = judgement.response_text
         if readable and self.store is not None and barcode:
             # OCR 로 처음 읽은 제품은 확인 전(pending)으로 캐시한다. 틀린 판독이 굳지 않게.
