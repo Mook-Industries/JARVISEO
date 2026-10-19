@@ -56,7 +56,9 @@ def heard(monkeypatch):
         def blocks(self):
             return iter(())
 
-    def record(blocks, on_speech_start=None, timeout=5.0, ignore=None):
+    def record(blocks, on_speech_start=None, timeout=5.0, ignore=None, stop=None):
+        if stop is not None and stop():
+            return None
         if on_speech_start is not None:
             on_speech_start(100.0)
         return Speech(np.zeros(SAMPLE_RATE, np.int16), 100.0, 101.0)
@@ -163,6 +165,17 @@ def test_listen_calls_on_speech_end_before_transcribing(heard):
 
     assert sent == [0]  # 한 번, 요청을 보내기 전에
     assert len(client.requests) == 1
+
+
+def test_listen_stop_returns_none_without_transcribing(heard):
+    """`stop()` 이 True 면 듣기를 멈추고 받아쓰기 요청도 종료음도 내지 않는다(#105)."""
+    client = FakeClient()
+    ends = []
+    s = stt.SpeechToText(client=client, on_speech_end=lambda: ends.append(1))
+
+    assert s.listen(stop=lambda: True) is None
+    assert client.requests == []
+    assert ends == []
 
 
 def test_listen_without_speech_does_not_call_on_speech_end(heard, monkeypatch):

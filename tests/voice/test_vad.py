@@ -43,6 +43,23 @@ def test_long_speech_cut_at_max_sec():
     assert speech.ended_at - speech.started_at == pytest.approx(10.0, abs=BLOCK_SEC)
 
 
+def test_stop_ends_recording_even_while_speaking():
+    """`stop()` 이 True 가 되면 말하는 중이어도 그 자리에서 None 을 준다."""
+    audio = np.ones(SAMPLE_RATE * 4, np.int16)
+    read = []
+
+    def counted():
+        for block, t in blocks_of(audio):
+            read.append(t)
+            yield block, t
+
+    def stop():
+        return len(read) >= round(1.0 / BLOCK_SEC)  # 1초쯤 듣다가 다시 불렸다
+
+    assert record_speech(counted(), is_speech=lambda block: True, stop=stop) is None
+    assert len(read) * BLOCK_SEC == pytest.approx(1.0, abs=BLOCK_SEC)  # 나머지 3초는 안 읽는다
+
+
 def test_ignored_blocks_are_not_speech_but_kept():
     """`ignore` 가 True 인 시각의 블록은 말로 보지 않는다(시작음). 소리는 녹음에 남긴다."""
     audio = np.ones(SAMPLE_RATE * 4, np.int16)

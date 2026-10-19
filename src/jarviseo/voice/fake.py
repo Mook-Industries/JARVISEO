@@ -55,9 +55,14 @@ class FakeSpeechToText:
         since: float | None = None,
         min_letters: int = MIN_LETTERS,
         hints: Sequence[str] = (),
+        stop: Callable[[], bool] | None = None,
     ) -> Utterance | None:
         self.last_raw_text = self.last_latency_ms = None
         if not self._texts:
+            return None
+        if stop is not None and stop():
+            # 실제처럼 듣다 멈춘다. 그 말은 꺼내지 않아서, 실제 listen(since=...) 이 지나간 소리를
+            # 다시 읽듯 다음 listen() 이 받는다.
             return None
         self.last_raw_text, self.last_latency_ms = self._texts.pop(0), 0.0
         started_at = self._starts.pop(0) if self._starts else time.monotonic()

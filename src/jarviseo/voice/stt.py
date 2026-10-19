@@ -92,6 +92,7 @@ class SpeechToText:
         since: float | None = None,
         min_letters: int = MIN_LETTERS,
         hints: Sequence[str] = (),
+        stop: Callable[[], bool] | None = None,
     ) -> Utterance | None:
         """마이크에서 발화 하나를 받아쓰고, 호출어·필러를 뺀 질문을 돌려준다.
 
@@ -111,6 +112,11 @@ class SpeechToText:
         hints 는 받아쓰기에 힌트로 줄 낱말이다. 주면 호출어 힌트 대신 쓴다. 되묻기 대답을 들을 때
         후보 이름("컵", "병", "왼쪽", "오른쪽")을 주면 짧은 대답이 덜 틀린다(합성 대답 16개에서
         gpt-transcribe 맞음 6 → 12, "컵"을 "컷"으로 쓰던 것이 준다).
+
+        stop() 은 듣는 동안 마이크 블록(30ms)마다 부른다. True 가 되면 말하는 중이어도 바로
+        None 을 돌려주고 받아쓰기 요청도 보내지 않는다. 되묻기 대답을 기다리다 "자비서"가 다시
+        들렸을 때 쓴다. 그 말은 대답이 아니라 새 질문이라, 다음 턴이 ``listen(since=호출 시각)``
+        으로 다시 읽는다(#105).
         """
         # webrtcvad 는 여기서 읽는다. jarviseo.voice 를 import 만 하는 쪽(Fake 사용)은
         # 필요 없고, python -m jarviseo.voice.vad 도 미리 읽힌 모듈 경고 없이 돈다.
@@ -130,11 +136,13 @@ class SpeechToText:
             # 받아쓰는 동안 마이크를 붙잡고 있지 않게, 녹음이 끝나면 바로 닫는다.
             with Microphone(self.device) as mic:
                 blocks = MIC_GATE.mute(mic.blocks())
-                speech = record_speech(blocks, on_speech_start, timeout=timeout, ignore=ours)
+                speech = record_speech(
+                    blocks, on_speech_start, timeout=timeout, ignore=ours, stop=stop
+                )
             return question(speech)
         if since is None:
             blocks = MIC_GATE.mute(self.mic.blocks())
-            speech = record_speech(blocks, on_speech_start, timeout=timeout, ignore=ours)
+            speech = record_speech(blocks, on_speech_start, timeout=timeout, ignore=ours, stop=stop)
             return question(speech)
 
         floor = since - WAKE_LAG_SEC
@@ -148,7 +156,7 @@ class SpeechToText:
         def record() -> Speech | None:
             # 시작음 구간을 말로 안 봐야 "자비서." 하고 쉬었다가 질문할 때 시작음이 그 쉼을 메워
             # 호출어와 질문이 한 발화로 붙지 않는다(#104).
-            return record_speech(blocks, started, timeout=timeout, ignore=ours)
+            return record_speech(blocks, started, timeout=timeout, ignore=ours, stop=stop)
 
         speech = record()
         if speech is not None and speech.ended_at <= since + WAKE_ONLY_SEC:
