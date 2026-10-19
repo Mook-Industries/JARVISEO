@@ -28,6 +28,8 @@ DB 테스트는 여기에 더해 db job 이 pgvector 컨테이너를 띄워 실�
 | `workflow/test_graph.py` | 질문 한 번이 그래프를 끝까지 도는지 — 사진·기억·호출어만 부르기·사과 문장·"잠깐만요"·답 버리기·대화 기억과 DB 기록 (Fake 로) |
 | `workflow/nodes/test_pointing.py` | 가리킴 길(검출 → 대상 결정 ⇄ 되묻기 → 크롭)과 재촬영 — 크롭이 VLM 에 가는지, 되묻기 상한·한 글자 대답, 가리킴 기록 |
 | `workflow/nodes/test_ingredient.py` | 성분 질문이 VLM 없이 성분 판정 문장으로 끝나는지 — 크롭·알레르기 전달, 부품·사진 없음, 재촬영 안내 |
+| `tools/test_label_targets.py` | 가리킴 정답 표시 도구: `labels.csv` 읽고 쓰기(헤더 한 번 · 한글 · `0`/`1`), 이미 표시한 사진 건너뛰기, 후보를 왼쪽부터 번호, 미리보기 좌표를 원본으로 되돌리기, 한글 경로 사진 읽기 (YOLO · 화면 없이) |
+| `scripts/test_run_ablation.py` | 가리킴 ablation: split · 제외 거르기, 미구현 버전 건너뛰기, 7분류 채점 순서, v1 실제 `resolve_target` 채점(가운데 · 좌우 대칭 되묻기), 지표(손 없는 사진이 없으면 None), `eval_run` · `eval_sample` 기록과 이전 실행 비교, 사진별 CSV |
 | `pointing/test_crop.py` | 대상 크롭이 사진 경계를 넘거나 비어도 보낼 사진이 나오는지 |
 | `pointing/test_detector.py` | 후보 검출이 사람·작은 박스를 빼고, YOLO 결과를 Detection 으로 바꾸는지 (모델은 가짜로) |
 | `pointing/test_cues.py` | 가운데 단서가 가운데·크게 찍힌 후보에 높은 점수(0~1)를 주는지 |
