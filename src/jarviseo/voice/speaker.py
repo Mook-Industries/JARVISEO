@@ -13,6 +13,7 @@ import itertools
 import threading
 import time
 from collections.abc import Iterable
+from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
 from jarviseo.voice.gate import MIC_GATE, MicGate
@@ -32,14 +33,25 @@ PIECE_BYTES = SAMPLE_RATE * 2 // 50
 class Speaker:
     """``Speaker().play(tts.synthesize(text))``. 다른 스레드에서 ``stop()`` 으로 끊는다."""
 
-    def __init__(self, device: int | None = None, gate: MicGate | None = None) -> None:
-        """gate 는 테스트에서만 넘긴다. 기본은 STT 와 같이 쓰는 ``MIC_GATE``."""
+    def __init__(
+        self, device: int | None = None, gate: MicGate | None = None, latency: str = "high"
+    ) -> None:
+        """gate 는 테스트에서만 넘긴다. 기본은 STT 와 같이 쓰는 ``MIC_GATE``.
+
+        latency 는 sounddevice 출력 버퍼 크기("high"/"low"). 조각이 네트워크로 띄엄띄엄 오는
+        TTS 는 "high", 소리를 통째로 들고 있는 시작음·종료음은 "low" 로 첫 소리를 당긴다
+        (노트북 스피커 MME 에서 출력 지연 182ms → 93ms, #104).
+        """
         self.device = device
         self.gate = gate or MIC_GATE
+        self.latency = latency
         self._stop = threading.Event()
         # 마지막 play() 가 stop() 으로 끊겼으면 True, 그때 소리를 멈춘 시각(monotonic).
         self.interrupted = False
         self.stopped_at: float | None = None
+        # 마지막 play() 에서 첫 조각을 스피커에 쓰기 시작한 시각(monotonic). 소리는 출력 지연만큼
+        # 뒤에 난다. 소리를 하나도 안 냈으면 None.
+        self.started_at: float | None = None
 
     def stop(self) -> None:
         """재생 중이면 남은 소리를 버리고 멈추게 한다. 어느 스레드에서 불러도 된다.
@@ -49,15 +61,18 @@ class Speaker:
         """
         self._stop.set()
 
-    def play(self, chunks: Iterable[bytes]) -> None:
+    def play(self, chunks: Iterable[bytes], mute_mic: bool = True) -> None:
         """조각을 받는 순서대로 재생하고, 마지막 소리가 다 나올 때까지 기다린다.
 
         첫 조각이 오기 전에는 스피커도 게이트도 건드리지 않는다. chunks 가 도중에 예외를 내면
         그때까지 받은 소리는 마저 내고 예외를 그대로 올린다. stop() 으로 끊기면 chunks 를
         더 읽지 않고 돌아온다(닫는 것은 chunks 를 만든 쪽이 한다).
+
+        mute_mic=False 면 게이트를 닫지 않는다. 사용자가 말하는 도중이나 말끝에 내는 시작음·종료음
+        용이다. 대신 소리가 마이크에 들어가는 구간을 게이트에 표시한다(``MicGate.sounding``).
         """
         self._stop.clear()
-        self.interrupted, self.stopped_at = False, None
+        self.interrupted, self.stopped_at, self.started_at = False, None, None
         chunks = iter(chunks)
         first = next(chunks, None)
         if first is None:
@@ -72,16 +87,23 @@ class Speaker:
         # 게이트는 그다음에 풀어야 해서 바깥쪽에 둔다. 끊긴 경우는 abort() 로 버퍼를 버려서
         # 기다리지 않는다(그 뒤 stop() 은 이미 멈춘 스트림이라 바로 돌아온다).
         with (
-            self.gate.playing(),
+            self.gate.playing() if mute_mic else nullcontext(),
             sd.RawOutputStream(
-                samplerate=SAMPLE_RATE, device=self.device, channels=1, dtype="int16"
+                samplerate=SAMPLE_RATE,
+                device=self.device,
+                channels=1,
+                dtype="int16",
+                latency=self.latency,
             ) as out,
         ):
-            for chunk in itertools.chain([first], chunks):
-                if not self._write(out, chunk):
-                    out.abort()
-                    break
-        if self.interrupted:
+            self.started_at = time.monotonic()
+            # 마이크를 안 막는 소리(시작음·종료음)는 마이크에 들어가는 구간만 표시한다(VAD 가 무시)
+            with nullcontext() if mute_mic else self.gate.sounding(out.latency):
+                for chunk in itertools.chain([first], chunks):
+                    if not self._write(out, chunk):
+                        out.abort()
+                        break
+        if self.interrupted and mute_mic:
             self.gate.reopen(self.stopped_at)
 
     def _write(self, out: sd.RawOutputStream, chunk: bytes) -> bool:

@@ -19,6 +19,10 @@ OpenAI 키가 필요하다.
 --playback-threshold 는 재생 중 호출어 임계값을 바꿔 본다(기본 config.WAKEWORD_PLAYBACK_THRESHOLD).
 --wake 는 끝까지 읽은 대답마다 재생 중 호출어 최고 점수를 찍는다. 자기 목소리 점수와
 못 잡은 끼어들기가 임계값에서 얼마나 떨어져 있는지 보려는 것이다.
+--chime 은 --wake 에서 호출을 받으면 시작음, 질문하는 말이 끝나면 종료음을 낸다(assistant.py 와
+같다). 빼면 둘 다 안 낸다. 켜고 끈 채 같은 질문을 해서 받아쓰기가 나빠지지 않는지 본다(#104).
+    python scripts/voice_loop.py --wake --chime     # 켬
+    python scripts/voice_loop.py --wake             # 끔
 
 찍는 값 (ms)
     말끝 대기    말이 끝나고 VAD 가 끝으로 판정해 녹음을 멈추기까지 (무음 700ms 가 대부분)
@@ -27,6 +31,9 @@ OpenAI 키가 필요하다.
     재생         첫 조각을 받고 마지막 소리가 다 나오기까지 (끊긴 턴은 끊길 때까지)
     말 끝 → 첫 조각  사용자가 말을 멈추고 대답이 나오기 시작하기까지. 위 셋을 더한 값
     감지 → 멈춤  끼어들기에서 호출어가 끝난 시각부터 스피커를 멈추기까지
+    시작음       호출을 받고 시작음 첫 조각을 스피커에 쓰기까지, 괄호는 호출어가 끝난 시각부터
+    종료음       사용자가 말을 멈추고 종료음 첫 조각을 스피커에 쓰기까지 (말끝 대기 0.7초가 대부분)
+                 (둘 다 스피커 출력 지연은 빠짐. 노트북 스피커 MME 에서 약 0.09초)
 """
 
 import argparse
@@ -39,7 +46,7 @@ import numpy as np
 from jarviseo import config
 from jarviseo.memory import MemoryStore
 from jarviseo.types import AssistantResponse, Intent, Utterance
-from jarviseo.voice import BargeIn, SpeechToText, TextToSpeech, WakeWordDetector
+from jarviseo.voice import BargeIn, Chime, SpeechToText, TextToSpeech, WakeWordDetector
 from jarviseo.voice.gate import MIC_GATE
 from jarviseo.voice.mic import MicStream
 from jarviseo.voice.wakeword import load_scorer
@@ -146,9 +153,14 @@ def wake_loop(
     long: bool,
     record: Record | None,
     playback_threshold: float,
-) -> tuple[list[float], list[float], list[float]]:
+    chime: Chime | None,
+) -> tuple[list[float], list[float], list[float], list[tuple[float, float]], list[float], int]:
     """호출어로 턴을 연다. 끼어들기마다 감지 → 멈춤(ms)을, 끝까지 읽은 대답마다 재생 중
-    호출어 최고 점수를, 재생 중 임계값을 못 넘은 높은 점수를 모아 돌려준다."""
+    호출어 최고 점수를, 재생 중 임계값을 못 넘은 높은 점수를, 시작음마다 (호출 받음 → 시작음,
+    호출어 끝 → 시작음)(ms)을, 질문마다 말 끝 → 종료음(ms)을 모으고, 되물은 횟수와 같이 돌려준다.
+
+    종료음은 stt 를 만들 때 ``on_speech_end=chime.end`` 로 넘겨 둔다(main).
+    """
     barge = BargeIn(tts)
     peak = PlaybackPeak(playback_threshold)
     detector = WakeWordDetector(
@@ -158,16 +170,23 @@ def wake_loop(
     stops: list[float] = []
     peaks: list[float] = []
     missed: list[float] = []
+    starts: list[tuple[float, float]] = []
+    ends: list[float] = []
+    reprompts = 0
     trigger = "WAKEWORD"
     print(
         f"\n호출어({config.WAKEWORD_MODEL}, 임계값 {detector.threshold}, 재생 중 "
         f"{detector.playback_threshold})를 부르고 이어서 말하세요. 끝내려면 Ctrl+C"
     )
+    print(f"시작음·종료음 {'켜짐' if chime else '꺼짐 (--chime)'}")
     try:
         while True:
             wake = barge.wait(timeout=0.5)
             if wake is None:
                 continue
+            called = time.monotonic()
+            if chime:
+                chime.start()
             if trigger == "BARGE_IN":
                 stops.append((tts.speaker.stopped_at - wake.t) * 1000)
                 print(f"\n끼어들기 (점수 {wake.score:.3f}, 감지 → 멈춤 {stops[-1]:.0f}ms)")
@@ -176,8 +195,20 @@ def wake_loop(
             utterance = stt.listen(timeout=2.0, since=wake.t)
             if utterance is None:
                 # 호출어만 부르고 멈췄다. 되묻고 다시 듣는다(재생 뒤 0.3초는 게이트가 막는다)
+                reprompts += 1
+                print(f"  되물음 (원문 {stt.last_raw_text!r})")
                 tts.speak("네, 말씀하세요.")
                 utterance = stt.listen(timeout=5.0)
+            if chime:
+                chime.wait()  # 받아쓰는 동안 둘 다 나서 보통 이미 끝났다
+            if chime and chime.start_played_at is not None:
+                started = chime.start_played_at
+                starts.append(((started - called) * 1000, (started - wake.t) * 1000))
+                line = f"  시작음 {starts[-1][0]:.0f}ms (호출어 끝부터 {starts[-1][1]:.0f}ms)"
+                if utterance is not None and chime.end_played_at is not None:
+                    ends.append((chime.end_played_at - utterance.ended_at) * 1000)
+                    line += f", 말 끝 → 종료음 {ends[-1]:.0f}ms"
+                print(line)
             result = None
             if utterance is None:
                 print(f"  질문 없음 (원문 {stt.last_raw_text!r})")
@@ -203,7 +234,7 @@ def wake_loop(
         pass
     finally:
         detector.stop()
-    return stops, peaks, missed
+    return stops, peaks, missed, starts, ends, reprompts
 
 
 def recorder(url: str, tts: TextToSpeech, stt: SpeechToText) -> Record:
@@ -251,19 +282,26 @@ def main() -> None:
         default=config.WAKEWORD_PLAYBACK_THRESHOLD,
         help="재생 중 호출어 임계값",
     )
+    parser.add_argument(
+        "--chime", action="store_true", help="--wake 에서 시작음·종료음을 낸다 (#104)"
+    )
     args = parser.parse_args()
 
     turns: list[dict[str, float]] = []
     stops: list[float] = []
     peaks: list[float] = []
     missed: list[float] = []
+    starts: list[tuple[float, float]] = []
+    ends: list[float] = []
+    reprompts = 0
     tts = TextToSpeech(device=args.speaker)
     if args.wake:
+        chime = Chime(device=args.speaker) if args.chime else None
         with MicStream(args.mic) as mic:
-            stt = SpeechToText(mic=mic)
+            stt = SpeechToText(mic=mic, on_speech_end=chime.end if chime else None)
             record = recorder(args.db, tts, stt) if args.db else None
-            stops, peaks, missed = wake_loop(
-                stt, tts, mic, turns, args.long, record, args.playback_threshold
+            stops, peaks, missed, starts, ends, reprompts = wake_loop(
+                stt, tts, mic, turns, args.long, record, args.playback_threshold, chime
             )
     else:
         stt = SpeechToText(device=args.mic)
@@ -283,6 +321,16 @@ def main() -> None:
             f"재생 중 임계값 못 넘은 높은 점수 {len(missed)}번: "
             + ", ".join(f"{s:.3f}" for s in missed)
         )
+    if starts:
+        print(
+            f"시작음 {len(starts)}번, 호출 받음 → 시작음 중앙값 "
+            f"{statistics.median(c[0] for c in starts):.0f}ms "
+            f"(호출어 끝부터 {statistics.median(c[1] for c in starts):.0f}ms)"
+        )
+    if ends:
+        print(f"종료음 {len(ends)}번, 말 끝 → 종료음 중앙값 {statistics.median(ends):.0f}ms")
+    if args.wake:
+        print(f"되물음 {reprompts}번")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 웹캠·마이크·스피커를 열고 "자비서"를 기다린다. 부르면 그래프(src/jarviseo/workflow/graph.py)로
 질문 한 번을 돌린다: 받아쓰기 → 의도 → (기억 검색 · 가리킴 · 성분 판정) → VLM → 읽기 → 기록.
 대답을 읽거나 기다리는 중에 "자비서"라고 부르면 끊고 새 질문을 받는다(끼어들기).
+부르면 시작음을, 질문하는 말이 끝나면(받아쓰기 전) 종료음을 낸다(JARVISEO_CHIME_VOLUME=0 이면 끔).
 OpenAI 키와 호출어 모델(data/models/jarviseo.onnx, data/README.md)이 필요하다.
 
 실행 (레포 맨 위 폴더에서):
@@ -43,7 +44,14 @@ from jarviseo.nutrition.service import IngredientChecker
 from jarviseo.pointing import resolve_target
 from jarviseo.pointing.detector import ObjectDetector
 from jarviseo.vlm import VLMClient
-from jarviseo.voice import BargeIn, ResponseCollector, SpeechToText, TextToSpeech, WakeWordDetector
+from jarviseo.voice import (
+    BargeIn,
+    Chime,
+    ResponseCollector,
+    SpeechToText,
+    TextToSpeech,
+    WakeWordDetector,
+)
 from jarviseo.voice.mic import MicStream
 from jarviseo.workflow import GraphDeps, JarviseoState, build_graph
 
@@ -157,6 +165,7 @@ def _write_jpg(path: Path, image: np.ndarray) -> None:
 def run(
     graph,
     barge: BargeIn,
+    chime: Chime,
     session_id: int,
     user_id: int,
     turns: list,
@@ -170,6 +179,7 @@ def run(
         wake = barge.wait(timeout=0.5)
         if wake is None:
             continue
+        chime.start()  # 듣고 있다는 신호. 바로 그래프가 듣기 시작해서 이어 말한 질문도 받는다
         print(f"\n{'끼어들기' if trigger == 'BARGE_IN' else '호출어'} (점수 {wake.score:.3f})")
         turn = {
             "session_id": session_id,
@@ -207,6 +217,7 @@ def main() -> None:
     vlm = VLMClient()
     dialog = DialogMemory(VectorMemory(store))
     tts = TextToSpeech(device=args.speaker)
+    chime = Chime(device=args.speaker)
     barge = BargeIn(tts)
     collector = ResponseCollector(tts, called_since=barge.called_since)  # "잠깐만요"를 미리 합성
     frames = FrameBuffer(config.FRAME_BUFFER_SIZE)
@@ -223,7 +234,7 @@ def main() -> None:
 
     with MicStream(args.mic) as mic, Camera(WebcamSource(args.camera), frames):
         deps = GraphDeps(
-            stt=SpeechToText(mic=mic),
+            stt=SpeechToText(mic=mic, on_speech_end=chime.end),  # 질문 말이 끝나면 종료음
             tts=tts,
             vlm=vlm,
             frames=frames,
@@ -249,7 +260,7 @@ def main() -> None:
         print(f"성분 판정: 캐시 → {qr_state} → 성분표 OCR({ocr_state})")
         print("\n'자비서'를 부르고 이어서 말하세요. 끝내려면 Ctrl+C")
         try:
-            run(graph, barge, session_id, user_id, turns, store, photo_dir)
+            run(graph, barge, chime, session_id, user_id, turns, store, photo_dir)
         except KeyboardInterrupt:
             pass
         finally:
