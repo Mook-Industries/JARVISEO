@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, make_url, select, text
 from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import sessionmaker
 
@@ -70,6 +70,17 @@ def _wall_clock(t: float) -> datetime:
     return datetime.now(UTC) - timedelta(seconds=time.monotonic() - t)
 
 
+def _connect_args(database_url: str) -> dict[str, int]:
+    """Postgres 면 연결 제한 시간을 준다. 컨테이너가 꺼져 있으면 기다리지 않고 예외를 낸다.
+
+    없으면 윈도우에서 psycopg 가 닫힌 포트를 알아채지 못하고 끝없이 기다린다(#131).
+    SQLite 드라이버는 이 인자를 모른다.
+    """
+    if make_url(database_url).get_backend_name() != "postgresql":
+        return {}
+    return {"connect_timeout": config.DB_CONNECT_TIMEOUT_SEC}
+
+
 class MemoryStore:
     """DB 연결과 질의를 감싼다.
 
@@ -86,7 +97,12 @@ class MemoryStore:
         self.database_url = database_url or config.DATABASE_URL
         # pool_pre_ping: 컨테이너가 재시작되면 죽은 연결이 풀에 남는다.
         # 쓰기 전에 살아 있는지 확인해서 "server closed the connection" 을 막는다.
-        self.engine = create_engine(self.database_url, echo=echo, pool_pre_ping=True)
+        self.engine = create_engine(
+            self.database_url,
+            echo=echo,
+            pool_pre_ping=True,
+            connect_args=_connect_args(self.database_url),
+        )
         self._make_session = sessionmaker(bind=self.engine, expire_on_commit=False)
 
     # -- 수명주기 ----------------------------------------------------------
