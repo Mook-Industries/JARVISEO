@@ -8,6 +8,7 @@
 | `check_speaker_latency.py` | 스피커를 여는 시간과 출력 지연(`latency` high·low) — 첫 소리까지 걸리는 시간. 무음만 쓴다 (#104 시작음) |
 | `check_barge_turns.py` | 끼어드는 때(대답 읽는 중·되묻기 읽는 중·되묻기 대답 기다리는 중)마다 턴이 어떻게 나뉘고 total 이 얼마인지 — 실제 그래프·`BargeIn`·`resolve_target`·SQLite 기록에 시간이 흐르는 가짜 STT·TTS·VLM 을 끼워 재현. 키·마이크 없이 30초쯤 (#105) |
 | `check_tts.py` | 실제 TTS 합성 확인 — 속도별 첫 소리까지 시간·길이 출력하고 재생 |
+| `check_tts_stall.py` | TTS 합성이 읽는 도중 멈추는 비율을 모델마다 잰다(첫 조각·조각 사이 최대 멈춤). `--speak` 는 실제 `speak()` 가 폴백으로 끝까지 읽는지 본다. 소리 안 냄 (#130) |
 | `check_filler_gap.py` | "잠깐만요" 뒤 대답 첫 소리까지의 빈틈 — assistant.py DB 의 VLM 지연·대답으로 미리 합성(prefetch) 끔/켬을 번갈아 재고 중앙값 출력. 실제 TTS, 소리는 안 냄 |
 | `check_ingredient_ocr.py` | 실제 성분표 사진 OCR 확인 — 줄별 판독·신뢰도·지연과 원재료/알레르기 표시/같은 제조시설 구간 출력, 여러 장이면 신뢰도 요약 |
 | `ocr_eval/evaluate.py` | 성분표 OCR 평가 — 정답 글자가 있는 사진으로 엔진·전처리(easyocr, easyocr-pre, paddle)별 CER·알레르겐 재현율/정밀도·머리말/혼입 문장·신뢰도·지연 비교, CSV 저장. `--init` 으로 정답 초안 생성 |
