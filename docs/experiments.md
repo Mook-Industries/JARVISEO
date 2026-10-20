@@ -903,3 +903,57 @@ TTS 목소리 2개(coral, onyx)로 합성한 40개다. 잡음은 웨이크워드
 | 받아쓰기: 사람 목소리 질문 20개로 #65 비교 표 | 위 표. gpt-transcribe 16/20, CER 0.070, 중앙 892ms | 통과 (기본 모델 유지) |
 | assistant.py 통합 실측 10턴 이상, "아까 본 ○○" 3번 중 2번, 버그는 건마다 이슈 | 세션 13 · 14 11턴. 이어폰 2/2 정답, 위치 없는 노트북은 모른다고 함. 버그 2건(TTS 도중 멈춤, 기억이 "아까"를 무시). 가리킴 대답의 검출기 이름은 가리킴 모델 통합 뒤 다시 본다 | 통과, 버그 이슈 2건 |
 | CI 4개 job | 푸시 뒤 | CI 남음 |
+
+## 구간 지연 · lock · SQLite 폴백 (#118, 2026-10-20)
+
+### 음성 구간 지연표 (p50 · p95)
+
+호출부터 대답 첫 소리까지 음성 쪽 구간. 30턴 실측(`voice_loop.py 1 --wake --chime --csv`, `assistant.py 1 --camera 1` → `measure_latency.py`)
+전에 이미 있는 측정을 모았다. 괄호는 건수. 스피커 출력 지연(노트북 MME 약 0.09~0.18초)은 빠져 있다.
+
+| 구간 | 지금까지 값 | 어디서 | 30턴 실측 |
+|---|---|---|---|
+| "자비서" 끝 → 호출어 감지 | 중앙 110 · p90 230 · 최대 330ms (52) | `wakeword/lag.py`, eval 실제 녹음(노트북 · 카메라 마이크) | 녹음 그대로 |
+| 호출어 감지 → 시작음 | 중앙 24ms (2) | #104 실측 | |
+| 말 끝 → 종료음 (말끝 대기 0.7초 포함) | 중앙 783ms (2) | #104 실측 | |
+| STT 왕복 | p50 875 · p95 1094 (7), p50 892 · p95 1226 (20) | 세션 13, `stt_compare.py s01-cam` | |
+| TTS 첫 조각 | p50 734 · p95 1641 (7) / p50 1688 · p95 2610 (4) | 세션 13 / 세션 14(gpt-4o-mini-tts 가 느리던 때) | |
+| "잠깐만요" 뒤 대답 첫 소리 | 중앙 297ms (21) | D13 재현(`check_filler_gap.py`) | |
+| 끼어들기 감지 → 멈춤 | 81~165ms | D11 실측 | |
+| 말 끝 → 대답 첫 소리 (total) | p50 6251 · p95 17182 (7) | 세션 13(`measure_latency.py`) | |
+
+- 세션 13 의 total p95 17초는 가리킴 되묻기(82)와 첫 검출의 모델 불러오기 10.5초(81) 때문이다. 30턴 실측에서는 첫 턴을 빼고, 되묻기 턴은 따로 센다.
+- TTS 첫 조각은 같은 날에도 서버에 따라 두 배 차이가 났다(세션 13 734ms, 세션 14 1688ms). #117 의 TTS 도중 멈춤과 같은 원인으로 본다.
+
+### requirements.lock
+
+`uv pip compile requirements.txt --universal --python-version 3.12 --overrides requirements-overrides.txt -o requirements.lock`.
+윈도우 · 맥 · 리눅스를 한 파일에 담았다(패키지 137개, OS 별 패키지는 `; sys_platform == …` 조건).
+openwakeword 가 리눅스에서 요구하는 tflite-runtime 은 파이썬 3.12 wheel 이 없어 uv 가 마커와 상관없이 실패하므로, overrides 로 3.12 미만에서만 걸리게 해서 뺐다.
+
+| 확인 | 결과 |
+|---|---|
+| 새 venv(파이썬 3.12.14, Windows)에 `requirements.lock` 만으로 설치 | 424초, torch 2.14.1+cpu · openai 3.35.1 · langgraph 1.2.16 |
+| 그 venv 로 `pytest` | 604 passed / 34 skipped |
+| macOS | 팀원 확인 남음 |
+
+### SQLite 폴백
+
+- `assistant.py` 의 기본 DB 가 SQLite(`data/assistant.db`)라, #117 통합 실측(세션 13 · 14, 11턴, 기억 질문 6번)이 SQLite 로 끝까지 돈 기록이다.
+- 기억 검색 시간 (`check_memory.py --rows N --skip-api`, 무작위 벡터 30회, 임베딩 왕복 빼고 DB 쪽만)
+
+| 행 수 | SQLite (10/20) | Postgres (D10, 10/11) |
+|---|---|---|
+| 1,000 | 중앙 1058 · p95 1181ms | 중앙 10ms |
+| 10,000 | 중앙 10360 · p95 14785ms | 중앙 52ms |
+
+  SQLite 는 pgvector 연산자가 없어 사용자의 기록을 전부 읽고 행마다 벡터 글자(1536개 숫자)를 풀어 파이썬으로 코사인을 잰다. 1행에 약 1ms 다.
+  데모처럼 기록이 수십 개면 수십 ms 라 괜찮지만, 수백 개를 넘기면 기억 질문마다 눈에 띄게 늦어진다. 벡터를 한 번만 풀어 메모리에 두거나(캐시)
+  numpy 로 한꺼번에 재면 줄일 수 있다.
+
+### Postgres 가 꺼져 있을 때
+
+`python scripts/assistant.py --db postgresql+psycopg://jarviseo:jarviseo@localhost:5432/jarviseo` (Docker 꺼짐, 5432 · 5433 닫힘).
+**아무 출력 없이 3분 넘게 멈춰 있었다**(180초에 강제 종료). 마이크 · 카메라를 열기 전 `store.init_schema()` 의 첫 연결에서 멈춘다.
+psycopg 3.3.6 이 윈도우에서 닫힌 포트에 연결할 때 `wait_conn` 의 select 가 실패를 못 알아채고 기다린다. 연결 제한 시간(`connect_timeout`)을
+안 줘서 끝이 없다(테스트의 conftest 는 3초를 준다). 소켓으로 직접 붙어 보면 거절까지 주소마다 2초다. [Bug] 이슈로 연다.
