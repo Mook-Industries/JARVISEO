@@ -17,6 +17,7 @@
 
     check_ingredient ─▶ speak ─▶ log ─▶ END
     generate ─(answered)─▶ speak ─▶ log ─▶ END,  generate ─(dropped: 다시 불러 답을 버림)─▶ log
+    clarify ─(called_again: 되묻는 중이나 대답을 기다리는 중에 다시 불림)─▶ log
 
 노드가 하는 일은 nodes/ 의 각 파일 머리말에 있다.
 호출어 기다리기와 끼어들기는 그래프 밖(scripts/assistant.py)에서 한다.
@@ -98,7 +99,9 @@ def build_graph(deps: GraphDeps):  # -> CompiledStateGraph
         "resolve", pointing.after_resolve, {"ambiguous": "clarify", "chosen": "crop_target"}
     )
     graph.add_conditional_edges(
-        "clarify", pointing.after_clarify, {"gave_up": "speak", "replied": "resolve"}
+        "clarify",
+        pointing.after_clarify,
+        {"called_again": "log", "gave_up": "speak", "replied": "resolve"},
     )
     graph.add_conditional_edges(
         "crop_target", intent.after_crop, {"ingredient": "check_ingredient", "answer": "generate"}

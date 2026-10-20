@@ -47,6 +47,17 @@ def test_keeps_only_recent_history_sec():
     assert got == [7, 8, 9]  # 그보다 오래된 블록은 버렸다
 
 
+def test_default_history_keeps_call_read_after_reply():
+    """기본값이면 다시 부르고 4초 뒤에 읽어도 호출 1초 앞부터 남아 있다."""
+    # 되묻기 대답을 기다리다 다시 불렀으면(#105) 다음 턴은 그 대답을 받아쓴 뒤에야
+    # 호출 시각 1초 앞부터(config.WAKE_LOOKBACK_SEC) 다시 읽는다
+    wake = 2.0
+    with MicStream(source=blocks(round((wake + 4.0) / BLOCK_SEC))) as mic:
+        got = [t for _, t in mic.blocks(since=wake - 1.0)]
+
+    assert got[0] == pytest.approx(wake - 1.0, abs=BLOCK_SEC)
+
+
 def test_without_since_returns_blocks_after_call():
     """`since` 가 없으면 부른 뒤에 들어온 블록부터 준다."""
     go = threading.Event()

@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from jarviseo.capture import FrameBuffer, ImageFolderSource
-from jarviseo.memory import TurnCandidate, TurnInference
+from jarviseo.memory import SessionTurn, TurnCandidate, TurnInference, TurnVoice
 from jarviseo.pointing import resolve_target
 from jarviseo.types import BBox, Detection, Frame, Intent, TargetCandidate, TargetResolution
 from jarviseo.vlm import FakeVLMClient
@@ -180,9 +180,10 @@ def test_runs_end_to_end_with_image_folder(tmp_path):
 # --- 되묻기 ------------------------------------------------------------------
 
 
-def test_ambiguous_asks_and_resolves_with_reply():
-    """애매하면 되묻고 대답으로 다시 고른다."""
-    deps = _deps(["저거 뭐야?", "왼쪽 거"], margins=[0.05, 0.5])
+@pytest.mark.parametrize("called_since", [None, lambda t: False])
+def test_ambiguous_asks_and_resolves_with_reply(called_since):
+    """애매하면 되묻고 대답으로 다시 고른다. 다시 부르지 않았으면 called_since 가 있어도 같다."""
+    deps = _deps(["저거 뭐야?", "왼쪽 거"], margins=[0.05, 0.5], called_since=called_since)
 
     result = build_graph(deps).invoke({})
 
@@ -267,6 +268,67 @@ def test_no_candidates_gives_notice_without_asking():
     build_graph(deps).invoke({})
 
     assert deps.tts.spoken == [CLARIFY_GIVE_UP]
+
+
+# --- 되묻는 중에 다시 부름 ---------------------------------------------------
+
+
+class _ReplySTT(FakeSpeechToText):
+    """listen() 을 부른 횟수를 센다. 두 번째(되묻기 대답)를 듣는 동안 다시 부른 척할 수 있다."""
+
+    def __init__(self, texts, call_while_replying=False) -> None:
+        super().__init__(texts)
+        self.calls = 0
+        self.call_while_replying = call_while_replying
+        self.called_again = False
+
+    def listen(self, *args, **kwargs):
+        self.calls += 1
+        if self.calls == 2 and self.call_while_replying:
+            self.called_again = True
+        return super().listen(*args, **kwargs)
+
+
+def test_clarify_cut_off_by_new_call_ends_turn_without_reply(store):
+    """되묻는 중에 다시 부르면 대답을 듣지 않고, 빈 대답·끊김·되묻기로 기록만 하고 끝낸다."""
+    user_id = store.ensure_user()
+    turn = {"session_id": store.start_session(user_id), "user_id": user_id}
+    deps = _deps([], margins=[0.05], store=store, dialog=_Dialog())
+    deps.stt = _ReplySTT(["저거 뭐야?", "이건 뭐야?"])
+    deps.tts = FakeTextToSpeech(interrupt=[QUESTION])
+
+    result = build_graph(deps).invoke(turn)
+
+    assert deps.stt.calls == 1  # 새 질문("이건 뭐야?")은 다음 턴이 받는다
+    assert deps.tts.spoken == [QUESTION]  # "다시 가리켜 주세요"를 읽지 않는다
+    assert result["interrupted"] is True  # 다음 턴은 BARGE_IN
+    assert result["clarify_replies"] == []  # 받아쓴 말을 대답으로 넣지 않았다
+    assert deps.dialog.remembered == []
+    with store.session() as db:
+        logged = db.get(SessionTurn, result["turn_id"])
+        assert logged.answer_text == ""
+        assert logged.total_ms is None  # 대답 소리가 안 났다. 단계 합으로 채우지 않는다
+        assert db.get(TurnVoice, result["turn_id"]).is_interrupted is True
+        assert db.get(TurnInference, result["turn_id"]).is_reask is True
+
+
+def test_new_call_while_waiting_for_reply_ends_turn():
+    """되묻기 대답을 기다리는 동안 다시 불렀으면 받아쓴 말을 대답으로 쓰지 않고 끝낸다."""
+    deps = _deps([], margins=[0.05])
+    deps.stt = _ReplySTT(["저거 뭐야?", "이건 뭐야?"], call_while_replying=True)
+    seen: list[float] = []
+    deps.called_since = lambda t: seen.append(t) or deps.stt.called_again
+
+    result = build_graph(deps).invoke({})
+
+    assert result["interrupted"] is True
+    assert result["clarify_replies"] == []  # 받아쓴 말을 대답으로 넣지 않았다
+    assert len(deps.resolve.calls) == 1  # 받아쓴 말로 다시 고르지 않는다
+    assert deps.tts.spoken == [QUESTION]
+    # 질문을 다 말한 뒤에 들린 호출만 센다
+    assert set(seen) == {result["utterance"].ended_at}
+    # 대답 듣기를 그 자리에서 멈춰서(stop) 새 질문은 다음 턴의 listen 이 받는다
+    assert deps.stt.listen().text == "이건 뭐야?"
 
 
 # --- 재촬영 ------------------------------------------------------------------

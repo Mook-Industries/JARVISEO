@@ -15,6 +15,12 @@ OpenAI 키가 필요하다.
 대답을 읽는 중에 "자비서"라고 부르면 바로 끊고 새 질문을 받는다(끼어들기).
 
 --long 은 질문 뒤에 15초쯤 걸리는 문장을 붙여 읽는다. 끼어들 틈을 만들려는 것이다.
+--short 는 질문 대신 되묻기 길이(약 2초)의 "왼쪽 컵이요, 오른쪽 컵이요?"를 읽는다.
+읽을 때마다 "자비서"라고 불러서, 짧은 문장을 읽는 중에도 끼어들기가 되는지 잰다(#105).
+읽는 중에 끊으면 몇 초째에 끊겼는지, 끝까지 읽었는데 감지가 재생 뒤로 밀렸으면 끝나고 몇 ms 에
+잡혔는지, 아예 못 잡았으면 재생 중 최고 점수를 찍고 끝낼 때 모아 찍는다.
+늦게 잡힌 호출도 assistant.py 의 되묻기처럼 다음 턴으로 받는다.
+    python scripts/voice_loop.py --wake --short --chime
 --db 는 턴마다 session_turn·turn_voice 에 남긴다. 주소를 안 주면 data/voice_loop.db(SQLite).
 --playback-threshold 는 재생 중 호출어 임계값을 바꿔 본다(기본 config.WAKEWORD_PLAYBACK_THRESHOLD).
 --wake 는 끝까지 읽은 대답마다 재생 중 호출어 최고 점수를 찍는다. 자기 목소리 점수와
@@ -58,6 +64,10 @@ LONG_ANSWER = (
     "문장입니다. 읽는 도중에 호출어를 부르시면 바로 멈추고 새 질문을 들을게요. 부르지 않으시면 "
     "끝까지 읽은 다음 호출을 기다립니다. 마지막으로, 오늘 하루도 편안하게 보내세요."
 )
+# 되묻기와 같은 길이의 문장(--short). 되묻는 말을 읽는 중에도 끼어들 수 있는지 본다(#105).
+SHORT_ANSWER = "왼쪽 컵이요, 오른쪽 컵이요?"
+# 짧은 문장을 끝까지 읽은 뒤 늦은 감지를 기다리는 시간(초). 감지는 호출어 끝보다 최대 0.33초 늦다.
+LATE_SEC = 0.5
 DEFAULT_DB = "sqlite:///data/voice_loop.db"
 
 # 턴 하나를 DB 에 남기는 함수. (질문, 대답, 단계별 지연, trigger_type)
@@ -65,14 +75,15 @@ Record = Callable[[Utterance, str, dict[str, float], str], None]
 
 
 def echo(
-    stt: SpeechToText, tts: TextToSpeech, utterance: Utterance, long: bool
+    stt: SpeechToText, tts: TextToSpeech, utterance: Utterance, long: bool, short: bool = False
 ) -> tuple[str, dict[str, float]] | None:
-    """질문을 그대로(--long 이면 긴 문장을 붙여) 읽어 주고 대답과 단계별 지연(ms)을 돌려준다.
+    """질문을 그대로(--long 이면 긴 문장을 붙여, --short 면 짧은 되묻기 문장으로 바꿔) 읽어 주고
+    대답과 단계별 지연(ms)을 돌려준다.
 
     소리를 못 냈으면 None.
     """
     print(f"  질문 {utterance.text!r} (원문 {stt.last_raw_text!r})")
-    answer = utterance.text + (LONG_ANSWER if long else "")
+    answer = SHORT_ANSWER if short else utterance.text + (LONG_ANSWER if long else "")
     heard = time.monotonic()
     if tts.speak(answer) is None:
         print("  합성 실패, 소리를 못 냈다")
@@ -154,17 +165,34 @@ def wake_loop(
     record: Record | None,
     playback_threshold: float,
     chime: Chime | None,
-) -> tuple[list[float], list[float], list[float], list[tuple[float, float]], list[float], int]:
+    short: bool = False,
+) -> tuple[
+    list[float],
+    list[float],
+    list[float],
+    list[tuple[float, float]],
+    list[float],
+    int,
+    dict[str, list[float]],
+]:
     """호출어로 턴을 연다. 끼어들기마다 감지 → 멈춤(ms)을, 끝까지 읽은 대답마다 재생 중
     호출어 최고 점수를, 재생 중 임계값을 못 넘은 높은 점수를, 시작음마다 (호출 받음 → 시작음,
     호출어 끝 → 시작음)(ms)을, 질문마다 말 끝 → 종료음(ms)을 모으고, 되물은 횟수와 같이 돌려준다.
+    short 면 짧은 문장마다 읽는 중 끊긴 때(cut, 재생 ms)·끝난 뒤 늦게 잡힌 때(late, 끝 기준 ms)·
+    못 잡았을 때 재생 중 최고 점수(missed)도 모아 마지막에 돌려준다.
 
     종료음은 stt 를 만들 때 ``on_speech_end=chime.end`` 로 넘겨 둔다(main).
     """
     barge = BargeIn(tts)
+    detected: list[float] = []  # 호출어를 잡은 시각. --short 에서 재생 뒤 늦은 감지를 찾는다
+
+    def on_detect(t: float, score: float) -> None:
+        detected.append(t)
+        barge.on_detect(t, score)
+
     peak = PlaybackPeak(playback_threshold)
     detector = WakeWordDetector(
-        mic, on_detect=barge.on_detect, playback_threshold=playback_threshold, scorer=peak
+        mic, on_detect=on_detect, playback_threshold=playback_threshold, scorer=peak
     )
     detector.start()
     stops: list[float] = []
@@ -173,6 +201,7 @@ def wake_loop(
     starts: list[tuple[float, float]] = []
     ends: list[float] = []
     reprompts = 0
+    shorts: dict[str, list[float]] = {"cut": [], "late": [], "missed": []}
     trigger = "WAKEWORD"
     print(
         f"\n호출어({config.WAKEWORD_MODEL}, 임계값 {detector.threshold}, 재생 중 "
@@ -187,7 +216,10 @@ def wake_loop(
             called = time.monotonic()
             if chime:
                 chime.start()
-            if trigger == "BARGE_IN":
+            if trigger == "BARGE_IN" and tts.speaker.stopped_at is None:
+                # --short 에서 재생이 끝난 뒤에 잡힌 호출이다. 멈춘 소리가 없다
+                print(f"\n끼어들기 (점수 {wake.score:.3f}, 재생 뒤 감지)")
+            elif trigger == "BARGE_IN":
                 stops.append((tts.speaker.stopped_at - wake.t) * 1000)
                 print(f"\n끼어들기 (점수 {wake.score:.3f}, 감지 → 멈춤 {stops[-1]:.0f}ms)")
             else:
@@ -209,10 +241,12 @@ def wake_loop(
                     ends.append((chime.end_played_at - utterance.ended_at) * 1000)
                     line += f", 말 끝 → 종료음 {ends[-1]:.0f}ms"
                 print(line)
-            result = None
+            result = late = None
+            before = time.monotonic()
             if utterance is None:
                 print(f"  질문 없음 (원문 {stt.last_raw_text!r})")
-            elif result := echo(stt, tts, utterance, long):
+            elif result := echo(stt, tts, utterance, long, short):
+                ended = time.monotonic()
                 turns.append(result[1])
                 if record is not None:
                     record(utterance, *result, trigger)
@@ -225,16 +259,31 @@ def wake_loop(
                         "  재생 중 임계값 못 넘은 점수 "
                         + ", ".join(f"{s:.3f}" for s in peak.missed)
                     )
-            # 대답을 읽다 끊겼으면 끊은 호출이 큐에 있고, 그게 다음 턴이 된다.
-            # 끝까지 읽었으면 질문하는 동안 다시 잡힌 호출어 같은 지난 감지는 버린다.
-            trigger = "BARGE_IN" if result and tts.last_interrupted else "WAKEWORD"
+                if short and tts.last_interrupted:
+                    shorts["cut"].append(result[1]["재생"])
+                    print(f"  {result[1]['재생'] / 1000:.1f}초째에 끊김")
+                elif short:
+                    # 짧은 문장 끝에 걸쳐 부르면 감지가 재생 뒤로 밀린다. 감지 지연만큼 더 본다
+                    time.sleep(LATE_SEC)
+                    late = next((t for t in detected if t > before), None)
+                    if late is not None:
+                        shorts["late"].append((late - ended) * 1000)
+                        print(f"  끝까지 읽고 {shorts['late'][-1]:+.0f}ms 에 감지 (늦은 감지)")
+                    else:
+                        shorts["missed"].append(peak.peak)
+                        print(f"  못 잡음 (재생 중 최고 점수 {peak.peak:.3f})")
+            # 대답을 읽다 끊겼거나 (--short 에서) 끝난 직후 늦게 잡혔으면 그 호출이 큐에 있고,
+            # 그게 다음 턴이 된다. 끝까지 읽었으면 질문하는 동안 다시 잡힌 호출어 같은 지난 감지는
+            # 버린다.
+            called_again = result is not None and (tts.last_interrupted or late is not None)
+            trigger = "BARGE_IN" if called_again else "WAKEWORD"
             if trigger == "WAKEWORD":
                 barge.clear()
     except KeyboardInterrupt:
         pass
     finally:
         detector.stop()
-    return stops, peaks, missed, starts, ends, reprompts
+    return stops, peaks, missed, starts, ends, reprompts, shorts
 
 
 def recorder(url: str, tts: TextToSpeech, stt: SpeechToText) -> Record:
@@ -274,6 +323,11 @@ def main() -> None:
     parser.add_argument("--wake", action="store_true", help="Enter 대신 호출어로 시작한다")
     parser.add_argument("--long", action="store_true", help="질문 뒤에 긴 문장을 붙여 읽는다")
     parser.add_argument(
+        "--short",
+        action="store_true",
+        help="질문 대신 되묻기 길이(약 2초) 문장을 읽는다. 읽는 중 끼어들기를 잰다 (#105)",
+    )
+    parser.add_argument(
         "--db", nargs="?", const=DEFAULT_DB, help=f"턴을 DB 에 남긴다 (기본 {DEFAULT_DB})"
     )
     parser.add_argument(
@@ -294,14 +348,15 @@ def main() -> None:
     starts: list[tuple[float, float]] = []
     ends: list[float] = []
     reprompts = 0
+    shorts: dict[str, list[float]] = {}
     tts = TextToSpeech(device=args.speaker)
     if args.wake:
         chime = Chime(device=args.speaker) if args.chime else None
         with MicStream(args.mic) as mic:
             stt = SpeechToText(mic=mic, on_speech_end=chime.end if chime else None)
             record = recorder(args.db, tts, stt) if args.db else None
-            stops, peaks, missed, starts, ends, reprompts = wake_loop(
-                stt, tts, mic, turns, args.long, record, args.playback_threshold, chime
+            stops, peaks, missed, starts, ends, reprompts, shorts = wake_loop(
+                stt, tts, mic, turns, args.long, record, args.playback_threshold, chime, args.short
             )
     else:
         stt = SpeechToText(device=args.mic)
@@ -331,6 +386,18 @@ def main() -> None:
         print(f"종료음 {len(ends)}번, 말 끝 → 종료음 중앙값 {statistics.median(ends):.0f}ms")
     if args.wake:
         print(f"되물음 {reprompts}번")
+    if args.wake and args.short:
+        cut, late, miss = shorts["cut"], shorts["late"], shorts["missed"]
+        line = f"짧은 문장 {len(cut) + len(late) + len(miss)}번: 읽는 중 끊김 {len(cut)}"
+        if cut:
+            line += f"(중앙 {statistics.median(cut) / 1000:.1f}초째)"
+        line += f", 끝난 뒤 늦게 감지 {len(late)}"
+        if late:
+            line += "(" + ", ".join(f"{ms:+.0f}" for ms in late) + "ms)"
+        line += f", 못 잡음 {len(miss)}"
+        if miss:
+            line += "(재생 중 최고 점수 " + ", ".join(f"{s:.3f}" for s in miss) + ")"
+        print(line)
 
 
 if __name__ == "__main__":

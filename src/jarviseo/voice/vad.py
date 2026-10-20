@@ -62,6 +62,7 @@ def record_speech(
     silence_sec: float = 0.7,
     is_speech: Callable[[np.ndarray], bool] | None = None,
     ignore: Callable[[float], bool] | None = None,
+    stop: Callable[[], bool] | None = None,
 ) -> Speech | None:
     """블록을 읽다가 발화 하나를 잘라 돌려준다.
 
@@ -71,6 +72,8 @@ def record_speech(
     timeout 초 안에 시작을 못 잡으면 None. 말이 max_sec 를 넘으면 거기서 자른다.
     ignore(블록 시각) 가 True 인 블록은 말로 보지 않는다. 소리는 녹음에 그대로 남는다.
     시작음·종료음이 섞인 구간을 넘길 때 쓴다(``MicGate.is_sounding``).
+    stop() 은 블록마다 부른다. True 가 되면 말하는 중이어도 그 자리에서 None 을 돌려준다.
+    되묻기 대답을 듣다가 "자비서"가 다시 들렸을 때처럼 듣기를 그만둘 때 쓴다(#105).
     is_speech 는 테스트에서 판정을 바꿔 끼울 때만 넘긴다.
     """
     is_speech = is_speech or _webrtcvad()
@@ -79,6 +82,8 @@ def record_speech(
     first_t = started_at = None
     voiced_until = 0.0
     for block, t in blocks:
+        if stop is not None and stop():
+            return None
         if first_t is None:
             first_t = t
         voiced = is_speech(block) and not (ignore is not None and ignore(t))

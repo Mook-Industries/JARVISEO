@@ -25,7 +25,7 @@ listen(STT + 말을 시작한 순간의 사진) ─▶ (recapture ↺) ─▶ ro
 | `voice.py` | `listen` · `speak` | `no_question` / `bad_frame` / `heard` |
 | `capture.py` | `recapture` | `gave_up` / `still_bad` / `good` |
 | `intent.py` | `route` | 의도 뒤 `recall` / `needs_target` / `ingredient` / `answer`, 크롭 뒤 `ingredient` / `answer` |
-| `pointing.py` | `detect` · `resolve` · `clarify` · `crop_target` | `ambiguous` / `chosen`, `gave_up` / `replied` |
+| `pointing.py` | `detect` · `resolve` · `clarify` · `crop_target` | `ambiguous` / `chosen`, `called_again` / `gave_up` / `replied` |
 | `ingredient.py` | `check_ingredient` | — |
 | `answer.py` | `generate` | `dropped` / `answered` |
 | `memory.py` | `recall` · `log` | — |
@@ -42,6 +42,7 @@ listen(STT + 말을 시작한 순간의 사진) ─▶ (recapture ↺) ─▶ ro
 | `memory` | 기억 검색 결과가 빈 목록이다 | `VectorMemory` | `FakeEmbedder` 를 쓴 `VectorMemory` |
 | `store` · `dialog` | 턴·성분 기록과 대화 기억 저장을 안 한다. 알레르기 목록도 비어 있다 | `MemoryStore` · `DialogMemory` | SQLite `MemoryStore` |
 | `collector` | "잠깐만요" 없이 답을 기다린다 | `ResponseCollector` | `FakeTextToSpeech` 를 쓴 `ResponseCollector` |
+| `called_since` | 되묻기 대답을 기다리는 동안 다시 불러도 그 말을 대답으로 받는다 | `BargeIn.called_since` | `lambda t: …` |
 | `sharpness_threshold` | 흐림은 보지 않는다(사진이 없을 때만 다시 고른다) | 안경 카메라로 잰 값 | `100.0` |
 
 ## 알아둘 것
@@ -56,6 +57,9 @@ listen(STT + 말을 시작한 순간의 사진) ─▶ (recapture ↺) ─▶ ro
   API 왕복을 하나 더 넣을 자리가 없다.
 - 되돌아가는 분기 두 개: 사진이 없거나 흐리면 `recapture`(최대 2번), 대상이 모호하면 `clarify`(최대 2번).
   상한을 넘으면 안내를 읽고 끝낸다. 되묻기는 대답까지 그래프 안에서 듣고, 사진은 다시 고르지 않는다.
+  되묻는 중이나 대답을 기다리는 중에 "자비서"라고 다시 부르면(`called_again`) 대답으로 받지 않고 빈 대답으로
+  기록만 한다. `interrupted` 라서 그 호출은 다음 턴(BARGE_IN)이 새 질문으로 받는다. 대답을 기다리는 중이면
+  5초를 다 채우지 않고 그 자리에서 듣기를 멈춘다(`listen(stop=...)`).
   되묻기 대답은 "컵"처럼 한 글자여도 받는다(`listen(min_letters=1)`).
 - 턴이 끝나면 질문·대답을 대화 기억(`DialogMemory`)에 맡긴다. 빈 대답, 미리 정한 안내 문장(`CANNED`),
   기억을 물은 턴은 넣지 않는다. 새 내용이 없고, 넣으면 다음 기억 검색에서 원래 기록보다 먼저 찾힌다.

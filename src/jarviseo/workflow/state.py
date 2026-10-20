@@ -79,7 +79,8 @@ class JarviseoState(TypedDict, total=False):
     response: AssistantResponse
     # 답이 늦어 "잠깐만요"를 먼저 읽었으면 True (turn_voice.is_filler_sent)
     filler_sent: bool
-    # 읽던 답이 끼어들기로 끊겼거나, 기다리는 동안 다시 불러 답을 버렸으면 True.
+    # 읽던 답이 끼어들기로 끊겼거나, 기다리는 동안 다시 불러 답을 버렸거나,
+    # 되묻는 중이나 되묻기 대답을 기다리는 중에 다시 불렀으면 True.
     # 그러면 다음 턴은 BARGE_IN 이다 (turn_voice.is_interrupted).
     interrupted: bool
     turn_id: int

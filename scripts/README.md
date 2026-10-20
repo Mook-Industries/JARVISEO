@@ -6,6 +6,7 @@
 | `check_listen.py` | 실제 마이크로 `listen()` 확인 — 원문·정리된 질문·시각·지연 출력 |
 | `check_mic_clock.py` | 마이크 블록 시각이 실제 시각을 따라가는지 — N분 동안 10초마다 샘플 수로만 센 시각(고치기 전)과 `BlockClock`(고친 뒤)이 얼마나 늦었는지, 끝에 장치 속도 차이(%). 소리는 저장 안 함 (#69) |
 | `check_speaker_latency.py` | 스피커를 여는 시간과 출력 지연(`latency` high·low) — 첫 소리까지 걸리는 시간. 무음만 쓴다 (#104 시작음) |
+| `check_barge_turns.py` | 끼어드는 때(대답 읽는 중·되묻기 읽는 중·되묻기 대답 기다리는 중)마다 턴이 어떻게 나뉘고 total 이 얼마인지 — 실제 그래프·`BargeIn`·`resolve_target`·SQLite 기록에 시간이 흐르는 가짜 STT·TTS·VLM 을 끼워 재현. 키·마이크 없이 30초쯤 (#105) |
 | `check_tts.py` | 실제 TTS 합성 확인 — 속도별 첫 소리까지 시간·길이 출력하고 재생 |
 | `check_filler_gap.py` | "잠깐만요" 뒤 대답 첫 소리까지의 빈틈 — assistant.py DB 의 VLM 지연·대답으로 미리 합성(prefetch) 끔/켬을 번갈아 재고 중앙값 출력. 실제 TTS, 소리는 안 냄 |
 | `check_ingredient_ocr.py` | 실제 성분표 사진 OCR 확인 — 줄별 판독·신뢰도·지연과 원재료/알레르기 표시/같은 제조시설 구간 출력, 여러 장이면 신뢰도 요약 |
@@ -16,7 +17,7 @@
 | `run_ablation.py` | 가리킴 ablation — `tools/label_targets.py` 로 정답을 표시한 사진을 사진마다 한 번 검출하고, v1~v5(단서를 하나씩 쌓아 켬)로 고른 박스를 정답과 IoU 0.5 로 채점. 정답률 · 답한 것 정답률 · 되묻기율 · 손 있음/없음 · 후보 재현율 · 검출/대상 결정 p50/p95 · 실패 분류를 DB `eval_run` · `eval_sample` 과 사진별 CSV(`data/datasets/pointing/runs/`)에 남기고 같은 버전의 이전 실행과 차이를 찍는다. 미구현 버전은 건너뜀, `--split test` 는 최종 측정 때만, `--db sqlite://` 로 돌리면 기록 없이 확인만 |
 | `check_vlm.py` | 실제 VLM 확인 — 웹캠 사진(또는 `--image`) 한 장과 질문을 보내 답과 왕복 시간 출력, `--memory` 로 기억 검색 결과를 넘겨 보기 |
 | `assistant.py` | 호출어 → 질문 → (기억 검색) → VLM → 음성 대답을 그래프로 도는 비서 — 턴마다 질문·의도·기억·대답·단계별 지연, 끝낼 때 중앙값 출력. 턴은 `data/assistant.db`, 턴마다 고른 사진·가리킴 후보 박스·VLM 에 간 크롭은 `data/captures/session_<번호>/` (`--no-photos` 로 끔) |
-| `voice_loop.py` | Enter(또는 `--wake` 로 호출어) → STT → 에코 → TTS 음성 루프 — 턴마다 단계별 지연, 끝낼 때 중앙값 출력. `--wake` 는 읽는 중 "자비서"로 끼어들기(재생 중 최고 점수·못 넘은 점수 출력), `--long` 긴 대답, `--db` 턴을 DB 에 기록, `--playback-threshold` 재생 중 임계값, `--chime` 시작음·종료음(호출 → 시작음, 말 끝 → 종료음 지연·되물음 횟수 출력, 빼면 끔) |
+| `voice_loop.py` | Enter(또는 `--wake` 로 호출어) → STT → 에코 → TTS 음성 루프 — 턴마다 단계별 지연, 끝낼 때 중앙값 출력. `--wake` 는 읽는 중 "자비서"로 끼어들기(재생 중 최고 점수·못 넘은 점수 출력), `--long` 긴 대답, `--db` 턴을 DB 에 기록, `--playback-threshold` 재생 중 임계값, `--chime` 시작음·종료음(호출 → 시작음, 말 끝 → 종료음 지연·되물음 횟수 출력, 빼면 끔), `--short` 질문 대신 되묻기 길이(약 2초) 문장을 읽어 그 사이 끼어들기가 되는지(읽는 중 끊김·끝난 뒤 늦은 감지 ms·못 잡으면 재생 중 최고 점수) (#105) |
 | `wakeword/record.py` | 웨이크워드 녹음 — 말할 때마다 잘라 16kHz wav 와 화자·거리·환경 메타데이터 저장, `--tts` 로 합성 |
 | `wakeword/evaluate.py` | 웨이크워드 평가 — 평가용 녹음으로 임계값별 FRR·FAR·시간당 오탐 계산, CSV 저장 |
 | `wakeword/check.py` | 웨이크워드 녹음 검사 — 무음·잡음 합성 클립, 형식이 틀린 wav, metadata 와 안 맞는 파일을 찾아 `--fix` 로 지움 |

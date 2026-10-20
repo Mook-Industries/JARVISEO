@@ -70,9 +70,28 @@ def test_fake_stt_accepts_one_letter_with_min_letters():
     assert FakeSpeechToText(["컵"]).listen(min_letters=1).text == "컵"
 
 
+def test_fake_stt_stop_keeps_sentence_for_next_listen():
+    """Fake STT 는 `stop()` 이 True 면 None 을 주고, 그 문장은 다음 listen() 이 받는다."""
+    stt = FakeSpeechToText(["이건 뭐야?"])
+
+    assert stt.listen(stop=lambda: True) is None
+    assert stt.listen().text == "이건 뭐야?"  # 실제 listen(since=...) 이 지나간 소리를 다시 읽듯
+
+
 def test_fake_tts_collects_sentences():
     """Fake TTS 는 받은 문장을 모은다."""
     tts = FakeTextToSpeech()
 
     assert tts.speak("안녕하세요") >= 0
     assert tts.spoken == ["안녕하세요"]
+
+
+def test_fake_tts_interrupts_sentence_once():
+    """Fake TTS 는 `interrupt` 글자가 든 문장을 한 번 끊긴 것으로 친다."""
+    tts = FakeTextToSpeech(interrupt=["왼쪽 컵이요"])
+
+    tts.speak("왼쪽 컵이요, 오른쪽 컵이요?")
+    assert tts.last_interrupted is True
+    tts.speak("왼쪽 컵이요, 오른쪽 컵이요?")  # 같은 글자는 한 번만 끊는다
+    assert tts.last_interrupted is False
+    assert tts.spoken == ["왼쪽 컵이요, 오른쪽 컵이요?"] * 2

@@ -8,6 +8,7 @@ Postgres 에서만 터지는 문제(타입 불일치, pgvector 열 등)는 그�
 """
 
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -130,7 +131,7 @@ def _sample_response() -> tuple[Utterance, AssistantResponse]:
             margin=0.33,
             needs_clarify=False,
         ),
-        latency_ms={"stt": 120.0, "detect": 45.0, "vlm": 830.0, "tts": 210.0},
+        latency_ms={"stt": 120.0, "detect": 45.0, "vlm": 830.0, "tts": 210.0, "total": 1205.0},
     )
     return utterance, response
 
@@ -177,6 +178,20 @@ def test_logs_one_turn(store: MemoryStore):
         assert inf.frame_offset_ms == 100
         assert float(inf.blur_score) == pytest.approx(142.5)
         assert inf.detected_count == 2
+
+
+def test_turn_without_spoken_answer_leaves_total_empty(store: MemoryStore):
+    """대답 소리가 안 난 턴은 total 이 비어 있다. 단계 합으로 채우지 않는다."""
+    # 답을 버린 턴·되묻다 다시 불린 턴은 speak 를 안 거쳐서 total 이 없다
+    session_id = store.start_session(store.ensure_user())
+    utterance, response = _sample_response()
+    response = replace(response, text="", latency_ms={"stt": 120.0, "detect": 45.0})
+
+    turn_id = store.log_turn(session_id, utterance, response, interrupted=True)
+
+    with store.session() as db:
+        assert db.get(SessionTurn, turn_id).total_ms is None
+        assert db.get(TurnVoice, turn_id).stt_ms == 120  # 단계 값은 그대로 남는다
 
 
 def test_candidates_keep_cue_scores(store: MemoryStore):
