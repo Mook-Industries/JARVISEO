@@ -8,7 +8,7 @@ import time
 import pytest
 
 from jarviseo.memory import DialogMemory, FakeEmbedder, MemoryStore, Observation, VectorMemory
-from jarviseo.memory.dialog import dialog_text
+from jarviseo.memory.dialog import dialog_text, says_nothing
 from jarviseo.types import AssistantResponse, Intent, Utterance
 
 
@@ -92,3 +92,62 @@ def test_close_flushes_pending_saves(file_store):
 
     with file_store.session() as db:
         assert db.query(Observation).count() == 2
+
+
+# 실측 기록(data/assistant.db, 10/15·10/19)에서 가져온 대답
+NOTHING = [
+    ("이건 뭐야?", "사진에는 안경을 쓴 사람이 보이고, 뒤에는 사물함이 있습니다."),
+    (
+        "이거 뭐야?",
+        "안경을 쓴 분이 보이고, 뒤에는 번호가 붙은 사물함이 있습니다. "
+        "어떤 것을 물으시는지 알려주시면 더 자세히 말씀드릴게요.",
+    ),
+    ("이거 뭐지?", "카메라 앞에 손바닥을 펼친 사람이 보입니다. 뒤에는 사물함이 있고요."),
+    ("지금 몇 시?", "사진에는 시계가 보이지 않아 지금 몇 시인지 알 수 없습니다."),
+    ("방금 제작한 게 뭐지?", "사진에는 제작한 물건이 보이지 않아 무엇을 만드셨는지 모르겠습니다."),
+]
+SOMETHING = [
+    ("이건 뭐지?", "손에 들고 계신 건 스마트폰으로 보입니다."),
+    ("이거 뭐야?", "손가락으로 가리키신 건 검은색 뿔테 안경입니다."),
+    (
+        "이건 뭐야?",
+        "노트북 옆에 다이얼이 달린 전자기기가 보입니다. "
+        "사진만으로는 정확히 어떤 기기인지 알기 어렵습니다.",
+    ),
+    (
+        "이거 뭐야?",
+        "손에 쥐고 계신 검은색 물건은 펜처럼 보이는데, 사진만으로는 정확히 무엇인지 모르겠습니다.",
+    ),
+    ("열쇠 어디 있어?", "열쇠는 보이지 않지만 지갑은 책상 위에 있습니다."),
+    ("이거 뭐야?", "부분이 보이는 건 초록 물병입니다."),
+    # 사람·뒤를 직접 물었으면 그 대답이 답이다
+    ("사람 뒤에 뭐가 있지?", "사람 뒤에는 흰색 사물함이 여러 칸 있습니다."),
+    ("사람은 안 보여?", "네, 안경을 쓴 사람 한 분이 바로 앞에 보입니다."),
+]
+
+
+@pytest.mark.parametrize(("question", "answer"), NOTHING)
+def test_says_nothing_for_people_background_or_unknown(question, answer):
+    """사람·뒤만 말하거나 모른다고만 한 대답은 알아본 것이 없다."""
+    assert says_nothing(question, answer)
+
+
+@pytest.mark.parametrize(("question", "answer"), SOMETHING)
+def test_says_something_when_anything_was_named(question, answer):
+    """하나라도 알아본 것이 있거나, 사람·뒤를 직접 물었으면 기억할 것이 있다."""
+    assert not says_nothing(question, answer)
+
+
+def test_skips_answer_that_says_nothing(file_store):
+    """알아본 것이 없는 대답은 기억에 넣지 않는다. 그래서 다른 질문에 찾히지도 않는다."""
+    memory = VectorMemory(file_store, embedder=FakeEmbedder(), min_score=0.0)
+    dialog = DialogMemory(memory)
+    user_id, turn_id = a_turn(file_store)
+
+    question, answer = NOTHING[0]
+    assert dialog.remember(user_id, turn_id, question, answer).result(timeout=5) is None
+    dialog.close()
+
+    with file_store.session() as db:
+        assert db.query(Observation).count() == 0
+    assert memory.search(user_id, "아까 본 지갑 기억나?") == []
