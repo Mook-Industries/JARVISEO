@@ -91,6 +91,9 @@ OPENAI_API_KEY = _get("OPENAI_API_KEY")
 VLM_MODEL = _get("JARVISEO_VLM_MODEL", "gpt-6-sol")
 STT_MODEL = _get("JARVISEO_STT_MODEL", "gpt-transcribe")
 TTS_MODEL = _get("JARVISEO_TTS_MODEL", "gpt-4o-mini-tts")
+# TTS_MODEL 합성이 멈춰서(읽기 타임아웃) 한 번 더 요청할 때 쓰는 모델. gpt-4o-mini-tts 는 긴 대답
+# 8번 중 5번이 읽는 도중 30초 넘게 멈췄고, tts-1 은 4번 모두 끝까지 왔다(#118, 10/20).
+TTS_FALLBACK_MODEL = _get("JARVISEO_TTS_FALLBACK_MODEL", "tts-1")
 # 기억 검색용 문장 임베딩. 차원(1536)이 observation.embedding 의 VECTOR(1536) 과 같아야 한다.
 EMBED_MODEL = _get("JARVISEO_EMBED_MODEL", "text-embedding-3-small")
 # 기억 검색 점수(코사인 유사도)가 이보다 낮으면 근거로 넘기지 않는다.

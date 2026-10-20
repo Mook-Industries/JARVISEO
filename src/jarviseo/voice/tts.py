@@ -9,6 +9,8 @@
 
 speak() 는 미리 받지 않았을 때도 합성을 다른 스레드에서 받는다. 서버가 느리면 첫 조각까지
 몇 초가 걸리는데(#105 실측 11~16초), 그동안 "자비서"로 끼어들어도 바로 돌아오게 하려는 것이다.
+
+합성이 멈추면(읽기 타임아웃) ``config.TTS_FALLBACK_MODEL`` 로 한 번 더 요청해 처음부터 읽는다.
 """
 
 from __future__ import annotations
@@ -39,7 +41,8 @@ SPEEDS = {"SLOW": 0.85, "NORMAL": 1.0, "FAST": 1.2}
 # 받는 쪽(read)은 따로 짧게 건다. 첫 조각은 보통 0.6~1.5초에 오는데(D12 21턴), 서버가 느릴 때
 # 10초를 다 기다리고 다시 보내서 첫 소리까지 18.4초가 걸린 적이 있다(D5). 응답이 없는 서버로
 # 재 보면 10초는 20.6초 만에, read 4초는 8.5초 만에 포기한다. 3초 걸리는 응답은 둘 다 받는다.
-# 응답을 받기 시작한 뒤 멈춘 것은 openai 가 다시 보내지 않아서 speak() 가 한 번 더 요청한다.
+# 응답을 받기 시작한 뒤 멈춘 것은 openai 가 다시 보내지 않아서 speak() 가 폴백 모델로 한 번 더
+# 요청한다.
 TIMEOUT_SEC, READ_TIMEOUT_SEC, RETRIES = 10.0, 4.0, 1
 TIMEOUT = httpx2.Timeout(TIMEOUT_SEC, read=READ_TIMEOUT_SEC)
 # 조각을 기다리는 동안 이만큼마다 끼어들기(stop)를 확인한다. 스피커에 쓰는 단위(20ms)와 같다.
@@ -62,13 +65,16 @@ class TextToSpeech:
         speed: str = "NORMAL",
         device: int | None = None,
         client: OpenAI | None = None,
+        fallback_model: str = config.TTS_FALLBACK_MODEL,
     ) -> None:
         """voice · speed 는 ``user_setting`` 의 tts_voice · tts_speed (SLOW/NORMAL/FAST).
         device 는 sounddevice 출력 장치 번호다. None 이면 기본 스피커.
+        fallback_model 은 합성이 멈춰서 speak() 가 한 번 더 요청할 때 쓰는 모델이다.
 
         client 는 테스트에서 가짜 API 를 끼울 때만 넘긴다.
         """
         self.model = model
+        self.fallback_model = fallback_model
         self.voice = voice
         self.speed = speed
         self.speaker = Speaker(device)
@@ -91,7 +97,8 @@ class TextToSpeech:
         speak() 를 부른 뒤 첫 오디오 조각이 나오기까지 기다린 시간(ms)을 돌려준다. 이 값이
         ``turn_voice.tts_ms`` 다. 보통은 합성 첫 조각 왕복이고, 같은 text 를 prefetch() 해
         두었으면 미리 받은 만큼 짧다(다 받아 두었으면 거의 0).
-        합성이 도중에 실패하면 그때까지 받은 소리만 내고 멈춘다. 소리를 하나도 못 냈으면 None.
+        합성이 멈추면 폴백 모델로 한 번 더 요청해 처음부터 읽는다. 그것도 실패하면 그때까지
+        받은 소리만 내고 멈춘다. 소리를 하나도 못 냈으면 None.
         끝까지 읽었는지는 ``last_interrupted`` 로 본다.
         """
         self.last_interrupted = False
@@ -111,7 +118,7 @@ class TextToSpeech:
         try:
             self.speaker.play(chunks)
         except (OpenAIError, httpx2.HTTPError) as e:
-            # 요청 자체가 실패했거나(openai 가 이미 RETRIES 만큼 다시 보낸 뒤), 읽던 중에 멈췄다.
+            # 요청 자체가 실패했거나(openai 가 이미 RETRIES 만큼 다시 보낸 뒤), 폴백 요청도 멈췄다.
             # 받은 소리까지만 내고, 음성 루프는 멈추지 않는다.
             log.warning("합성 실패, 재생을 멈춘다: %s", e)
         finally:
@@ -121,7 +128,7 @@ class TextToSpeech:
         return self.last_latency_ms
 
     def _receive(self, text: str, source: _Prefetch) -> Generator[bytes]:
-        """source 의 조각을 낸다. 첫 조각도 못 받고 멈췄으면 한 번 더 요청해서 이어 낸다.
+        """source 의 조각을 낸다. 합성이 멈췄으면 폴백 모델로 한 번 더 요청해 처음부터 이어 낸다.
 
         다시 요청하는 것까지 play() 한 번 안에서 한다. play() 를 다시 부르면 그사이 온
         stop() 표시가 지워져서, 끼어든 뒤에 앞 대답을 처음부터 읽었다.
@@ -137,12 +144,14 @@ class TextToSpeech:
             if stopped():
                 return
             # 응답을 받기 시작한 뒤 서버가 멈추면 openai 가 감싸지 않은 httpx2.ReadTimeout 이
-            # 그대로 올라오고, openai 도 다시 보내 주지 않는다. 첫 조각도 못 받았으면 새로
-            # 한 번 더 요청한다. 이미 읽던 중이면 받은 만큼만 읽고 멈춘다.
-            if received or not isinstance(e, httpx2.HTTPError):
+            # 그대로 올라오고, openai 도 다시 보내 주지 않는다. 그래서 여기서 새로 한 번 더
+            # 요청한다. 멈춤이 적은 폴백 모델로 보내고, 이미 읽던 중이었어도 처음부터 읽는다.
+            # 앞부분("네")이 한 번 더 나오지만, 받은 만큼만 읽고 끝내면 대답을 못 듣는다(#130).
+            if not isinstance(e, httpx2.HTTPError):
                 raise
-            log.warning("합성이 멈춰서 한 번 더 요청한다: %s", e)
-            yield from _Prefetch(text, self._stream(text)).chunks(stopped)
+            again = "처음부터 다시" if received else "한 번 더"
+            log.warning("합성이 멈춰서 %s 로 %s 요청한다: %s", self.fallback_model, again, e)
+            yield from _Prefetch(text, self._stream(text, self.fallback_model)).chunks(stopped)
 
     def prefetch(self, text: str) -> None:
         """text 합성을 다른 스레드에서 지금 시작해 둔다. 바로 돌아온다.
@@ -198,14 +207,15 @@ class TextToSpeech:
 
         return _on_first(self._stream(text), first)
 
-    def _stream(self, text: str) -> Generator[bytes]:
+    def _stream(self, text: str, model: str | None = None) -> Generator[bytes]:
         """합성 요청 하나를 보내고 PCM 조각을 받는 대로 낸다. 닫으면 응답 스트림도 닫는다.
 
+        model 을 안 주면 self.model 로 보낸다.
         객체의 상태(last_latency_ms 등)는 건드리지 않는다. prefetch() 가 다른 스레드에서 쓴다.
         """
         speed = SPEEDS.get(self.speed.upper(), 1.0)
         with self.client.audio.speech.with_streaming_response.create(
-            model=self.model,
+            model=model or self.model,
             voice=self.voice,
             input=normalize(text),
             # NORMAL 은 speed 를 아예 안 보낸다. 속도를 바꾸면 첫 소리가 늦어졌다
