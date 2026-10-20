@@ -32,6 +32,7 @@ DB 테스트는 여기에 더해 db job 이 pgvector 컨테이너를 띄워 실�
 | `pointing/test_detector.py` | 후보 검출이 사람·작은 박스를 빼고, YOLO 결과를 Detection 으로 바꾸는지 (모델은 가짜로) |
 | `pointing/test_cues.py` | 가운데 단서가 가운데·크게 찍힌 후보에 높은 점수(0~1)를 주는지 |
 | `pointing/test_resolver.py` | 대상 결정: 순위·margin·되묻기 문장, 되묻기 대답으로 후보 좁히기, 단서 스위치 |
+| `scripts/test_measure_latency.py` | 지연 리포트: 턴이 있는 최근 세션 고르기, 길(가리킴·성분·나머지) 나누기, 끊긴 턴 빼기, 30턴 미만 경고 |
 
 ## 로컬에서 돌리는 법
 
