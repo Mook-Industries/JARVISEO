@@ -54,8 +54,9 @@ __all__ = [
 
 # 원재료명 / 원재료명 및 함량 / 원재료 및 함량 (OCR 이 글자 사이에 공백을 넣는 경우 포함)
 # 성분표를 자를 때 첫 글자가 잘려 "재료명"만 남는 일이 있다. '명'까지 있으면 머리말로 본다.
+# 잘린 채로 OCR 이 '재'를 '대'로 읽는 일도 있다("대료명", 실측 label_01 · PaddleOCR).
 _INGREDIENT_HEADER = re.compile(
-    r"(?:원\s*재\s*료\s*명?|재\s*료\s*명)(?:\s*및\s*(?:그\s*)?함\s*량)?\s*[:：]?"
+    r"(?:원\s*재\s*료\s*명?|[재대]\s*료\s*명)(?:\s*및\s*(?:그\s*)?함\s*량)?\s*[:：]?"
 )
 # "알레르기 유발물질", "알레르기유발물질 표시"
 # EasyOCR 이 "르"를 "로"처럼 잘못 읽어서 셋째 글자는 아무 한 글자나 받는다.
@@ -547,6 +548,15 @@ def mean_confidence(lines: list[OCRLine]) -> float:
 
 # 회전 보정에서 시도하는 각도 → cv2.rotate 코드. 성분표는 캔·병 옆면에 90° 돌려 인쇄되는 일이 있다.
 _ROTATIONS = {90: cv2.ROTATE_90_CLOCKWISE, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+# 이만큼 높은 신뢰도로 이만큼 많이 읽었으면 방향은 맞다. 머리말을 못 찾은 이유는 다른 데 있다.
+# 돌아간 성분표는 몇 글자만 낮은 신뢰도로 읽힌다(label_12 그대로: 0.40 × 79자).
+_UPRIGHT_CONF = 0.8
+_UPRIGHT_CHARS = 40
+
+
+def _looks_upright(lines: list[OCRLine]) -> bool:
+    """방향이 이미 맞아 보이는가. 그러면 돌려 읽기(OCR 두 번 더)를 건너뛴다."""
+    return mean_confidence(lines) >= _UPRIGHT_CONF and len(join_lines(lines)) >= _UPRIGHT_CHARS
 
 
 def _orientation_score(lines: list[OCRLine]) -> tuple[bool, float]:
@@ -567,7 +577,8 @@ def read_upright(
     """성분표를 읽되, 글자가 돌아가 있으면 90°·270° 로 돌려서도 읽어 나은 쪽을 쓴다.
 
     그대로 읽어서 "원재료명" 머리말을 찾으면 바로 끝낸다(대부분의 사진, 추가 비용 없음).
-    못 찾을 때만 돌려서 다시 읽는다. 그래서 회전이 필요 없는 사진은 느려지지 않는다.
+    못 찾았어도 높은 신뢰도로 글자를 많이 읽었으면 방향은 맞은 것이라 돌리지 않는다.
+    머리말이 잘렸거나 가려진 사진에서 OCR 을 두 번 더 부르던 것을 막는다(GPU 서버 실측 1~2초씩).
     (멘토 피드백 2026-10-14: 글줄이 기울어진 경우 회전 보정)
 
     Returns:
@@ -575,7 +586,7 @@ def read_upright(
     """
     lines = read_panel(panel_image, reader=reader)
     best = (_orientation_score(lines), lines, 0)
-    if best[0][0] or not try_rotation:
+    if best[0][0] or not try_rotation or _looks_upright(lines):
         return lines, 0
     for angle, code in _ROTATIONS.items():
         rotated = read_panel(cv2.rotate(panel_image, code), reader=reader)
