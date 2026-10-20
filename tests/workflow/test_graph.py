@@ -3,6 +3,7 @@
 STT·TTS·VLM·임베딩은 Fake 를 끼워서 API 키 없이 CI 에서 돈다.
 """
 
+import threading
 import time
 from types import SimpleNamespace
 
@@ -332,30 +333,52 @@ def test_call_while_waiting_drops_answer_and_logs_interrupted(file_store):
 # --- VLM 답 상한 -----------------------------------------------------------------
 
 
+class _HeldVLM(FakeVLMClient):
+    """release 가 설정될 때까지 답하지 않는 VLM. 답했으면 answered 가 설정된다.
+
+    상한이 지나도 답이 안 온 상태를 sleep 길이(시간)에 기대지 않고 만든다. 걸린 시간으로 재면
+    그래프 만들기 · DB 기록까지 같이 재져서, 느린 CI 러너에서 가끔 기준을 넘었다.
+    """
+
+    def __init__(self, answers) -> None:
+        super().__init__(answers)
+        self.release = threading.Event()
+        self.answered = threading.Event()
+
+    def ask(self, frame, question, memories=None):
+        self.release.wait(5)  # 그래프가 답을 기다리면 여기서 5초 뒤에야 답한다
+        try:
+            return super().ask(frame, question, memories)
+        finally:
+            self.answered.set()
+
+
 def test_slow_vlm_reads_notice_instead_of_waiting(file_store):
     """VLM 이 상한 안에 답하지 않으면 안내 문장을 읽고 끝낸다. 지연 · 기억은 남기지 않는다."""
     tts = FakeTextToSpeech()
     dialog = DialogMemory(VectorMemory(file_store, embedder=FakeEmbedder()))
+    vlm = _HeldVLM(["늦은 답"])
     deps = GraphDeps(
         stt=FakeSpeechToText(["이거 뭐야?"]),
         tts=tts,
-        vlm=FakeVLMClient(["늦은 답"], delay=0.3),
+        vlm=vlm,
         store=file_store,
         memory=dialog.memory,
         dialog=dialog,
         vlm_deadline_sec=0.1,
     )
 
-    started = time.monotonic()
     result = build_graph(deps).invoke(turn_input(file_store))
-    waited = time.monotonic() - started
+    answered_before_end = vlm.answered.is_set()
+    vlm.release.set()  # 늦은 답이 이제야 온다
+    assert vlm.answered.wait(2)
     dialog.close()
 
     assert tts.spoken == [VLM_TOO_SLOW]
-    assert waited < 0.3  # 늦은 답을 끝까지 기다리지 않았다
+    assert not answered_before_end  # 답이 오기 전에 끝냈다(늦은 답을 기다리지 않았다)
     assert "vlm" not in result["latency_ms"]  # 왕복을 모르는 요청의 시간은 남기지 않는다
     with file_store.session() as db:
-        assert db.query(Observation).count() == 0
+        assert db.query(Observation).count() == 0  # 늦게 온 답도 기억에 안 들어간다
 
 
 def test_answer_within_deadline_is_read():
