@@ -11,7 +11,14 @@ from jarviseo.memory.store import MemoryStore
 from jarviseo.nutrition import service
 from jarviseo.nutrition.barcode import BarcodeLookup
 from jarviseo.nutrition.quality import ImageQuality
-from jarviseo.nutrition.response import RETAKE_CLOSER, RETAKE_GLARE, RETAKE_STEADY, RETAKE_WHOLE
+from jarviseo.nutrition.response import (
+    OCCLUDED_NOTE,
+    RETAKE_CLOSER,
+    RETAKE_GLARE,
+    RETAKE_STEADY,
+    RETAKE_UNCOVER,
+    RETAKE_WHOLE,
+)
 from jarviseo.nutrition.service import IngredientChecker
 from jarviseo.types import AllergenVerdict as V
 from jarviseo.types import BarcodeRead, IngredientSource, ProductInfo
@@ -25,6 +32,12 @@ LABEL = [
 ]
 
 
+def box(i: int) -> list[list[int]]:
+    """i 번째 줄의 글자 상자. 사진 가장자리에 닿으면 성분표가 잘린 것으로 보므로 안쪽에 둔다."""
+    y = 20 + i * 30
+    return [[20, y], [300, y], [300, y + 20], [20, y + 20]]
+
+
 class FakeReader:
     """readtext 를 부를 때마다 passes 에서 하나씩 꺼내 돌려준다. (줄 글자들, 신뢰도)"""
 
@@ -35,7 +48,7 @@ class FakeReader:
     def readtext(self, image, **kwargs):
         texts, conf = self.passes[min(self.calls, len(self.passes) - 1)]
         self.calls += 1
-        return [([[0, i * 30], [300, i * 30], [300, i * 30 + 20], [0, i * 30 + 20]], t, conf)
+        return [(box(i), t, conf)
                 for i, t in enumerate(texts)]  # fmt: skip
 
 
@@ -262,7 +275,7 @@ class SidewaysReader:
         self.shapes.append(image.shape[:2])
         h, w = image.shape[:2]
         texts, conf = (LABEL, 0.9) if h > w else (["ㅁ ㅇ"], 0.3)
-        return [([[0, i * 30], [300, i * 30], [300, i * 30 + 20], [0, i * 30 + 20]], t, conf)
+        return [(box(i), t, conf)
                 for i, t in enumerate(texts)]  # fmt: skip
 
 
@@ -464,3 +477,65 @@ def test_upright_panel_without_header_is_not_rotated(monkeypatch):
     r = checker(reader, try_rotation=True).check(CROP, ["땅콩"])
     assert r.rotation == 0
     assert reader.calls == 2  # 그대로 1번 + 재처리 1번. 90°·270° 는 읽지 않는다
+
+
+# --- 성분표가 가려졌을 때 --------------------------------------------------------
+
+
+class BoxReader:
+    """줄마다 (글자, 위쪽 y) 를 정해 돌려준다. 가려짐·잘림을 만들려고 좌표를 직접 준다."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def readtext(self, image, **kwargs):
+        return [([[20, y], [300, y], [300, y + 20], [20, y + 20]], t, 0.9) for t, y in self.rows]
+
+
+# 머리말이 '원' 없이 읽힘 → 성분표 왼쪽이 잘린 자리 (label_01 실측 모양)
+COVERED = [("재료명:", 20), ("밀가루, 설탕,", 50), ("대두 함유", 80)]
+# 원재료명이 사진 아래 가장자리에서 잘림 (CROP 높이 120 × 배율 2 = 240)
+CUT = [("원재료명:", 20), ("밀가루, 설탕,", 50), ("정제소금, 탈지", 220)]
+
+
+def test_occluded_label_with_allergen_warns_and_says_covered(monkeypatch):
+    """가려졌어도 찾은 경고는 바로 전하고, 가려진 데가 있다고 덧붙인다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    r = checker(BoxReader(COVERED)).check(CROP, ["밀"])
+    assert r.occlusion == "cut_header" and r.judgement.verdict is V.CONTAINS
+    assert r.message == f"해당 제품에는 밀이 들어 있어요. {OCCLUDED_NOTE}"
+    assert r.retake is None
+
+
+def test_occluded_label_without_allergen_asks_to_uncover(monkeypatch):
+    """가려진 사진에서 못 찾았으면 '못 찾았어요'가 아니라 가려졌다고 말한다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    r = checker(BoxReader(CUT)).check(CROP, ["땅콩"])
+    assert r.occlusion == "cut_edge"
+    assert r.judgement.verdict is V.UNDETERMINED and r.judgement.reason == "occluded"
+    assert r.retake == RETAKE_UNCOVER and r.message == RETAKE_UNCOVER
+
+
+def test_occluded_after_max_retakes_says_could_not_recognize(monkeypatch):
+    """재촬영을 다 써도 가려져 있으면 잘 인식하지 못했다고 말하고 끝낸다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    r = checker(BoxReader(CUT), max_retake=2).check(CROP, ["땅콩"], retake_count=2)
+    assert r.retake is None
+    assert r.message.startswith("성분표 일부가 가려져서 잘 인식하지 못했어요.")
+
+
+def test_occluded_ocr_is_not_cached(monkeypatch):
+    """가려진 사진에서 읽은 성분은 캐시에 남기지 않는다."""
+    monkeypatch.setattr(service, "lookup_product", miss(CODE, "not_found"))
+    store = MemoryStore(database_url="sqlite://")
+    store.init_schema()
+    checker(BoxReader(COVERED), store=store).check(CROP, ["밀"])
+    assert store.get_product(CODE) is None
+
+
+def test_visible_label_has_no_occlusion(monkeypatch):
+    """성분표가 다 보이면 평소대로 말한다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    rows = [("원재료명:", 20), ("밀가루, 설탕,", 50), ("대두 함유", 80)]
+    r = checker(BoxReader(rows)).check(CROP, ["밀"])
+    assert r.occlusion == "" and r.message == "해당 제품에는 밀이 들어 있어요."
