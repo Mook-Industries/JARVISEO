@@ -406,6 +406,30 @@ def test_failed_prefetch_makes_speak_silent_none(played):
     assert played == []
 
 
+def test_prefetched_stall_while_reading_falls_back(played):
+    """미리 받던 대답이 "잠깐만요" 뒤 읽는 도중 멈춰도 폴백 모델로 처음부터 끝까지 읽는다.
+
+    #117 실측 88 · 90 턴: 필러 뒤 대답이 "네"까지만 나오고 조용히 끝났다.
+    """
+
+    def stalled(size):
+        yield b"" * size
+        client.chunks = two_chunks
+        raise httpx2.ReadTimeout("읽는 도중 서버가 멈췄다")
+
+    client = FakeClient(stalled)
+    tts = TextToSpeech(client=client)
+
+    tts.prefetch("컵이에요.")
+    time.sleep(0.1)  # "잠깐만요"를 읽는 동안 받기 시작했다
+    took = tts.speak("컵이에요.")
+
+    assert [r["model"] for r in client.requests] == [config.TTS_MODEL, config.TTS_FALLBACK_MODEL]
+    assert b"".join(played) == b"" * CHUNK_BYTES * 2 + b"" * CHUNK_BYTES
+    assert took is not None
+    assert tts.last_interrupted is False
+
+
 @pytest.mark.parametrize(
     ("speed", "value"),
     [("SLOW", 0.85), ("FAST", 1.2), ("fast", 1.2), ("NORMAL", None), ("모르는값", None)],
