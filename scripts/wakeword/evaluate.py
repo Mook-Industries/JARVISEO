@@ -6,7 +6,8 @@ eval 폴더의 녹음(record.py 로 만든 것)을 openWakeWord 모델에 흘려
 
 평가용 녹음만 읽는다. 학습용(train)은 여기서 읽지 않는다.
 
-임계값 0.1~0.9 마다 세 가지를 센다. 실제 녹음(mic)과 합성(tts), 환경(env)별로 따로 낸다.
+임계값 0.1~0.9 와 지금 쓰는 임계값(config, 기본 0.97)마다 세 가지를 센다. 실제 녹음(mic)과
+합성(tts), 환경(env)별로 따로 낸다. 환경은 quiet·noisy(조용·소음), tv(TV), talk(일반 대화) 등이다.
     FRR    wake 녹음 중 점수가 임계값에 못 미친 비율 (불렀는데 안 깨어남)
     FAR    similar 녹음 중 점수가 임계값을 넘은 비율 (비슷한 말에 깨어남)
     FA/h   background 녹음에서 깨어난 횟수 ÷ 시간. 한 번 깨어나면 2초는 다시 세지 않는다
@@ -15,11 +16,13 @@ eval/speech.csv 가 있으면 실제 "자비서" 녹음을 사람이 들어 보�
     정상  한 번에 이어 말함        끊음  "자, 비서"처럼 중간에 쉼
     늘임  "자~비~서"처럼 길게      잘림  일부만 녹음됨 → 녹음 오류라 평가에서 뺀다
 끊음·늘임도 호출어로 친다(이슈 #40). FRR 은 전체와 말투별로 따로 낸다.
-마지막에 합격 기준을 한 임계값에서 모두 맞춘 임계값을 출력한다.
+실제 녹음을 마이크 둘 이상으로 했으면(노트북 마이크·시연 카메라 마이크) 마이크별로도 따로 낸다.
+마지막에 합격 기준을 한 임계값에서 모두 맞춘 임계값을 출력한다. 녹음이 없는 기준 칸은 빼고 본다.
 
 실행:
     python scripts/wakeword/evaluate.py                                   # 기성 hey_jarvis
     python scripts/wakeword/evaluate.py --model data/models/jarviseo.onnx # 커스텀 학습 뒤
+    python scripts/wakeword/evaluate.py --model data/models/jarviseo.onnx --thresholds 0.95 0.99
 
 결과: data/datasets/wakeword/results/ 에
     <모델>-<날짜시각>-scores.csv    파일별 최고 점수
@@ -39,18 +42,20 @@ from jarviseo import config
 ROOT = config.DATASETS_DIR / "wakeword"
 SAMPLE_RATE = 16000
 FRAME = 1280  # openWakeWord 는 80ms(16kHz 1280샘플)씩 받는다
-FIELDS = "file label source env speaker distance text speech seconds max_score".split()
-SUMMARY = ["threshold", "metric", "source", "env", "speech", "n", "count", "value"]
+FIELDS = "file label source mic env speaker distance text speech seconds max_score".split()
+SUMMARY = ["threshold", "metric", "source", "env", "speech", "mic", "n", "count", "value"]
 THRESHOLDS = [round(0.1 * i, 1) for i in range(1, 10)]
-SHOWN = (0.5, 0.8)  # 기본 임계값, 재생 중(소프트 게이트) 임계값
+# 따로 주지 않으면 출력하는 임계값: 평소 임계값, 재생 중 임계값(config, .env 로 바꿀 수 있다)
+SHOWN = tuple(dict.fromkeys([config.WAKEWORD_THRESHOLD, config.WAKEWORD_PLAYBACK_THRESHOLD]))
 REFRACTORY_SEC = 2.0  # 한 번 깨어나면 이만큼은 다시 세지 않는다
-# 합격 기준(이슈 #40). 실제 녹음으로 잰 값이 같은 임계값 하나에서 모두 이 안이어야 한다.
-# TV 는 30분뿐이라 한 번만 깨어나도 2회/h 가 되므로 0회를 기준으로 둔다.
+# 합격 기준(이슈 #40, 일반 대화는 #117). 실제 녹음으로 잰 값이 같은 임계값 하나에서 모두 이 안이어야
+# 한다. TV·일반 대화는 30분뿐이라 한 번만 깨어나도 2회/h 가 되므로 0회를 기준으로 둔다.
 CRITERIA = {
     ("FRR", "quiet"): 0.10,
     ("FRR", "noisy"): 0.20,
     ("FAR", "quiet"): 0.10,
     ("FA/h", "tv"): 0.0,
+    ("FA/h", "talk"): 0.0,
 }
 DROPPED = "잘림"  # speech.csv 에서 이 말투는 녹음 오류로 보고 평가에서 뺀다
 
@@ -124,19 +129,25 @@ def wakeups(scores: np.ndarray, threshold: float) -> int:
     return count
 
 
-def summarize(rows: list[dict], backgrounds: dict[str, np.ndarray]) -> list[dict]:
+def summarize(
+    rows: list[dict], backgrounds: dict[str, np.ndarray], thresholds: list[float]
+) -> list[dict]:
     """임계값마다 FRR·FAR·FA/h 를 출처(mic/tts)·환경(env)별로 센다.
 
-    말투가 적힌 "자비서" 녹음은 말투별 FRR 도 따로 센다(speech 칸). 전체 행은 speech 가 비어 있다.
+    말투가 적힌 "자비서" 녹음은 말투별 FRR 도 따로 센다(speech 칸). 실제 녹음 마이크가 둘 이상이면
+    마이크별로도 따로 센다(mic 칸). 전체 행은 speech·mic 가 비어 있다.
     """
-    groups: dict[tuple[str, str, str, str], list[dict]] = {}
+    mics = {r["mic"] for r in rows if r["source"] == "mic"}
+    groups: dict[tuple[str, str, str, str, str], list[dict]] = {}
     for r in rows:
-        groups.setdefault((r["label"], r["source"], r["env"], ""), []).append(r)
+        groups.setdefault((r["label"], r["source"], r["env"], "", ""), []).append(r)
         if r["label"] == "wake" and r["speech"]:
-            groups.setdefault((r["label"], r["source"], r["env"], r["speech"]), []).append(r)
+            groups.setdefault((r["label"], r["source"], r["env"], r["speech"], ""), []).append(r)
+        if r["source"] == "mic" and len(mics) > 1:
+            groups.setdefault((r["label"], r["source"], r["env"], "", r["mic"]), []).append(r)
     out = []
-    for th in THRESHOLDS:
-        for (label, source, env, speech), rs in sorted(groups.items()):
+    for th in thresholds:
+        for (label, source, env, speech, mic), rs in sorted(groups.items()):
             if label == "background":
                 hours = sum(len(backgrounds[r["file"]]) for r in rs) * FRAME / SAMPLE_RATE / 3600
                 count = sum(wakeups(backgrounds[r["file"]], th) for r in rs)
@@ -148,23 +159,25 @@ def summarize(rows: list[dict], backgrounds: dict[str, np.ndarray]) -> list[dict
                 n, value = len(rs), count / len(rs)
             out.append(
                 {"threshold": th, "metric": metric, "source": source, "env": env, "speech": speech}
-                | {"n": n, "count": count, "value": round(value, 4)}
+                | {"mic": mic, "n": n, "count": count, "value": round(value, 4)}
             )
     return out
 
 
-def passing(summary: list[dict]) -> list[float]:
-    """합격 기준(CRITERIA)을 실제 녹음 전체 행에서 모두 맞춘 임계값들."""
+def passing(summary: list[dict], thresholds: list[float]) -> tuple[list[float], list[tuple]]:
+    """(합격 기준을 실제 녹음 전체 행에서 모두 맞춘 임계값들, 녹음이 없어 뺀 기준 칸들).
+
+    일반 대화(talk)처럼 아직 녹음하지 않은 기준 칸은 빼고 본다. 뺀 칸은 출력해서 알린다.
+    """
+    whole = [s for s in summary if s["source"] == "mic" and not s["speech"] and not s["mic"]]
+    measured = {(s["metric"], s["env"]) for s in whole}
+    missing = [key for key in CRITERIA if key not in measured]
     ok = []
-    for th in THRESHOLDS:
-        values = {
-            (s["metric"], s["env"]): s["value"]
-            for s in summary
-            if s["threshold"] == th and s["source"] == "mic" and not s["speech"]
-        }
-        if all(values.get(key, float("inf")) <= limit for key, limit in CRITERIA.items()):
+    for th in thresholds:
+        values = {(s["metric"], s["env"]): s["value"] for s in whole if s["threshold"] == th}
+        if all(values[key] <= limit for key, limit in CRITERIA.items() if key in measured):
             ok.append(th)
-    return ok
+    return ok, missing
 
 
 def write_csv(path: Path, fields: list[str], rows: list[dict]) -> None:
@@ -177,12 +190,17 @@ def write_csv(path: Path, fields: list[str], rows: list[dict]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="웨이크워드 평가")
     parser.add_argument("--model", default="hey_jarvis", help="기성 모델 이름이나 .onnx 경로")
+    parser.add_argument(
+        "--thresholds", nargs="+", type=float, help=f"출력할 임계값 (기본: config {SHOWN})"
+    )
     args = parser.parse_args()
+    shown = tuple(args.thresholds or SHOWN)
+    thresholds = sorted({*THRESHOLDS, *shown})
 
     np.random.seed(0)  # model.reset() 이 버퍼를 난수로 채운다. 다시 돌려도 같은 점수가 나오게
     model = load_model(args.model)
     rows, backgrounds = evaluate(model, ROOT / "eval")
-    summary = summarize(rows, backgrounds)
+    summary = summarize(rows, backgrounds, thresholds)
 
     out = ROOT / "results"
     out.mkdir(parents=True, exist_ok=True)
@@ -190,7 +208,7 @@ def main() -> None:
     write_csv(out / f"{stamp}-scores.csv", FIELDS, rows)
     write_csv(out / f"{stamp}-summary.csv", SUMMARY, summary)
 
-    for th in SHOWN:
+    for th in shown:
         print(f"\n임계값 {th}")
         for s in summary:
             if s["threshold"] != th:
@@ -199,10 +217,13 @@ def main() -> None:
                 where, value = f"{s['n']}시간 중 {s['count']}번", f"{s['value']:.2f}"
             else:
                 where, value = f"{s['n']}개 중 {s['count']}개", f"{s['value']:.1%}"
-            group = f"{s['source']}·{s['env']}" + (f"  └ {s['speech']}" if s["speech"] else "")
+            part = s["speech"] or s["mic"]
+            group = f"{s['source']}·{s['env']}" + (f"  └ {part}" if part else "")
             print(f"  {s['metric']:5} {group}  {where}  {value}")
-    ok = passing(summary)
-    print(f"\n합격 기준을 모두 맞춘 임계값: {', '.join(map(str, ok)) if ok else '없음'}")
+    ok, missing = passing(summary, thresholds)
+    if missing:
+        print("\n녹음이 없어 합격 판정에서 뺀 기준: " + ", ".join(f"{m}·{e}" for m, e in missing))
+    print(f"합격 기준을 모두 맞춘 임계값: {', '.join(map(str, ok)) if ok else '없음'}")
     print(f"결과 {out / stamp}-scores.csv, -summary.csv")
 
 
