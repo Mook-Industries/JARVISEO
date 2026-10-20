@@ -98,6 +98,22 @@ conda 를 쓰는 사람은 앞의 두 줄만 이걸로 바꾼다. 나머지는 �
 conda create -n JARVISEO python=3.12 -y && conda activate JARVISEO
 ```
 
+`requirements.txt` 는 하한(>=)만 적혀 있어서 깔 때마다 최신 버전이 들어온다. 발표 데모 노트북처럼
+**테스트한 버전 그대로** 깔아야 할 때는 `requirements.txt` 대신 `requirements.lock` 을 쓴다.
+윈도우 · 맥 · 리눅스를 한 파일에 담았다(OS 별 패키지는 줄 끝 조건으로 갈린다).
+
+```bash
+pip install -r requirements.lock
+pip install -e .
+```
+
+버전을 올릴 때는 `requirements.txt` 를 고친 뒤 [uv](https://docs.astral.sh/uv/) 로 다시 만든다.
+`requirements-overrides.txt` 는 리눅스 전용 `tflite-runtime`(파이썬 3.12 wheel 없음)을 빼려고 쓴다.
+
+```bash
+uv pip compile requirements.txt --universal --python-version 3.12 --overrides requirements-overrides.txt -o requirements.lock
+```
+
 ### 2. 데이터베이스 (도커)
 
 Postgres 만 컨테이너로 띄운다. 셋이 각자 설치하고 버전 맞추는 것보다 싸다.

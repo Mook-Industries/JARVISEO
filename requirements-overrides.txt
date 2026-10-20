@@ -1,0 +1,5 @@
+# requirements.lock 을 만들 때만 쓰는 덮어쓰기 (uv pip compile --overrides).
+# openwakeword 는 리눅스에서 tflite-runtime 을 요구하는데, tflite-runtime 에는 파이썬 3.12 용 wheel 이 없다.
+# 우리는 리눅스에서 openwakeword 를 빼므로(requirements.txt) 필요 없지만, uv 는 여러 OS 를 한 번에 풀 때
+# 마커와 상관없이 wheel 이 없다고 실패한다. 3.12 미만에서만 걸리게 바꿔서 잠금 파일에서 빠지게 한다.
+tflite-runtime>=2.8.0,<3 ; python_version < "3.12"
