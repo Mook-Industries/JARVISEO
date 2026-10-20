@@ -105,3 +105,38 @@ def test_ingredient_page_is_served(client_and_checker):
     client, _ = client_and_checker
     r = client.get("/ingredient")
     assert r.status_code == 200 and "성분 확인" in r.text
+
+
+def test_ocr_status_without_remote_server(client_and_checker, monkeypatch):
+    """Colab 주소를 안 적었으면 원래부터 이 PC 로 읽는 설정이라고 알려 준다."""
+    from jarviseo.api import main
+
+    monkeypatch.setattr(main.config, "OCR_REMOTE_URL", None)
+    client, _ = client_and_checker
+    assert client.get("/api/ocr-status").json()["remote"] is False
+
+
+@pytest.mark.parametrize(
+    ("health", "up"),
+    [({"ok": True, "device": "gpu:0"}, True), (None, False)],  # None = 꺼짐(ngrok 안내 페이지)
+)
+def test_ocr_status_probes_remote_server(client_and_checker, monkeypatch, health, up):
+    """Colab 서버 /health 를 물어 켜짐 · 꺼짐을 돌려준다. 꺼져 있으면 노트북 주소도 준다."""
+    import httpx
+
+    from jarviseo.api import main
+
+    def fake_get(url, timeout):
+        if health is None:
+            return httpx.Response(
+                200, text="<html>offline</html>", headers={"content-type": "text/html"}
+            )
+        return httpx.Response(200, json=health)
+
+    monkeypatch.setattr(main.config, "OCR_REMOTE_URL", "https://ocr.example")
+    monkeypatch.setattr(main, "OCR_NOTEBOOK_URL", "https://colab.example/nb")
+    monkeypatch.setattr(main.httpx, "get", fake_get)
+    client, _ = client_and_checker
+    d = client.get("/api/ocr-status").json()
+    assert d["remote"] is True and d["up"] is up
+    assert d["notebook_url"] == "https://colab.example/nb"

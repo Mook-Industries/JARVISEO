@@ -35,12 +35,21 @@
           font-size:13px; color:var(--sub); }
   .chip.cut { border-color: var(--warn); color: var(--warn); }
   #result { display:none; }
+  #ocr { display:flex; align-items:center; gap:8px; font-size:14px; color:var(--sub); margin:0 0 14px; }
+  #ocr .dot { width:9px; height:9px; border-radius:50%; background:var(--sub); }
+  #ocr.up .dot { background:#5fd38d; }
+  #ocr.down .dot { background:var(--warn); }
+  #ocr.down #ocr-text { color: var(--warn); }
+  #ocr a { margin-left:auto; color:var(--accent); font-weight:700; text-decoration:none; display:none; }
+  #ocr.down a { display:inline; }
 </style>
 </head>
 <body>
 <main>
   <h1>성분 확인</h1>
   <p class="sub">제품의 바코드나 성분표 사진을 올리면, 등록한 알레르기가 들어 있는지 알려 드려요.</p>
+  <div id="ocr"><span class="dot"></span><span id="ocr-text">OCR 서버 확인 중…</span>
+    <a id="ocr-open" target="_blank" rel="noopener">Colab 열기 ↗</a></div>
 
   <section class="card">
     <h2>내 알레르기</h2>
@@ -106,7 +115,9 @@ $("analyze").onclick = async () => {
   if (!photo) return;
   if (!names().length) { $("status").textContent = "알레르기를 먼저 입력해 주세요."; return; }
   $("analyze").disabled = true;
-  $("status").textContent = "분석 중이에요… 성분표를 읽어야 하면 몇 초 걸려요.";
+  $("status").textContent = ocrUp
+    ? "분석 중이에요… 성분표를 읽어야 하면 몇 초 걸려요."
+    : "분석 중이에요… OCR 서버가 꺼져 있어서, 바코드가 안 보이면 몇 분 걸릴 수 있어요.";
   try {
     const q = encodeURIComponent(names().join(","));
     const r = await fetch(`/api/ingredient?allergens=${q}`, {
@@ -138,7 +149,30 @@ function show(d) {
   if (d.occlusion) $("chips").append(chip("성분표 일부가 잘림", "chip cut"));
 }
 
+// Colab OCR 서버 상태. 꺼져 있으면 10초마다, 켜져 있으면 1분마다 다시 본다.
+let ocrUp = true;
+async function checkOcr() {
+  let s = { remote: false, up: false };
+  try { s = await (await fetch("/api/ocr-status")).json(); } catch {}
+  ocrUp = !s.remote || s.up;
+  const box = $("ocr");
+  if (!s.remote) {
+    box.className = "";
+    $("ocr-text").textContent = "성분표 OCR: 이 PC (CPU) — 성분표 사진은 오래 걸릴 수 있어요";
+  } else if (s.up) {
+    box.className = "up";
+    $("ocr-text").textContent = `성분표 OCR 서버 켜짐 (${s.device === "cpu" ? "CPU" : "GPU"})`;
+  } else {
+    box.className = "down";
+    $("ocr-text").textContent = "성분표 OCR 서버 꺼짐 — Colab 에서 '모두 실행'을 눌러 주세요";
+    if (s.notebook_url) $("ocr-open").href = s.notebook_url;
+    else $("ocr-open").style.display = "none";
+  }
+  setTimeout(checkOcr, s.remote && !s.up ? 10000 : 60000);
+}
+
 loadAllergens();
+checkOcr();
 </script>
 </body>
 </html>
