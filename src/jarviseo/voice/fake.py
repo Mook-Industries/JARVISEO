@@ -89,18 +89,30 @@ class FakeTextToSpeech:
     interrupt 에 글자를 주면 그 글자가 든 문장을 speak() 할 때 끼어들기로 끊긴 것처럼
     ``last_interrupted`` 가 True 가 된다. 글자 하나는 한 번만 끊고 지운다.
 
+    fail 에 글자를 주면 그 글자가 든 문장은 합성에 실패해 소리를 하나도 못 낸 것처럼
+    speak() 이 None 을 돌려준다. ``spoken`` 에는 안 넣고 ``failed`` 에 넣는다. 글자 하나는 한 번만.
+
         tts = FakeTextToSpeech(interrupt=["왼쪽 컵이요"])  # 되묻는 중에 다시 불렀다
+        tts = FakeTextToSpeech(fail=["왼쪽 컵이요"])  # 서버가 느려 되묻는 말이 안 나갔다
     """
 
-    def __init__(self, interrupt: Iterable[str] = ()) -> None:
+    def __init__(self, interrupt: Iterable[str] = (), fail: Iterable[str] = ()) -> None:
         self.spoken: list[str] = []
+        self.failed: list[str] = []
         # prefetch() 로 미리 합성하라고 받은 문장
         self.prefetched: list[str] = []
         self.last_latency_ms: float | None = None
         self.last_interrupted = False
         self._interrupt = list(interrupt)
+        self._fail = list(fail)
 
     def speak(self, text: str) -> float | None:
+        dead = next((part for part in self._fail if part in text), None)
+        if dead is not None:
+            self._fail.remove(dead)
+            self.failed.append(text)
+            self.last_latency_ms, self.last_interrupted = None, False
+            return None
         self.spoken.append(text)
         cut = next((part for part in self._interrupt if part in text), None)
         if cut is not None:
