@@ -53,7 +53,8 @@ class RemoteOcrReader:
         self._http = httpx.Client(
             timeout=timeout or config.OCR_REMOTE_TIMEOUT_SEC,
             transport=transport,
-            headers={"X-Token": token} if token else {},
+            # ngrok 무료 주소는 브라우저처럼 보이는 요청에 경고 페이지를 먼저 준다. 건너뛰게 한다.
+            headers={"ngrok-skip-browser-warning": "1", **({"X-Token": token} if token else {})},
         )
         self._make_fallback = fallback
         self._fallback = None
