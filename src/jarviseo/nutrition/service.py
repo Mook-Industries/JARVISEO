@@ -3,6 +3,15 @@
 크롭 이미지 한 장 → 바코드 조회 → (못 찾으면) 성분표 OCR → 판정 → 안내 문장.
 그래프 노드는 ``IngredientChecker.check`` 하나만 부르면 된다. LLM 을 쓰지 않는다.
 
+다른 모듈에서 붙일 때 (크롭 하나 + 성분 분석이 필요한지)
+------------------------------------------------------
+    checker = make_checker(store)          # 앱 시작 때 한 번 (OCR 모델·푸드QR 연결)
+    text = checker.answer(crop, needs_ingredient, user_allergens)
+    if text is not None:
+        tts.speak(text)                    # "해당 제품에는 밀, 대두가 들어 있고, ..."
+    checker.close()                        # 앱 끝날 때
+``needs_ingredient`` 가 False 면 아무것도 하지 않고 None 을 돌려준다(바코드·OCR 안 돎).
+
 재처리·재촬영 (기획 05-workflow 5.4, 2026-10-02 반영)
 ------------------------------------------------------
 0. OCR 전에 사진 품질을 본다(quality.py). 흐리거나 반사가 심하면 OCR 을 돌리지 않고
@@ -34,8 +43,8 @@ from jarviseo.nutrition.allergen import (
 from jarviseo.nutrition.barcode import (
     BarcodeLookup,
     FoodQrClient,
-    MfdsClient,
     lookup_product,
+    make_food_qr_client,
 )
 from jarviseo.nutrition.ocr import (
     OcrReader,
@@ -115,7 +124,6 @@ class IngredientChecker:
 
     Args:
         store: ``MemoryStore``. 제품 캐시를 쓴다. 없으면 캐시 없이 동작한다.
-        client: ``MfdsClient``. 없으면 식품안전나라를 부르지 않는다(오프라인·테스트).
         food_qr: ``FoodQrClient``. 캐시 다음 가장 먼저 묻는다(포장 알레르기 표시 그대로).
             앱에서는 ``barcode.make_food_qr_client()`` 로 만든다(인증키가 없으면 None).
         synonyms: 동의어 사전. 없으면 ``config.ALLERGEN_SYNONYMS_PATH`` 에서 읽는다.
@@ -128,7 +136,6 @@ class IngredientChecker:
     def __init__(
         self,
         store=None,
-        client: MfdsClient | None = None,
         synonyms: dict[str, list[str]] | None = None,
         reader: OcrReader | None = None,
         conf_threshold: float = config.OCR_CONF_THRESHOLD,
@@ -142,7 +149,6 @@ class IngredientChecker:
         self.try_rotation = try_rotation
         self.auto_region = auto_region
         self.store = store
-        self.client = client
         self.food_qr = food_qr
         self.synonyms = synonyms or load_synonyms(config.ALLERGEN_SYNONYMS_PATH)
         self.reader = reader
@@ -152,6 +158,30 @@ class IngredientChecker:
         self.max_retake = max_retake
 
     # -- 진입점 ------------------------------------------------------------
+
+    def answer(
+        self, crop: np.ndarray | None, needs_ingredient: bool, user_allergens: list[str]
+    ) -> str | None:
+        """다른 모듈이 부르는 입구. 성분 분석이 필요할 때만 돌고, 읽어 줄 문장 하나를 돌려준다.
+
+        Args:
+            crop: 가리킨 물건 하나를 자른 이미지 (BGR).
+            needs_ingredient: 성분 분석이 필요한가. False 면 바로 None (아무것도 안 돈다).
+            user_allergens: 사용자가 등록한 알레르기 (예: ["계란", "땅콩"]).
+
+        Returns:
+            "해당 제품에는 밀이 들어 있고, 새우는 ... 섞여 들어갔을 수 있어요." 같은 문장.
+            사진으로 못 읽으면 재촬영 안내 문장. 분석이 필요 없거나 크롭이 없으면 None.
+        """
+        if not needs_ingredient or crop is None or crop.size == 0:
+            return None
+        result = self.check(crop, user_allergens)
+        return result.retake or result.message
+
+    def close(self) -> None:
+        """푸드QR 연결을 닫는다. 앱이 끝날 때 한 번 부른다."""
+        if self.food_qr is not None:
+            self.food_qr.close()
 
     def check(
         self,
@@ -174,7 +204,6 @@ class IngredientChecker:
         lookup = lookup_product(
             crop,
             store=self.store,
-            client=self.client,
             food_qr=self.food_qr,
         )
         timings["barcode"] = _ms(t0)
@@ -191,7 +220,7 @@ class IngredientChecker:
     def _needs_label(result: IngredientCheck, info: ProductInfo, user_allergens: list[str]) -> bool:
         """조회한 정보만으로 '미검출'이라고 말하면 안 되는 경우인가.
 
-        식품안전나라 원재료는 '면류, 분말스프'처럼 상위 분류 이름만 오는 제품이 많다.
+        조회 원재료가 '면류, 분말스프'처럼 상위 분류 이름만 오는 제품이 있다.
         그 안의 밀·대두는 보이지 않아서, 알레르기 표시 없이 원재료만 보고 '못 찾았다'고 하면
         먹어도 된다는 말로 들린다. 그래서 포장의 알레르기 표시를 받지 못한 정보로는
         '미검출'을 말하지 않고 성분표 OCR 로 넘어간다. 함유·혼입은 그대로 바로 경고한다.
@@ -387,3 +416,11 @@ class IngredientChecker:
 
 def _ms(t0: float) -> int:
     return round((time.perf_counter() - t0) * 1000)
+
+
+def make_checker(store=None, **kwargs) -> IngredientChecker:
+    """앱에서 쓸 판정기. 푸드QR 인증키가 있으면 푸드QR 까지 붙인다(없으면 캐시 → OCR).
+
+    OCR 모델과 동의어 사전을 한 번만 읽도록 앱 시작 때 하나만 만들어 돌려 쓴다.
+    """
+    return IngredientChecker(store=store, food_qr=make_food_qr_client(), **kwargs)

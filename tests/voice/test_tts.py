@@ -53,8 +53,8 @@ def played(monkeypatch):
     written = []
 
     class FakeOutputStream:
-        def __init__(self, samplerate, device, channels, dtype):
-            assert (samplerate, channels, dtype) == (24000, 1, "int16")
+        def __init__(self, samplerate, device, channels, dtype, latency):
+            assert (samplerate, channels, dtype, latency) == (24000, 1, "int16", "high")
 
         def __enter__(self):
             return self

@@ -43,6 +43,18 @@ def test_long_speech_cut_at_max_sec():
     assert speech.ended_at - speech.started_at == pytest.approx(10.0, abs=BLOCK_SEC)
 
 
+def test_ignored_blocks_are_not_speech_but_kept():
+    """`ignore` 가 True 인 시각의 블록은 말로 보지 않는다(시작음). 소리는 녹음에 남긴다."""
+    audio = np.ones(SAMPLE_RATE * 4, np.int16)
+
+    speech = record_speech(
+        blocks_of(audio), is_speech=lambda block: True, ignore=lambda t: t >= T0 + 1.0
+    )
+
+    assert speech.ended_at == pytest.approx(T0 + 1.0, abs=BLOCK_SEC)  # 1초 뒤로는 말이 아니다
+    assert len(speech.audio) / SAMPLE_RATE >= 1.7  # 말끝을 기다린 0.7초도 녹음에 남는다
+
+
 def test_recording_verifies_started_at():
     """jarviseo_question.wav 는 gpt-4o-mini-tts 로 만든 "자비서, 저거 뭐야?" 다.
 

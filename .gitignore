@@ -66,4 +66,6 @@ yolov8n.pt
 *.wav
 # 단, VAD 테스트용 합성 음성(tests/data)은 커밋한다. 마이크 없이 CI 에서 돌려야 해서.
 !tests/data/*.wav
+# 시작음·종료음(#104)도 커밋한다. 코드가 읽는 소리다.
+!src/jarviseo/voice/sounds/*.wav
 shot_*.jpg

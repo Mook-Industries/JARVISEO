@@ -405,3 +405,52 @@ def test_auto_region_off_reads_once(monkeypatch):
     reader = ShapeReader((LABEL, 0.9))
     r = checker(reader, auto_region=False).check(CROP, ["땅콩"])
     assert reader.calls == 1 and r.panel_region is None
+
+
+# --- 다른 모듈이 부르는 입구 (answer) --------------------------------------------
+
+
+def test_answer_skips_when_ingredient_not_needed(monkeypatch):
+    """성분 분석이 필요 없으면 바코드도 OCR 도 돌리지 않고 None 이다."""
+    called = []
+    monkeypatch.setattr(service, "lookup_product", lambda image, **_: called.append(1))
+    reader = FakeReader((LABEL, 0.9))
+    assert checker(reader).answer(CROP, False, ["땅콩"]) is None
+    assert called == [] and reader.calls == 0
+
+
+@pytest.mark.parametrize("crop", [None, np.zeros((0, 0, 3), np.uint8)])
+def test_answer_without_crop_is_none(crop):
+    """크롭이 없으면 None 이다."""
+    assert checker(FakeReader((LABEL, 0.9))).answer(crop, True, ["땅콩"]) is None
+
+
+def test_answer_returns_one_sentence(monkeypatch):
+    """성분 분석이 필요하면 읽어 줄 문장 하나를 돌려준다."""
+    info = ProductInfo(barcode=CODE, product_name="라면", raw_ingredients="소맥분, 계란분말",
+                       allergen_notice="밀, 알류")  # fmt: skip
+    monkeypatch.setattr(service, "lookup_product", lambda image, **_: BarcodeLookup(None, info))
+    text = checker(FakeReader((LABEL, 0.9))).answer(CROP, True, ["계란", "밀"])
+    assert text == "해당 제품에는 계란, 밀이 들어 있어요."
+
+
+def test_answer_returns_retake_guide_when_unreadable(monkeypatch):
+    """사진으로 못 읽으면 재촬영 안내 문장을 돌려준다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    reader = FakeReader((["글자 없음"], 0.2))
+    text = checker(reader).answer(CROP, True, ["땅콩"])
+    assert text in {RETAKE_CLOSER, RETAKE_WHOLE, RETAKE_STEADY, RETAKE_GLARE}
+
+
+def test_close_closes_food_qr():
+    """close 는 푸드QR 연결을 닫는다."""
+
+    class FakeQr:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    qr = FakeQr()
+    checker(FakeReader((LABEL, 0.9)), food_qr=qr).close()
+    assert qr.closed

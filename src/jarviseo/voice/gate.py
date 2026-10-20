@@ -12,6 +12,10 @@
 재생이 시작·끝날 때 콜백으로 알려 주기만 하고 판단은 호출어 쪽에 맡긴다.
 
 스피커와 마이크는 하나씩이라 게이트도 프로세스에 하나(``MIC_GATE``)를 같이 쓴다.
+
+시작음·종료음(``chime.py``)은 사용자가 말하는 도중이나 말끝에 나서 마이크를 막지 않는다.
+대신 그 소리가 마이크에 들어가는 구간을 표시해 두고(``sounding``), STT 의 VAD 는 그 구간을
+말로 보지 않는다(``is_sounding``). 소리는 그대로 넘겨서 겹쳐 말한 질문도 받아써진다.
 """
 
 from __future__ import annotations
@@ -25,7 +29,10 @@ import numpy as np
 
 from jarviseo import config
 
-__all__ = ["MIC_GATE", "MicGate"]
+__all__ = ["MIC_GATE", "SOUND_TAIL_SEC", "MicGate"]
+
+# 시작음·종료음이 스피커에서 다 나온 뒤에도 방 울림으로 마이크에 남는 시간(초)
+SOUND_TAIL_SEC = 0.1
 
 
 class MicGate:
@@ -35,6 +42,9 @@ class MicGate:
         self.grace_sec = grace_sec
         # 마지막으로 닫혀 있던 구간 [closed_at, open_at). 재생 중이면 open_at 은 무한대다.
         self._closed_at = self._open_at = -math.inf
+        # 마지막으로 시작음·종료음이 마이크에 들어간 구간 [sound_from, sound_until).
+        # 내는 중엔 끝이 무한대다.
+        self._sound_from = self._sound_until = -math.inf
         self._hooks: list[Callable[[bool], None]] = []
 
     def on_playback(self, hook: Callable[[bool], None]) -> None:
@@ -71,6 +81,30 @@ class MicGate:
     def is_open(self, t: float) -> bool:
         """t 시각(monotonic)에 마이크에 들어온 소리를 STT 에 넘겨도 되면 True."""
         return not self._closed_at <= t < self._open_at
+
+    @contextmanager
+    def sounding(self, delay: float = 0.0) -> Iterator[None]:
+        """with 블록 동안 스피커에 쓴 소리가 마이크에 들어가는 구간을 표시한다. 마이크는 안 막는다.
+
+        delay 는 쓴 소리가 스피커에서 나오기까지의 출력 지연(초)이다. 구간은 들어간 뒤 delay 부터
+        빠져나가고 delay + ``SOUND_TAIL_SEC`` 까지다.
+        """
+        self.mark_sound(time.monotonic() + delay)
+        try:
+            yield
+        finally:
+            self.mark_sound(self._sound_from, time.monotonic() + delay + SOUND_TAIL_SEC)
+
+    def mark_sound(self, start: float, end: float = math.inf) -> None:
+        """start ~ end 시각(monotonic)에 시작음·종료음이 마이크에 들어간다고 표시한다.
+
+        보통은 ``sounding()`` 이 부른다. 녹음 파일로 재 볼 때는 그 파일의 시각으로 직접 부른다.
+        """
+        self._sound_from, self._sound_until = start, end
+
+    def is_sounding(self, t: float) -> bool:
+        """t 시각 마이크 소리에 시작음·종료음이 섞였으면 True. VAD 는 이 블록을 말로 안 본다."""
+        return self._sound_from <= t < self._sound_until
 
     def mute(
         self, blocks: Iterable[tuple[np.ndarray, float]]
