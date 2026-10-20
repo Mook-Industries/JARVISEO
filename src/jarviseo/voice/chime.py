@@ -52,7 +52,9 @@ class Chime:
         self.start_pcm = load_sound(START_WAV, volume)
         self.end_pcm = load_sound(END_WAV, volume)
         # 소리를 통째로 들고 있어서 출력 버퍼를 작게 잡아도 끊기지 않는다. 첫 소리가 0.1초쯤 빠르다.
-        self.speaker = Speaker(device, gate, latency="low")
+        # 쓰는 것도 통째로 한 번에 한다. 20ms 씩 나눠 쓰면 다른 파이썬 스레드가 GIL 을 잡고 바쁠 때
+        # 조각 사이에 버퍼가 비어 소리가 끊겼다(중간이 최대 0.1~0.8초 빔, check_chime_load.py).
+        self.speaker = Speaker(device, gate, latency="low", piece_bytes=None)
         # 마지막 시작음·종료음의 첫 조각을 스피커에 쓴 시각(monotonic). 소리는 출력 지연 뒤에 난다.
         self.start_played_at: float | None = None
         self.end_played_at: float | None = None
