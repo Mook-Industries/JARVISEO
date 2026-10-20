@@ -46,6 +46,7 @@ from jarviseo.nutrition.barcode import (
     lookup_product,
     make_food_qr_client,
 )
+from jarviseo.nutrition.occlusion import Borders, find_occlusion
 from jarviseo.nutrition.ocr import (
     OcrReader,
     PanelSections,
@@ -59,9 +60,11 @@ from jarviseo.nutrition.ocr import (
 from jarviseo.nutrition.quality import ImageQuality, assess_quality, best_frame
 from jarviseo.nutrition.region import locate_panel
 from jarviseo.nutrition.response import (
+    OCCLUDED_NOTE,
     RETAKE_CLOSER,
     RETAKE_GLARE,
     RETAKE_STEADY,
+    RETAKE_UNCOVER,
     RETAKE_WHOLE,
     build_message,
 )
@@ -97,6 +100,8 @@ class IngredientCheck:
     timings_ms: dict[str, int] = field(default_factory=dict)  # barcode / quality / ocr / match
     quality: ImageQuality | None = None  # OCR 전 품질 검사 결과 (바코드로 찾으면 None)
     rotation: int = 0  # 성분표가 돌아가 있어 돌려 읽은 각도 (0 / 90 / 270)
+    # 성분표가 잘린 사유 (occlusion.CUT_HEADER / CUT_EDGE). 빈 문자열이면 다 보였다.
+    occlusion: str = ""
     panel_region: BBox | None = None  # 자동으로 찾은 성분표 영역 (못 찾았거나 끄면 None)
 
 
@@ -106,6 +111,13 @@ class _OcrPass:
     sections: PanelSections
     conf: float
     angle: int = 0  # 회전 보정으로 돌린 각도 (시계 방향)
+    size: tuple[int, int] = (0, 0)  # 읽은 이미지 (너비, 높이). 돌려 읽었으면 돌린 뒤 크기
+    borders: Borders = field(default_factory=Borders)  # 읽은 이미지의 변이 사진 가장자리인가
+
+    def occlusion(self) -> str:
+        s = self.sections
+        panel = s.ingredients + s.allergen_notice + s.cross_contamination
+        return find_occlusion(self.lines, *self.size, panel, self.borders)
 
     @property
     def text(self) -> str:
@@ -269,7 +281,12 @@ class IngredientChecker:
         panel = crop_and_upscale(image, region or BBox(0, 0, w, h), scale=scale)
         lines, angle = read_upright(panel, reader=self.reader, try_rotation=self.try_rotation)
         sections = split_sections(join_lines(lines))
-        return _OcrPass(lines, sections, mean_confidence(lines), angle)
+        ph, pw = panel.shape[:2]
+        size = (ph, pw) if angle in (90, 270) else (pw, ph)
+        # 영역만 잘라 읽었으면, 그 영역의 변이 사진 가장자리에 닿은 쪽만 '잘림'을 본다.
+        r = region or BBox(0, 0, w, h)
+        borders = Borders(r.y1 <= 1, r.x2 >= w - 1, r.y2 >= h - 1, r.x1 <= 1).rotated(angle)
+        return _OcrPass(lines, sections, mean_confidence(lines), angle, size, borders)
 
     def _passes(self, p: _OcrPass) -> bool:
         return p.conf >= self.conf_threshold and p.sections.has_ingredient_header
@@ -322,6 +339,7 @@ class IngredientChecker:
             "no_ingredients" if not best.sections.has_ingredient_header else "low_ocr_conf"
         )  # fmt: skip
         sec = best.sections
+        occlusion = best.occlusion() if readable else ""
         t0 = time.perf_counter()
         judgement = judge_allergens(
             user_allergens,
@@ -357,7 +375,16 @@ class IngredientChecker:
             quality=quality,
             rotation=best.angle,
             panel_region=region,
+            occlusion=occlusion,
         )
+
+        found = judgement.verdict in (AllergenVerdict.CONTAINS, AllergenVerdict.MAY_CONTAIN)
+        if occlusion and not found:
+            # 보이는 데서 못 찾았어도 가려진 자리에 있을 수 있다. '못 찾았어요'라고 하지 않는다.
+            judgement.verdict, judgement.reason = AllergenVerdict.UNDETERMINED, "occluded"
+            if retake_count < self.max_retake:
+                result.retake = result.message = RETAKE_UNCOVER
+                return result
 
         needs_retake = (
             judgement.verdict is AllergenVerdict.UNDETERMINED
@@ -373,8 +400,12 @@ class IngredientChecker:
         judgement.response_text = build_message(
             judgement, product_name, user_labels(user_allergens, self.synonyms)
         )
+        if occlusion and found:
+            # 찾은 경고는 바로 전하고, 가려진 데가 있었다는 것도 함께 말한다.
+            judgement.response_text += " " + OCCLUDED_NOTE
         result.message = judgement.response_text
-        if readable and self.store is not None and barcode:
+        # 가려진 사진에서 읽은 성분은 캐시에 남기지 않는다. 일부만 읽은 정보가 굳으면 안 된다.
+        if readable and not occlusion and self.store is not None and barcode:
             # OCR 로 처음 읽은 제품은 확인 전(pending)으로 캐시한다. 틀린 판독이 굳지 않게.
             # 성분표를 직접 읽었는데 알레르기 표시가 없었다는 것도 정보다. 칸을 비워 두면
             # 다음에 캐시에서 꺼냈을 때 '표시를 못 받은 정보'로 보고 또 OCR 을 돌린다.
