@@ -7,6 +7,7 @@
 |---|---|
 | `datasets/` | YOLO 학습·평가용 이미지와 라벨 |
 | `datasets/wakeword/` | 웨이크워드 녹음과 평가 결과 (`scripts/wakeword/`) |
+| `datasets/pointing/` | 가리킴 평가셋 — 촬영 사진 · 정답 표시 · 채점 결과 (`tools/capture_scenes.py` · `tools/label_targets.py` · `scripts/run_ablation.py`) |
 | `models/` | 학습된 가중치 (`.pt`, `.onnx`) |
 | `videos/` | 촬영한 원본 영상 |
 | `eval/` | 작은 평가셋 CSV. 이것만 커밋한다 (`recall_set.csv`: 기억 질문, `scripts/eval_recall.py`) |
@@ -16,6 +17,38 @@
 - 카메라 없이 개발할 때 `datasets/sample/` 을 프레임 입력원으로 쓴다.
   (`.env` 의 `JARVISEO_FRAME_SOURCE=folder`)
 - 용량이 큰 파일을 실수로 커밋하지 않도록 `git status` 를 꼭 확인한다.
+
+## 가리킴 평가셋 보관 규칙
+
+```
+datasets/pointing/
+├── raw/
+│   ├── s01/            세션 하나 = 폴더 하나 (tools/capture_scenes.py)
+│   │   ├── s01_desk_0001.jpg …
+│   │   └── manifest.csv    file · session · place · utterance(찍을 때 한 말) · captured_at
+│   └── s99/            연습 · 지연 측정용. 평가에 쓰지 않는다
+├── labels.csv          정답 표시 (tools/label_targets.py). 한 줄 = 사진 한 장
+└── runs/               채점 결과 사진별 CSV (scripts/run_ablation.py), <run_id>_<버전>.csv
+```
+
+`labels.csv` 열 (`run_ablation.py` 가 이 이름으로 읽는다):
+
+| 열 | 뜻 |
+|---|---|
+| `file` | `raw/` 기준 경로 (`s01/s01_desk_0001.jpg`). 절대 경로는 다른 컴퓨터에서 깨진다 |
+| `session` · `split` | 세션 번호와 `valid` / `test` |
+| `utterance` | 찍을 때 한 말 (manifest 에서 옮김). 채점 때 질문 글자로 쓴다 |
+| `gt_x1` ~ `gt_y2` | 정답 박스, 원본 해상도 픽셀. 제외한 사진은 빈칸 |
+| `gt_label` | 정답 물건 이름. 영어 소문자 · 띄어쓰기, COCO 에 있으면 그 이름 그대로(`cell phone`) |
+| `has_hand` | 가리킨 손이 화면에 보임 (`0`/`1`) |
+| `ambiguous` | 사람이 봐도 무엇을 가리켰는지 모호함 — 되묻는 게 정답 (`0`/`1`) |
+| `prev_label` | 앞 질문의 대상 라벨 (v5 맥락 단서용). 없으면 빈칸 |
+| `excluded` | 흐림 등으로 쓸 수 없는 사진 (`0`/`1`). 채점에서 뺀다 |
+
+- **정답은 이름이 아니라 박스로 남긴다.** 같은 컵이 둘이면 이름으로는 어느 쪽인지 구별이 안 된다. 채점은 고른 박스와 IoU 0.5 이상이면 맞음.
+- **valid/test 는 세션 단위로 나눈다**(세션 1·2 valid, 3 test). test 는 최종 측정 전까지 채점하지 않고, 한 번 test 로 표시한 세션은 valid 로 옮기지 않는다.
+- s99 를 연습으로 표시하면 그 줄도 `split=valid` 로 저장된다. `run_ablation.py` 는 세션을 가리지 않고 valid 줄을 전부 읽으므로, 기준선을 재기 전에 s99 줄을 지운다(`tools/README.md`).
+- 참/거짓은 `True`/`False` 가 아니라 `0`/`1` 로 쓴다. 글자 `"False"` 를 `bool()` 로 읽으면 참이 되는 함정 때문이다.
 
 ## 웨이크워드 녹음 보관 규칙
 
