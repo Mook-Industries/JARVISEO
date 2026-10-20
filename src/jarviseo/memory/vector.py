@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -37,6 +37,7 @@ from jarviseo import config
 from jarviseo.memory.embed import FakeEmbedder, TextEmbedder
 from jarviseo.memory.models import Observation, SessionTurn
 from jarviseo.memory.store import MemoryStore
+from jarviseo.memory.when import time_range
 from jarviseo.types import MemoryHit
 
 __all__ = ["VectorMemory"]
@@ -84,12 +85,17 @@ class VectorMemory:
             db.flush()
             return observation.observation_id
 
-    def search(self, user_id: int, query: str, top_k: int = 5) -> list[MemoryHit]:
+    def search(
+        self, user_id: int, query: str, top_k: int = 5, now: datetime | None = None
+    ) -> list[MemoryHit]:
         """user_id 의 기록 중 query 와 가까운 순으로 최대 top_k 개를 찾는다.
 
         점수(코사인 유사도)가 min_score 보다 낮은 결과는 버린다. 억지로 top_k 개를 채우면
         LLM 이 엉뚱한 기록을 근거로 삼는다. 임베딩이 실패하면 빈 목록을 준다.
         기억 검색이 안 돼도 답은 나가야 하기 때문이다.
+
+        query 에 때 낱말("아까", "어제")이 있으면 그때 기록만 찾는다(memory/when.py).
+        now 는 테스트에서 지금 시각을 정할 때만 넘긴다.
         """
         self.last_latency_ms = None
         started = time.perf_counter()  # monotonic 은 윈도우에서 15.6ms 단위라 못 쓴다
@@ -102,6 +108,12 @@ class VectorMemory:
             .join(SessionTurn, Observation.turn_id == SessionTurn.turn_id)
             .where(Observation.user_id == user_id, Observation.embedding.is_not(None))
         )
+        window = time_range(query, now)
+        if window is not None:
+            start, end = window
+            found = found.where(Observation.observed_at >= start)
+            if end is not None:
+                found = found.where(Observation.observed_at < end)
         with self.store.session() as db:
             if self.store.engine.dialect.name == "postgresql":
                 distance = Observation.embedding.cosine_distance(_binary_vector(db, vector))

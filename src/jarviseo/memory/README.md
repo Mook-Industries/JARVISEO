@@ -9,6 +9,7 @@
 | `store.py` | Postgres 접근 (대화 기록 · 지연시간 · 판정 결과) |
 | `vector.py` | pgvector 검색 — `observation` 테이블 |
 | `dialog.py` | 턴이 끝나면 질문·대답을 `observation` 에 넣는다(다른 스레드). "아까 그거"는 이 기록에서 찾는다 |
+| `when.py` | 질문의 때 낱말("아까", "어제")을 시각 범위로 바꾼다. 검색은 그 범위 안의 기록만 본다 |
 | `embed.py` | 문장 임베딩 (OpenAI `text-embedding-3-small`) + 키 없이 쓰는 `FakeEmbedder` |
 
 ## 알아둘 것
