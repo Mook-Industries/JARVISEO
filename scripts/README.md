@@ -6,6 +6,7 @@
 | `check_listen.py` | 실제 마이크로 `listen()` 확인 — 원문·정리된 질문·시각·지연 출력 |
 | `check_mic_clock.py` | 마이크 블록 시각이 실제 시각을 따라가는지 — N분 동안 10초마다 샘플 수로만 센 시각(고치기 전)과 `BlockClock`(고친 뒤)이 얼마나 늦었는지, 끝에 장치 속도 차이(%). 소리는 저장 안 함 (#69) |
 | `check_speaker_latency.py` | 스피커를 여는 시간과 출력 지연(`latency` high·low) — 첫 소리까지 걸리는 시간. 무음만 쓴다 (#104 시작음) |
+| `check_chime_load.py` | 파이썬이 바쁠 때(같은 프로세스 스레드가 GIL 을 잡음) 시작음·종료음이 끊기는지 — 20ms씩 / 한 번에 쓰기별 소리가 빈 시간·play() 시간. `--listen` 은 귀로 비교. 소리 남 |
 | `check_barge_turns.py` | 끼어드는 때(대답 읽는 중·되묻기 읽는 중·되묻기 대답 기다리는 중)마다 턴이 어떻게 나뉘고 total 이 얼마인지 — 실제 그래프·`BargeIn`·`resolve_target`·SQLite 기록에 시간이 흐르는 가짜 STT·TTS·VLM 을 끼워 재현. 키·마이크 없이 30초쯤 (#105) |
 | `check_tts.py` | 실제 TTS 합성 확인 — 속도별 첫 소리까지 시간·길이 출력하고 재생 |
 | `check_tts_stall.py` | TTS 합성이 읽는 도중 멈추는 비율을 모델마다 잰다(첫 조각·조각 사이 최대 멈춤). `--speak` 는 실제 `speak()` 가 폴백으로 끝까지 읽는지 본다. 소리 안 냄 (#130) |
