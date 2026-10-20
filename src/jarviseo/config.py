@@ -67,6 +67,8 @@ SHARPNESS_THRESHOLD = _get_float("JARVISEO_SHARPNESS_THRESHOLD", 100.0)
 # 값을 올리면 되묻는 횟수가 늘고, 내리면 틀린 단정이 늘어난다.
 # ablation 실험으로 정할 값이므로 지금은 출발점이다.
 CLARIFY_MARGIN_THRESHOLD = _get_float("JARVISEO_CLARIFY_MARGIN", 0.15)
+# 손 관절 모델(MediaPipe HandLandmarker). git 에 안 올라가서 각자 받는다(pointing/README.md).
+HAND_LANDMARKER_PATH = MODELS_DIR / "hand_landmarker.task"
 
 # --- 기능 플래그 ----------------------------------------------------------
 # 아직 안 끝난 기능은 브랜치에 들고 있지 말고, **꺼둔 채로 main 에 머지한다.**
