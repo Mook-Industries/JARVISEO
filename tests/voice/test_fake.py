@@ -95,3 +95,14 @@ def test_fake_tts_interrupts_sentence_once():
     tts.speak("왼쪽 컵이요, 오른쪽 컵이요?")  # 같은 글자는 한 번만 끊는다
     assert tts.last_interrupted is False
     assert tts.spoken == ["왼쪽 컵이요, 오른쪽 컵이요?"] * 2
+
+
+def test_fake_tts_fails_sentence_once():
+    """Fake TTS 는 `fail` 글자가 든 문장을 한 번 소리 없이 실패한 것으로 친다(None)."""
+    tts = FakeTextToSpeech(fail=["왼쪽 컵이요"])
+
+    assert tts.speak("왼쪽 컵이요, 오른쪽 컵이요?") is None
+    assert (tts.last_latency_ms, tts.last_interrupted) == (None, False)
+    assert tts.speak("왼쪽 컵이요, 오른쪽 컵이요?") == 0.0  # 같은 글자는 한 번만 실패한다
+    assert tts.failed == ["왼쪽 컵이요, 오른쪽 컵이요?"]
+    assert tts.spoken == ["왼쪽 컵이요, 오른쪽 컵이요?"]
