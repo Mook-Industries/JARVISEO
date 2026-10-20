@@ -23,7 +23,7 @@ from collections.abc import Callable, Generator, Iterator
 
 import httpx2
 import numpy as np
-from openai import OpenAI, OpenAIError
+from openai import APITimeoutError, OpenAI, OpenAIError
 
 from jarviseo import config
 from jarviseo.voice.speaker import SAMPLE_RATE, Speaker
@@ -147,7 +147,10 @@ class TextToSpeech:
             # 그대로 올라오고, openai 도 다시 보내 주지 않는다. 그래서 여기서 새로 한 번 더
             # 요청한다. 멈춤이 적은 폴백 모델로 보내고, 이미 읽던 중이었어도 처음부터 읽는다.
             # 앞부분("네")이 한 번 더 나오지만, 받은 만큼만 읽고 끝내면 대답을 못 듣는다(#130).
-            if not isinstance(e, httpx2.HTTPError):
+            # 응답 머리도 못 받고 멈추면 openai 가 같은 모델로 RETRIES 만큼 다시 보낸 뒤
+            # APITimeoutError("Request timed out.")를 올린다. 이것도 서버가 멈춘 것이라 폴백
+            # 모델로 보낸다(#130 실측 speak() 10번 중 1번, 8.8초 동안 소리 없이 끝났다).
+            if not isinstance(e, (httpx2.HTTPError, APITimeoutError)):
                 raise
             again = "처음부터 다시" if received else "한 번 더"
             log.warning("합성이 멈춰서 %s 로 %s 요청한다: %s", self.fallback_model, again, e)

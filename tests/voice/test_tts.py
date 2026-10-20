@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 import httpx2
+import openai
 import pytest
 
 from jarviseo import config
@@ -302,6 +303,39 @@ def test_stalled_before_first_chunk_retries(played):
     assert [r["model"] for r in client.requests] == [config.TTS_MODEL, config.TTS_FALLBACK_MODEL]
     assert b"".join(played) == b"" * CHUNK_BYTES + b"" * CHUNK_BYTES
     assert took == tts.last_latency_ms >= 0
+
+
+def test_no_response_head_falls_back(played):
+    """응답 머리도 못 받아 openai 가 `APITimeoutError` 를 올리면 폴백 모델로 새로 요청한다."""
+
+    def no_head(size):
+        client.chunks = two_chunks
+        request = httpx2.Request("POST", "https://api.openai.com/v1/audio/speech")
+        raise openai.APITimeoutError(request=request)  # openai 가 RETRIES 만큼 다시 보낸 뒤
+        yield
+
+    client = FakeClient(no_head)
+    tts = TextToSpeech(client=client)
+
+    took = tts.speak("안녕하세요.")
+
+    assert [r["model"] for r in client.requests] == [config.TTS_MODEL, config.TTS_FALLBACK_MODEL]
+    assert b"".join(played) == b"" * CHUNK_BYTES + b"" * CHUNK_BYTES
+    assert took is not None
+
+
+def test_other_api_error_does_not_fall_back(played):
+    """멈춤이 아닌 API 오류(크레딧 소진 429 등)는 다시 요청하지 않고 소리 없이 None 을 준다."""
+
+    def refused(size):
+        raise openai.OpenAIError("크레딧이 없다")
+        yield
+
+    client = FakeClient(refused)
+
+    assert TextToSpeech(client=client).speak("안녕하세요.") is None
+    assert len(client.requests) == 1
+    assert played == []
 
 
 def test_first_chunk_wait_is_short_with_one_retry(monkeypatch):
