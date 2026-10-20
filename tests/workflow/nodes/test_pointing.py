@@ -261,6 +261,22 @@ def test_clarifies_at_most_twice():
     assert len(deps.resolve.calls) == 3
 
 
+def test_failed_clarify_question_gives_up_without_listening():
+    """되묻는 말을 합성하지 못해 소리가 안 났으면 대답을 기다리지 않고 다시 가리켜 달라고 한다."""
+    deps = _deps([], margins=[0.05, 0.5])
+    deps.stt = _ReplySTT(["저거 뭐야?", "왼쪽 거"])
+    deps.tts = FakeTextToSpeech(fail=[QUESTION])  # 서버가 느려 되묻는 말이 안 나갔다
+
+    result = build_graph(deps).invoke({})
+
+    assert deps.stt.calls == 1  # 질문만 듣고 대답(5초)은 기다리지 않았다
+    assert deps.tts.failed == [QUESTION]
+    assert deps.tts.spoken == [CLARIFY_GIVE_UP]
+    assert result["clarify_replies"] == []
+    assert not result.get("interrupted")  # 다시 부른 게 아니다. 다음 턴은 평소처럼 WAKEWORD
+    assert deps.vlm.asked == []
+
+
 def test_no_candidates_gives_notice_without_asking():
     """후보가 없으면 되묻지 않고 안내한다."""
     deps = _deps(["저거 뭐야?"], detections=[])

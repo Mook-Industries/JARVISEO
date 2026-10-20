@@ -5,13 +5,15 @@ resolve     : 후보 중 가리킨 대상을 고른다 (pointing/resolver.py)
 clarify     : 1·2위가 비슷하면 되묻고 대답을 듣는다. 사진은 다시 고르지 않는다.
               2번 넘거나 대답이 없거나 후보가 없으면 "다시 가리켜 주세요"로 끝낸다.
               되묻는 중이나 대답을 기다리는 중에 "자비서"라고 다시 부르면 그 말은 대답이 아니라
-              새 질문이다. 빈 대답으로 기록만 하고 끝내서, 새 질문은 다음 턴(BARGE_IN)이 받는다
+              새 질문이다. 빈 대답으로 기록만 하고 끝내서, 새 질문은 다음 턴(BARGE_IN)이 받는다.
+              되묻는 말을 합성하지 못해 소리가 안 났으면 대답을 기다리지 않고 바로 끝낸다
 crop_target : 고른 대상을 여백 15% 넣어 잘라낸다 (pointing/crop.py). 성분 판정은 이 크롭 그대로,
               VLM 에는 generate 가 크기를 맞춰 보낸다
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 from jarviseo.pointing.crop import crop_target as cut_target
@@ -30,6 +32,8 @@ __all__ = [
     "detect",
     "resolve",
 ]
+
+log = logging.getLogger(__name__)
 
 # 되묻기 대답("왼쪽 거")을 받아쓸 때 STT 에 주는 힌트. 짧은 대답이 덜 틀린다(voice/stt.py).
 # 장면에 있는 후보 이름(한글)은 clarify 가 같이 더한다.
@@ -62,7 +66,7 @@ def clarify(state: JarviseoState, deps: GraphDeps) -> dict:
     target, count = state["target"], state.get("clarify_count", 0)
     if not target.candidates or count >= MAX_CLARIFY:
         return {"response": canned_response(state, CLARIFY_GIVE_UP)}
-    deps.tts.speak(target.clarify_question or CLARIFY_GIVE_UP)
+    took = deps.tts.speak(target.clarify_question or CLARIFY_GIVE_UP)
     # 질문을 다 말한 뒤에 들린 호출어는 새로 부른 것이다. 질문 첫머리의 호출어가
     # 한 번 더 잡힌 것은 이보다 이르다.
     question_end = state["utterance"].ended_at
@@ -72,6 +76,12 @@ def clarify(state: JarviseoState, deps: GraphDeps) -> dict:
 
     if deps.tts.last_interrupted or called_again():
         return _called_again(state)  # 되묻는 중에 다시 불러서 되묻기가 끊겼다
+    if took is None:
+        # 되묻는 말을 합성하지 못해 소리가 하나도 안 났다. 사용자는 못 들은 질문에 대답하지
+        # 않으니 5초를 기다려도 소용없다(#105 세션 9·10, 서버가 느려 약 9초 뒤 실패, total 16~18초).
+        # 이미 수 초를 썼으니 다시 합성하지 않고 "다시 가리켜 주세요"로 끝낸다.
+        log.warning("되묻는 말을 합성하지 못해 대답을 기다리지 않는다")
+        return {"response": canned_response(state, CLARIFY_GIVE_UP)}
     # 사진을 새로 고르지 않는다(on_speech_start 없음). 대답하는 사이 고개를 돌렸어도
     # 처음 가리킨 장면에서 다시 골라야 한다.
     # 대답은 "컵"처럼 한 글자일 수 있다. 기본(두 글자 미만은 버림)대로면 대답이 없던 것이 된다.
