@@ -31,6 +31,7 @@ Ctrl+C 로 끝내면 단계별 지연 중앙값을 찍는다.
 import argparse
 import statistics
 import threading
+from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -39,10 +40,12 @@ import numpy as np
 from jarviseo import config
 from jarviseo.capture import FrameBuffer, FrameSource, WebcamSource
 from jarviseo.memory import DialogMemory, MemoryStore, SessionTurn, VectorMemory
+from jarviseo.memory.when import time_range
 from jarviseo.nutrition.barcode import make_food_qr_client
 from jarviseo.nutrition.service import IngredientChecker
 from jarviseo.pointing import resolve_target
 from jarviseo.pointing.detector import ObjectDetector
+from jarviseo.types import MemoryHit
 from jarviseo.vlm import VLMClient
 from jarviseo.voice import (
     BargeIn,
@@ -96,8 +99,7 @@ def show(state: JarviseoState) -> None:
     print(f"  질문 {utterance.text!r} (원문 {raw!r}) → {state.get('intent')}")
     memories = state.get("memories")
     if memories is not None:
-        found = ", ".join(f"{hit.text} ({hit.score:.2f})" for hit in memories) or "없음"
-        print(f"  기억 {found}")
+        show_memories(utterance.text, memories)
     flags = []
     if state.get("filler_sent"):
         flags.append("잠깐만요")
@@ -106,6 +108,29 @@ def show(state: JarviseoState) -> None:
     print(f"  대답 {state['response'].text!r}" + (f" ({', '.join(flags)})" if flags else ""))
     latency = state.get("latency_ms", {})
     print("  " + ", ".join(f"{stage} {latency[stage]:.0f}" for stage in STAGES if stage in latency))
+
+
+def show_memories(question: str, memories: list[MemoryHit]) -> None:
+    """VLM 에 넘긴 기록을 한 줄에 하나씩, 본 시각·점수와 함께 찍는다.
+
+    기록 글은 "질문: … / 대답: …" 두 줄이라 그대로 이어 찍으면 옛 대답이 여러 개 나온 것처럼
+    보인다. 때 낱말("아까", "어제")로 찾을 범위를 좁혔으면 그 범위도 찍는다.
+    """
+    window = time_range(question)
+    scope = ""
+    if window is not None:
+        start, end = window
+        scope = (
+            f" ({_clock(start.timestamp())} ~ {_clock(end.timestamp()) if end else '지금'} 기록만)"
+        )
+    print(f"  기억 {len(memories)}개{scope}" if memories else f"  기억 없음{scope}")
+    for hit in memories:
+        when = _clock(hit.observed_at) if hit.observed_at is not None else "시각 없음"
+        print(f"    {when}  {hit.score:.2f}  {hit.text.replace(chr(10), ' / ')}")
+
+
+def _clock(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp).strftime("%m/%d %H:%M")
 
 
 def save_photos(state: JarviseoState, folder: Path, number: int, store: MemoryStore) -> None:
