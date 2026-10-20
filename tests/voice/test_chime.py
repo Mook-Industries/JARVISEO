@@ -132,6 +132,21 @@ def test_chime_marks_sound_for_vad(speaker_log, which):
     assert not gate.is_sounding(done + 0.05 + SOUND_TAIL_SEC + 0.01)
 
 
+@pytest.mark.parametrize("which", ["start", "end"])
+def test_chime_writes_whole_sound_at_once(speaker_log, which):
+    """소리를 20ms 씩 나누지 않고 한 번에 쓴다.
+
+    나눠 쓰면 조각마다 GIL 을 다시 받아야 해서, 다른 파이썬 스레드가 바쁠 때 버퍼가 비어 끊겼다.
+    """
+    chime = Chime(gate=MicGate())
+    pcm = chime.start_pcm if which == "start" else chime.end_pcm
+
+    getattr(chime, which)()
+    chime.wait()
+
+    assert [entry for entry in speaker_log if type(entry) is int] == [len(pcm)]
+
+
 def test_end_plays_after_start_finishes(speaker_log):
     """시작음이 나는 중에 end() 를 부르면 바로 돌아오고, 시작음을 다 낸 뒤 종료음을 낸다."""
     chime = Chime(gate=MicGate())
