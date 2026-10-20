@@ -190,6 +190,31 @@ def test_stop_while_waiting_first_chunk_returns_at_once(played):
     slow.set()
 
 
+def test_stop_then_stall_does_not_request_again(played):
+    """첫 조각 전에 끊긴 뒤 합성이 멈춰도 다시 요청하지 않는다.
+
+    다시 요청하면 끼어든 사용자의 새 질문 위로 앞 대답을 처음부터 읽고, 끊긴 턴으로도 안 남았다.
+    """
+
+    def stalled(size):
+        time.sleep(0.1)  # 첫 조각을 기다리는 중
+        client.chunks = two_chunks  # 다시 요청하면 이번에는 정상으로 온다
+        tts.stop()  # 끊은 바로 그때 읽기 타임아웃이 났다
+        raise httpx2.ReadTimeout("첫 조각 전에 서버가 멈췄다")
+        yield
+
+    client = FakeClient(stalled)
+    tts = TextToSpeech(client=client)
+
+    took = tts.speak("안녕하세요.")
+    time.sleep(0.2)  # 다시 요청했다면 이때까지 보냈다
+
+    assert len(client.requests) == 1
+    assert played == []
+    assert took is None
+    assert tts.last_interrupted is True
+
+
 def test_broken_stream_plays_received_part_without_raising(played):
     """받는 도중 끊기면 받은 만큼만 재생하고 예외를 올리지 않는다."""
 

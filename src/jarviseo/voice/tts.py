@@ -107,29 +107,42 @@ class TextToSpeech:
             self.last_latency_ms = (time.monotonic() - asked_at) * 1000
 
         source = prefetched if prefetched is not None else _Prefetch(text, self._stream(text))
-        for can_retry in (True, False):
-            chunks = _on_first(source.chunks(self.speaker.stop_requested), first)
-            try:
-                self.speaker.play(chunks)
-            except httpx2.HTTPError as e:
-                # 응답을 받기 시작한 뒤 서버가 멈추면 openai 가 감싸지 않은 httpx2.ReadTimeout 이
-                # 그대로 올라오고, openai 도 다시 보내 주지 않는다. 첫 조각도 못 받았으면 새로
-                # 한 번 더 요청한다. 이미 읽던 중이면 받은 만큼만 읽고 멈춘다.
-                if can_retry and self.last_latency_ms is None:
-                    log.warning("합성이 멈춰서 한 번 더 요청한다: %s", e)
-                    source = _Prefetch(text, self._stream(text))
-                    continue
-                log.warning("합성 실패, 재생을 멈춘다: %s", e)
-            except OpenAIError as e:
-                # 요청 자체가 실패했다(openai 가 이미 RETRIES 만큼 다시 보낸 뒤).
-                # 음성 루프는 멈추지 않는다.
-                log.warning("합성 실패, 재생을 멈춘다: %s", e)
-            finally:
-                # 끊겨서 덜 읽은 응답 스트림을 바로 닫는다. 그냥 두면 GC 될 때까지 연결이 남는다.
-                chunks.close()
-            break
+        chunks = _on_first(self._receive(text, source), first)
+        try:
+            self.speaker.play(chunks)
+        except (OpenAIError, httpx2.HTTPError) as e:
+            # 요청 자체가 실패했거나(openai 가 이미 RETRIES 만큼 다시 보낸 뒤), 읽던 중에 멈췄다.
+            # 받은 소리까지만 내고, 음성 루프는 멈추지 않는다.
+            log.warning("합성 실패, 재생을 멈춘다: %s", e)
+        finally:
+            # 끊겨서 덜 읽은 합성을 그만 받게 한다. 그냥 두면 응답 스트림이 끝까지 열려 있다.
+            chunks.close()
         self.last_interrupted = self.speaker.interrupted
         return self.last_latency_ms
+
+    def _receive(self, text: str, source: _Prefetch) -> Generator[bytes]:
+        """source 의 조각을 낸다. 첫 조각도 못 받고 멈췄으면 한 번 더 요청해서 이어 낸다.
+
+        다시 요청하는 것까지 play() 한 번 안에서 한다. play() 를 다시 부르면 그사이 온
+        stop() 표시가 지워져서, 끼어든 뒤에 앞 대답을 처음부터 읽었다.
+        stop() 이 와 있으면 실패해도 다시 요청하지 않고 그냥 끝낸다(Speaker 가 끊김으로 본다).
+        """
+        stopped = self.speaker.stop_requested
+        received = False
+        try:
+            for chunk in source.chunks(stopped):
+                received = True
+                yield chunk
+        except (OpenAIError, httpx2.HTTPError) as e:
+            if stopped():
+                return
+            # 응답을 받기 시작한 뒤 서버가 멈추면 openai 가 감싸지 않은 httpx2.ReadTimeout 이
+            # 그대로 올라오고, openai 도 다시 보내 주지 않는다. 첫 조각도 못 받았으면 새로
+            # 한 번 더 요청한다. 이미 읽던 중이면 받은 만큼만 읽고 멈춘다.
+            if received or not isinstance(e, httpx2.HTTPError):
+                raise
+            log.warning("합성이 멈춰서 한 번 더 요청한다: %s", e)
+            yield from _Prefetch(text, self._stream(text)).chunks(stopped)
 
     def prefetch(self, text: str) -> None:
         """text 합성을 다른 스레드에서 지금 시작해 둔다. 바로 돌아온다.
