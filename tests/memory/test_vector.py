@@ -5,6 +5,7 @@
 """
 
 import time
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from openai import OpenAIError
@@ -119,3 +120,46 @@ def test_embedding_model_name_is_saved(store: MemoryStore, memory: VectorMemory)
         saved = db.get(Observation, observation_id)
         assert saved.embed_model == "fake-bigram"
         assert len(saved.embedding) == 1536
+
+
+def _seen_days_ago(store: MemoryStore, observation_id: int, days: float) -> None:
+    """기록을 며칠 전에 본 것으로 고친다."""
+    with store.session() as db:
+        db.get(Observation, observation_id).observed_at = datetime.now(UTC) - timedelta(days=days)
+
+
+def test_recent_question_skips_old_records(store: MemoryStore, memory: VectorMemory):
+    """아까 본 것을 물으면 며칠 전 기록은 찾지 않는다. 때 낱말이 없으면 찾는다."""
+    user_id = store.ensure_user()
+    turn_id = _turn(store, user_id)
+    old = memory.remember_observation(user_id, turn_id, "검은 카드 지갑")
+    _seen_days_ago(store, old, 6)
+
+    assert memory.search(user_id, "아까 본 검은 카드 지갑") == []
+    assert [h.memory_id for h in memory.search(user_id, "검은 카드 지갑")] == [str(old)]
+
+
+def test_recent_question_finds_todays_record(store: MemoryStore, memory: VectorMemory):
+    """아까 본 것을 물으면 오늘 기록 중에서 찾는다."""
+    user_id = store.ensure_user()
+    turn_id = _turn(store, user_id)
+    _seen_days_ago(store, memory.remember_observation(user_id, turn_id, "검은 카드 지갑"), 6)
+    today = memory.remember_observation(user_id, turn_id, "갈색 카드 지갑")
+
+    assert [h.memory_id for h in memory.search(user_id, "아까 본 카드 지갑")] == [str(today)]
+
+
+def test_yesterday_question_finds_only_yesterday(store: MemoryStore, memory: VectorMemory):
+    """어제 본 것을 물으면 어제 기록만 찾는다. 오늘 것도 엿새 전 것도 뺀다."""
+    user_id = store.ensure_user()
+    turn_id = _turn(store, user_id)
+    now = datetime.now().astimezone()
+    noon_yesterday = now.replace(hour=12, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    ids = [memory.remember_observation(user_id, turn_id, "검은 카드 지갑") for _ in range(3)]
+    _seen_days_ago(store, ids[1], 6)
+    with store.session() as db:
+        db.get(Observation, ids[2]).observed_at = noon_yesterday.astimezone(UTC)
+
+    hits = memory.search(user_id, "어제 본 검은 카드 지갑", now=now)
+
+    assert [h.memory_id for h in hits] == [str(ids[2])]
