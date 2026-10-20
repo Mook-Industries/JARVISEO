@@ -4,6 +4,7 @@ OpenAI API 와 스피커는 부르지 않는다.
 """
 
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -105,29 +106,113 @@ def test_speak_plays_chunks_and_returns_first_chunk_time(played):
     assert tts.last_interrupted is False
 
 
-def test_stop_closes_stream_without_rest(played):
-    """`stop()` 하면 남은 조각을 받지 않고 응답 스트림을 닫는다."""
+def wait_until(condition, timeout=2.0):
+    """condition() 이 True 가 될 때까지 기다린다. 받는 스레드가 따로 돌아서 바로 안 보일 수 있다."""
+    deadline = time.monotonic() + timeout
+    while not condition():
+        assert time.monotonic() < deadline, "시간 안에 안 됐다"
+        time.sleep(0.01)
+
+
+def stop_when(tts, condition, until=None):
+    """condition() 이 True 가 되면 다른 스레드에서 `tts.stop()` 한다(호출어 감지).
+
+    until(Event) 을 주면 그것이 설정될 때까지 20ms 마다 다시 부른다. play() 가 시작하기 전에
+    온 stop() 은 play() 가 지우므로, 첫 조각을 기다리는 중에 닿게 하려는 것이다.
+    """
+
+    def run():
+        wait_until(condition)
+        tts.stop()
+        while until is not None and not until.wait(0.02):
+            tts.stop()
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def test_stop_while_waiting_next_chunk_closes_stream_without_rest(played):
+    """다음 조각을 기다리는 동안 `stop()` 하면 바로 돌아오고, 남은 조각은 받지 않고 닫는다."""
+    stalled, received = threading.Event(), []
 
     def chunks(size):
         yield b"\x01" * size
-        tts.stop()  # 첫 조각을 쓰는 사이 호출어가 들렸다
+        stalled.wait(5)  # 서버가 멈췄다
         yield b"\x02" * size
-        raise AssertionError("끊긴 뒤에는 더 받지 않는다")
+        received.append("끊긴 뒤에 더 받음")
 
     client = FakeClient(chunks)
     tts = TextToSpeech(client=client)
+    stop_when(tts, lambda: len(b"".join(played)) == CHUNK_BYTES)  # 첫 조각을 다 쓴 뒤 불렀다
 
+    started = time.monotonic()
     took = tts.speak("안녕하세요.")
 
+    assert time.monotonic() - started < 1.0  # 멈춘 서버(5초)를 기다리지 않았다
     assert b"".join(played) == b"\x01" * CHUNK_BYTES
     assert tts.last_interrupted is True
-    assert client.closed
     assert took == tts.last_latency_ms >= 0
+
+    stalled.set()  # 서버가 다시 보내도
+    wait_until(lambda: client.closed)
+    assert received == []
 
     # 다음 speak() 은 처음부터 끝까지 읽는다
     client.chunks = two_chunks
+    played.clear()
     tts.speak("다시")
     assert tts.last_interrupted is False
+    assert b"".join(played) == b"\x01" * CHUNK_BYTES + b"\x02" * CHUNK_BYTES
+
+
+def test_stop_while_waiting_first_chunk_returns_at_once(played):
+    """첫 조각을 기다리는 동안 `stop()` 하면 서버를 기다리지 않고 소리 없이 돌아온다."""
+    slow = threading.Event()
+
+    def chunks(size):
+        slow.wait(5)  # 첫 조각이 늦다(#105 실측 11~16초)
+        yield from two_chunks(size)
+
+    client = FakeClient(chunks)
+    tts = TextToSpeech(client=client)
+    # 요청을 보내고 첫 조각을 기다리는 중에 불렀다. 요청은 받는 스레드가 play() 보다 먼저 보낸다
+    returned = threading.Event()
+    stop_when(tts, lambda: client.requests, until=returned)
+
+    started = time.monotonic()
+    took = tts.speak("안녕하세요.")
+    returned.set()
+
+    assert time.monotonic() - started < 1.0
+    assert took is None
+    assert played == []
+    assert tts.last_interrupted is True
+    assert len(client.requests) == 1
+    slow.set()
+
+
+def test_stop_then_stall_does_not_request_again(played):
+    """첫 조각 전에 끊긴 뒤 합성이 멈춰도 다시 요청하지 않는다.
+
+    다시 요청하면 끼어든 사용자의 새 질문 위로 앞 대답을 처음부터 읽고, 끊긴 턴으로도 안 남았다.
+    """
+
+    def stalled(size):
+        time.sleep(0.1)  # 첫 조각을 기다리는 중
+        client.chunks = two_chunks  # 다시 요청하면 이번에는 정상으로 온다
+        tts.stop()  # 끊은 바로 그때 읽기 타임아웃이 났다
+        raise httpx2.ReadTimeout("첫 조각 전에 서버가 멈췄다")
+        yield
+
+    client = FakeClient(stalled)
+    tts = TextToSpeech(client=client)
+
+    took = tts.speak("안녕하세요.")
+    time.sleep(0.2)  # 다시 요청했다면 이때까지 보냈다
+
+    assert len(client.requests) == 1
+    assert played == []
+    assert took is None
+    assert tts.last_interrupted is True
 
 
 def test_broken_stream_plays_received_part_without_raising(played):

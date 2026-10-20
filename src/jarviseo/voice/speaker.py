@@ -61,12 +61,23 @@ class Speaker:
         """
         self._stop.set()
 
+    def stop_requested(self) -> bool:
+        """지금 play() 에 stop() 이 와 있으면 True. play() 를 시작할 때 지운다.
+
+        조각을 넘기는 쪽(TTS)이 조각을 기다리는 동안 이것을 보고 그만 기다린다.
+        """
+        return self._stop.is_set()
+
     def play(self, chunks: Iterable[bytes], mute_mic: bool = True) -> None:
         """조각을 받는 순서대로 재생하고, 마지막 소리가 다 나올 때까지 기다린다.
 
         첫 조각이 오기 전에는 스피커도 게이트도 건드리지 않는다. chunks 가 도중에 예외를 내면
         그때까지 받은 소리는 마저 내고 예외를 그대로 올린다. stop() 으로 끊기면 chunks 를
         더 읽지 않고 돌아온다(닫는 것은 chunks 를 만든 쪽이 한다).
+
+        조각을 기다리는 동안에도 바로 끊기려면 chunks 가 ``stop_requested()`` 를 보고 끝나야 한다
+        (TTS 가 그렇게 넘긴다). stop() 뒤에 chunks 가 끝나면 끊긴 것으로 본다. 그렇지 않은
+        chunks 는 다음 조각이 올 때까지 돌아오지 못한다.
 
         mute_mic=False 면 게이트를 닫지 않는다. 사용자가 말하는 도중이나 말끝에 내는 시작음·종료음
         용이다. 대신 소리가 마이크에 들어가는 구간을 게이트에 표시한다(``MicGate.sounding``).
@@ -75,10 +86,10 @@ class Speaker:
         self.interrupted, self.stopped_at, self.started_at = False, None, None
         chunks = iter(chunks)
         first = next(chunks, None)
-        if first is None:
-            return
         if self._stop.is_set():  # 첫 조각을 기다리는 동안 끊겼다. 게이트는 닫힌 적이 없다
             self._interrupted()
+            return
+        if first is None:
             return
         # 리눅스 CI 에는 PortAudio 가 없어서, 맨 위에서 import 하면 이 모듈을 읽기만 해도 죽는다.
         import sounddevice as sd
@@ -103,6 +114,10 @@ class Speaker:
                     if not self._write(out, chunk):
                         out.abort()
                         break
+                else:
+                    if self._stop.is_set():  # 다음 조각을 기다리다 끊겨서 chunks 가 끝났다
+                        self._interrupted()
+                        out.abort()
         if self.interrupted and mute_mic:
             self.gate.reopen(self.stopped_at)
 

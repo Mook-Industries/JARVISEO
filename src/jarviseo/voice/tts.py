@@ -6,6 +6,9 @@
 답이 늦어 "잠깐만요"를 읽는 동안 답이 오면, ``prefetch()`` 로 대답 합성을 바로 시작해 둔다.
 필러가 끝나고 speak() 를 부를 때는 받아 둔 조각부터 읽어서, 첫 조각 왕복(약 0.9초)을
 필러 뒤에 다시 기다리지 않는다.
+
+speak() 는 미리 받지 않았을 때도 합성을 다른 스레드에서 받는다. 서버가 느리면 첫 조각까지
+몇 초가 걸리는데(#105 실측 11~16초), 그동안 "자비서"로 끼어들어도 바로 돌아오게 하려는 것이다.
 """
 
 from __future__ import annotations
@@ -39,6 +42,8 @@ SPEEDS = {"SLOW": 0.85, "NORMAL": 1.0, "FAST": 1.2}
 # 응답을 받기 시작한 뒤 멈춘 것은 openai 가 다시 보내지 않아서 speak() 가 한 번 더 요청한다.
 TIMEOUT_SEC, READ_TIMEOUT_SEC, RETRIES = 10.0, 4.0, 1
 TIMEOUT = httpx2.Timeout(TIMEOUT_SEC, read=READ_TIMEOUT_SEC)
+# 조각을 기다리는 동안 이만큼마다 끼어들기(stop)를 확인한다. 스피커에 쓰는 단위(20ms)와 같다.
+WAIT_POLL_SEC = 0.02
 # 미리 만든 소리의 앞뒤 무음을 자를 때, 샘플 크기(16비트 절댓값)가 이 값 이하면 무음으로 본다.
 # "잠깐만요." 합성은 2.25~2.65초인데 말소리는 0.11~1.21초뿐이었다. 뒤 무음은 최대 7,
 # 말소리는 최대 1만쯤이다(10/14). 자르지 않으면 대답이 그 무음이 끝날 때까지 1초 넘게 기다린다.
@@ -101,30 +106,43 @@ class TextToSpeech:
         def first() -> None:
             self.last_latency_ms = (time.monotonic() - asked_at) * 1000
 
-        source = prefetched.chunks() if prefetched is not None else self._stream(text)
-        for can_retry in (True, False):
-            chunks = _on_first(source, first)
-            try:
-                self.speaker.play(chunks)
-            except httpx2.HTTPError as e:
-                # 응답을 받기 시작한 뒤 서버가 멈추면 openai 가 감싸지 않은 httpx2.ReadTimeout 이
-                # 그대로 올라오고, openai 도 다시 보내 주지 않는다. 첫 조각도 못 받았으면 새로
-                # 한 번 더 요청한다. 이미 읽던 중이면 받은 만큼만 읽고 멈춘다.
-                if can_retry and self.last_latency_ms is None:
-                    log.warning("합성이 멈춰서 한 번 더 요청한다: %s", e)
-                    source = self._stream(text)
-                    continue
-                log.warning("합성 실패, 재생을 멈춘다: %s", e)
-            except OpenAIError as e:
-                # 요청 자체가 실패했다(openai 가 이미 RETRIES 만큼 다시 보낸 뒤).
-                # 음성 루프는 멈추지 않는다.
-                log.warning("합성 실패, 재생을 멈춘다: %s", e)
-            finally:
-                # 끊겨서 덜 읽은 응답 스트림을 바로 닫는다. 그냥 두면 GC 될 때까지 연결이 남는다.
-                chunks.close()
-            break
+        source = prefetched if prefetched is not None else _Prefetch(text, self._stream(text))
+        chunks = _on_first(self._receive(text, source), first)
+        try:
+            self.speaker.play(chunks)
+        except (OpenAIError, httpx2.HTTPError) as e:
+            # 요청 자체가 실패했거나(openai 가 이미 RETRIES 만큼 다시 보낸 뒤), 읽던 중에 멈췄다.
+            # 받은 소리까지만 내고, 음성 루프는 멈추지 않는다.
+            log.warning("합성 실패, 재생을 멈춘다: %s", e)
+        finally:
+            # 끊겨서 덜 읽은 합성을 그만 받게 한다. 그냥 두면 응답 스트림이 끝까지 열려 있다.
+            chunks.close()
         self.last_interrupted = self.speaker.interrupted
         return self.last_latency_ms
+
+    def _receive(self, text: str, source: _Prefetch) -> Generator[bytes]:
+        """source 의 조각을 낸다. 첫 조각도 못 받고 멈췄으면 한 번 더 요청해서 이어 낸다.
+
+        다시 요청하는 것까지 play() 한 번 안에서 한다. play() 를 다시 부르면 그사이 온
+        stop() 표시가 지워져서, 끼어든 뒤에 앞 대답을 처음부터 읽었다.
+        stop() 이 와 있으면 실패해도 다시 요청하지 않고 그냥 끝낸다(Speaker 가 끊김으로 본다).
+        """
+        stopped = self.speaker.stop_requested
+        received = False
+        try:
+            for chunk in source.chunks(stopped):
+                received = True
+                yield chunk
+        except (OpenAIError, httpx2.HTTPError) as e:
+            if stopped():
+                return
+            # 응답을 받기 시작한 뒤 서버가 멈추면 openai 가 감싸지 않은 httpx2.ReadTimeout 이
+            # 그대로 올라오고, openai 도 다시 보내 주지 않는다. 첫 조각도 못 받았으면 새로
+            # 한 번 더 요청한다. 이미 읽던 중이면 받은 만큼만 읽고 멈춘다.
+            if received or not isinstance(e, httpx2.HTTPError):
+                raise
+            log.warning("합성이 멈춰서 한 번 더 요청한다: %s", e)
+            yield from _Prefetch(text, self._stream(text)).chunks(stopped)
 
     def prefetch(self, text: str) -> None:
         """text 합성을 다른 스레드에서 지금 시작해 둔다. 바로 돌아온다.
@@ -210,7 +228,11 @@ def _on_first(chunks: Generator[bytes], first: Callable[[], None]) -> Generator[
 
 
 class _Prefetch:
-    """합성 조각을 다른 스레드에서 미리 받아 쌓아 두고, speak() 가 chunks() 로 꺼내 읽는다."""
+    """합성 조각을 다른 스레드에서 받아 쌓아 두고, speak() 가 chunks() 로 꺼내 읽는다.
+
+    prefetch() 는 미리 만들어 두고, 미리 받지 않은 speak() 는 그 자리에서 만든다.
+    받는 스레드가 응답 스트림을 혼자 읽고 닫아서, 읽는 쪽은 조각을 기다리다 언제든 그만둘 수 있다.
+    """
 
     def __init__(self, text: str, stream: Generator[bytes]) -> None:
         self.text = text
@@ -232,13 +254,23 @@ class _Prefetch:
             self._stream.close()  # 응답 스트림을 닫는다
             self._queue.put(None)
 
-    def chunks(self) -> Generator[bytes]:
+    def chunks(self, stopped: Callable[[], bool]) -> Generator[bytes]:
         """받아 둔 조각부터 차례로 낸다. 아직 안 온 조각은 올 때까지 기다린다.
 
-        받다가 예외가 났으면 그 자리에서 올린다. 닫으면(끼어들기) 남은 합성을 그만 받는다.
+        기다리는 동안 stopped() 가 True 가 되면(끼어들기) 그만 기다리고 끝난다. 서버가 느려도
+        조각이 올 때까지 막혀 있지 않는다. 받다가 예외가 났으면 그 자리에서 올린다.
+        닫으면 남은 합성을 그만 받는다.
         """
         try:
-            while (item := self._queue.get()) is not None:
+            while True:
+                try:
+                    item = self._queue.get(timeout=WAIT_POLL_SEC)
+                except queue.Empty:
+                    if stopped():
+                        return
+                    continue
+                if item is None:
+                    return
                 if isinstance(item, Exception):
                     raise item
                 yield item
