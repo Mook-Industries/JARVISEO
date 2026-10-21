@@ -22,6 +22,12 @@ HTTP/WebSocket 으로 잇는다. 이 파일은 후자에 해당한다.
     POST /api/ingredient     본문 = 사진 바이트(JPEG/PNG). ?allergens=계란,땅콩 이 없으면 등록된 것
                              알레르기에 '모두' · '테스트'를 넣으면 법정 알레르기 전체(시험용)
 
+자비서 전체 흐름 (팀 그래프를 웹으로)
+-----------------------------------
+    http://localhost:8000/assistant                 # 사진 + 질문 → 자비서 대답
+    POST /api/ask            {"question": "저거 뭐야?", "image": "data:image/jpeg;base64,..."}
+    의도 · 가리킴 · VLM · 기억 · 성분 · 기록을 workflow/graph.py 그대로 돈다(api/assistant_web.py).
+
 알레르기는 assistant.py · register_allergens.py 와 같은 DB · 같은 사용자(owner)에 둔다.
 성분표 OCR 은 .env 에 JARVISEO_OCR_REMOTE_URL 이 있으면 Colab GPU 에서 돈다.
 무료 · 유료 Colab 모두 밖에서 노트북을 켜는 방법이 없어서, 꺼져 있으면 페이지가 알려 주고
@@ -30,6 +36,7 @@ JARVISEO_OCR_NOTEBOOK_URL(서버 노트북 주소)을 여는 버튼을 보여 �
 
 from __future__ import annotations
 
+import base64
 import os
 import threading
 import time
@@ -45,6 +52,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from jarviseo import config
+from jarviseo.api.assistant_web import WebAssistant, draw_boxes
 from jarviseo.api.marks import jpeg_data_url, mark_findings
 from jarviseo.memory import MemoryStore
 from jarviseo.nutrition.allergen import KNOWN_ALLERGENS, find_allergens, normalize_term
@@ -68,9 +76,15 @@ class Allergens(BaseModel):
     allergens: list[str]
 
 
+class Ask(BaseModel):
+    question: str
+    image: str | None = None  # data URL 또는 base64 JPEG/PNG. 없으면 사진 없이 묻는다
+
+
 def create_app(
     store: MemoryStore | None = None,
     checker: IngredientChecker | None = None,
+    assistant: WebAssistant | None = None,
 ) -> FastAPI:
     """앱을 만든다. 테스트에서는 가짜 store · checker 를 넣는다."""
 
@@ -82,7 +96,11 @@ def create_app(
         # OCR 모델 · 동의어 사전 · 푸드QR 연결을 한 번만 만든다.
         app.state.checker = checker or make_checker(app.state.store)
         app.state.lock = threading.Lock()  # OCR 엔진 하나를 여러 요청이 동시에 쓰지 않게
+        app.state.assistant = assistant or WebAssistant(
+            app.state.store, app.state.checker, app.state.user_id
+        )
         yield
+        app.state.assistant.close()
         app.state.checker.close()
 
     app = FastAPI(title="자비서 (JARVISEO)", version="0.1.0", lifespan=lifespan)
@@ -96,6 +114,21 @@ def create_app(
     def ingredient_page() -> FileResponse:
         """사진을 올려 성분을 확인하는 페이지."""
         return FileResponse(PAGES / "ingredient.html")
+
+    @app.get("/assistant", include_in_schema=False)
+    def assistant_page() -> FileResponse:
+        """사진과 질문으로 자비서 전체 흐름을 돌려 보는 페이지."""
+        return FileResponse(PAGES / "assistant.html")
+
+    @app.post("/api/ask")
+    async def ask(body: Ask, request: Request) -> dict:
+        """질문 한 번을 팀 그래프로 돌린다. 사진이 있으면 가리킴 · 성분 · VLM 이 그 사진을 본다."""
+        question = body.question.strip()
+        if not question:
+            raise HTTPException(400, "질문이 비었습니다")
+        image = _decode_image(body.image) if body.image else None
+        s = request.app.state
+        return await _run_in_thread(lambda: _ask(s, question, image))
 
     @app.get("/api/ocr-status")
     def ocr_status(request: Request) -> dict:
@@ -184,6 +217,70 @@ def _check(s, image: np.ndarray, allergens: list[str]) -> dict:
         "timings_ms": r.timings_ms,
         "elapsed_ms": round((time.perf_counter() - t0) * 1000),
     }
+
+
+def _decode_image(data: str) -> np.ndarray:
+    raw = data.split(",", 1)[1] if data.startswith("data:") else data
+    try:
+        buf = base64.b64decode(raw, validate=False)
+    except ValueError:
+        raise HTTPException(400, "사진을 읽을 수 없습니다") from None
+    if len(buf) > MAX_IMAGE_BYTES:
+        raise HTTPException(413, "사진이 너무 큽니다 (15MB 까지)")
+    image = cv2.imdecode(np.frombuffer(buf, np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        raise HTTPException(400, "사진을 읽을 수 없습니다 (JPEG/PNG)")
+    return image
+
+
+def _ask(s, question: str, image: np.ndarray | None) -> dict:
+    t0 = time.perf_counter()
+    with s.lock:  # 성분 판정기(OCR)를 성분 페이지와 같이 쓴다
+        state, spoken = s.assistant.ask(question, image)
+    response = state.get("response")
+    target = state.get("target")
+    chosen = target.chosen if target is not None else None
+    result = {
+        "question": question,
+        "heard": state["utterance"].text if state.get("utterance") else None,
+        "intent": getattr(state.get("intent"), "value", state.get("intent")),
+        "answer": response.text if response is not None else None,
+        "spoken": spoken,
+        "target": chosen.detection.label if chosen is not None else None,
+        # 확신도: 고른 대상의 점수, 1위 - 2위 점수차(후보가 하나면 1.0)
+        "target_score": round(chosen.total_score, 3) if chosen is not None else None,
+        "margin": round(target.margin, 3) if target is not None else None,
+        "candidates": len(target.candidates) if target is not None else 0,
+        "boxes": jpeg_data_url(draw_boxes(state)),
+        "crop": jpeg_data_url(state.get("crop")),
+        "memories": [
+            {"text": m.text, "score": round(m.score, 3)} for m in state.get("memories") or []
+        ],
+        "vlm_real": s.assistant.vlm_real,
+        "turn_id": state.get("turn_id"),
+        # stt · tts · total 은 말하고 듣는 시간이라 웹(가짜 STT · TTS)에서는 뜻이 없다
+        "latency_ms": {
+            k: round(v)
+            for k, v in (state.get("latency_ms") or {}).items()
+            if k not in {"stt", "tts", "total"}
+        },
+        "elapsed_ms": round((time.perf_counter() - t0) * 1000),
+        "ingredient": None,
+        "retried_whole": s.assistant.retried_whole,
+    }
+    check = state.get("ingredient")
+    if check is not None:
+        allergens = s.store.get_user_allergens(s.user_id)
+        ev = evidence(check, allergens, getattr(s.checker, "synonyms", {}) or {})
+        judged = s.assistant.judged_image  # 판정기에 실제로 들어간 사진(크롭 또는 사진 전체)
+        result["ingredient"] = {
+            "evidence": ev,
+            "barcode_steps": barcode_steps(check),
+            "where": jpeg_data_url(where_image(judged, check, ev)) if judged is not None else None,
+            "ocr_text": check.ocr_text,
+            "reason": check.judgement.reason,
+        }
+    return result
 
 
 def where_image(image: np.ndarray, r, ev: list[dict]) -> np.ndarray | None:
