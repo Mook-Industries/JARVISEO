@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>자비서 · 성분 확인</title>
+<style>
+  :root { --bg:#0e1116; --card:#171b22; --line:#2a303a; --text:#e8ebf0; --sub:#9aa3af;
+          --accent:#5ab0ff; --warn:#ffb454; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--sub); margin: 0 0 20px; font-size: 14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; }
+  .card h2 { font-size: 15px; margin: 0 0 10px; color: var(--sub); font-weight: 600; }
+  .row { display:flex; gap:8px; }
+  input[type=text] { flex:1; min-width:0; background:#0b0e13; color:var(--text); border:1px solid var(--line);
+                     border-radius:10px; padding:10px 12px; font-size:15px; }
+  button { background:var(--accent); color:#06121f; border:0; border-radius:10px; padding:10px 16px;
+           font-size:15px; font-weight:700; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  button:disabled { opacity:.45; cursor:default; }
+  .hint { color: var(--sub); font-size: 13px; margin-top: 8px; min-height: 1em; }
+  #drop { border:2px dashed var(--line); border-radius:12px; padding:22px; text-align:center;
+          color:var(--sub); cursor:pointer; }
+  #drop.over { border-color: var(--accent); color: var(--text); }
+  #preview { display:none; max-width:100%; max-height:320px; margin:12px auto 0; border-radius:10px; }
+  #analyze { width:100%; margin-top:12px; padding:14px; font-size:16px; }
+  #sentence { font-size: 20px; line-height: 1.5; margin: 0 0 12px; }
+  #sentence.warn { color: var(--warn); }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { background:#0b0e13; border:1px solid var(--line); border-radius:999px; padding:4px 10px;
+          font-size:13px; color:var(--sub); }
+  .chip.cut { border-color: var(--warn); color: var(--warn); }
+  #result { display:none; }
+  h3 { font-size:14px; color:var(--sub); margin:16px 0 6px; font-weight:600; }
+  #steps { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:14px; }
+  #steps .arrow { color:var(--sub); }
+  table.ev { width:100%; border-collapse:collapse; font-size:14px; }
+  table.ev td { border-top:1px solid var(--line); padding:7px 4px; vertical-align:top; }
+  table.ev td:first-child { white-space:nowrap; font-weight:700; width:1%; padding-right:12px; }
+  .tag { display:inline-block; border-radius:6px; padding:1px 7px; font-size:12px; margin-right:6px; }
+  .tag.contains { background:var(--warn); color:#111; }
+  .tag.may { border:1px solid var(--warn); color:var(--warn); }
+  .tag.not_found { border:1px solid var(--line); color:var(--sub); }
+  .where { color:var(--sub); }
+  .only { color:var(--warn); font-size:12px; margin-left:6px; }
+  .where b { color:var(--text); font-weight:600; }
+  #ocr { display:flex; align-items:center; gap:8px; font-size:14px; color:var(--sub); margin:0 0 14px; }
+  #ocr .dot { width:9px; height:9px; border-radius:50%; background:var(--sub); }
+  #ocr.up .dot { background:#5fd38d; }
+  #ocr.down .dot { background:var(--warn); }
+  #ocr.down #ocr-text { color: var(--warn); }
+  #ocr a { margin-left:auto; color:var(--accent); font-weight:700; text-decoration:none; display:none; }
+  #ocr.down a { display:inline; }
+</style>
+</head>
+<body>
+<main>
+  <nav style="display:flex;gap:14px;font-size:14px;margin-bottom:14px"><a href="/assistant" style="color:var(--sub);text-decoration:none">물어보기</a><a href="/ingredient" style="color:var(--text);font-weight:700;text-decoration:none">성분 확인</a></nav>
+  <h1>성분 확인</h1>
+  <p class="sub">제품의 바코드나 성분표 사진을 올리면, 등록한 알레르기가 들어 있는지 알려 드려요.</p>
+  <div id="ocr"><span class="dot"></span><span id="ocr-text">OCR 서버 확인 중…</span>
+    <a id="ocr-open" target="_blank" rel="noopener">Colab 열기 ↗</a></div>
+
+  <section class="card">
+    <h2>내 알레르기</h2>
+    <div class="row">
+      <input id="allergens" type="text" placeholder="예: 계란, 땅콩, 새우  (시험: 모두)">
+      <button id="save" class="ghost">저장</button>
+    </div>
+    <div id="allergen-hint" class="hint"></div>
+    <div class="hint">'모두' 또는 '테스트'를 넣으면 법정 알레르기 전체로 확인해요(인식 시험용).</div>
+  </section>
+
+  <section class="card">
+    <h2>사진</h2>
+    <div id="drop">여기를 눌러 사진을 고르거나, 사진을 끌어다 놓으세요</div>
+    <input id="file" type="file" accept="image/*" hidden>
+    <img id="preview" alt="올린 사진">
+    <button id="analyze" disabled>분석하기</button>
+    <div id="status" class="hint"></div>
+  </section>
+
+  <section id="result" class="card">
+    <h2>결과</h2>
+    <p id="sentence"></p>
+    <div id="chips" class="chips"></div>
+    <h3>바코드</h3>
+    <div id="steps"></div>
+    <div id="where-box" style="display:none">
+      <h3>사진에서 찾은 자리</h3>
+      <img id="where" alt="찾은 자리" style="width:100%;border-radius:10px;border:1px solid var(--line)">
+      <div class="hint">주황 칠 = 들어 있음, 주황 테두리 = 섞였을 수 있음, 파랑 = 바코드</div>
+    </div>
+    <h3>알레르기별 근거</h3>
+    <table id="ev" class="ev"></table>
+    <div id="ocr-out"></div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let photo = null;
+
+const names = () => $("allergens").value.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+
+async function loadAllergens() {
+  const list = (await (await fetch("/api/allergens")).json()).allergens;
+  $("allergens").value = list.join(", ");
+  $("allergen-hint").textContent = list.length ? `등록됨: ${list.join(", ")}` : "아직 등록된 알레르기가 없어요.";
+}
+
+$("save").onclick = async () => {
+  const r = await fetch("/api/allergens", {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ allergens: names() }),
+  });
+  const list = (await r.json()).allergens;
+  $("allergen-hint").textContent = list.length ? `저장했어요: ${list.join(", ")}` : "모두 지웠어요.";
+};
+
+function choose(file) {
+  if (!file || !file.type.startsWith("image/")) return;
+  photo = file;
+  $("preview").src = URL.createObjectURL(file);
+  $("preview").style.display = "block";
+  $("analyze").disabled = false;
+  $("status").textContent = "";
+}
+
+$("drop").onclick = () => $("file").click();
+$("file").onchange = (e) => choose(e.target.files[0]);
+$("drop").ondragover = (e) => { e.preventDefault(); $("drop").classList.add("over"); };
+$("drop").ondragleave = () => $("drop").classList.remove("over");
+$("drop").ondrop = (e) => { e.preventDefault(); $("drop").classList.remove("over"); choose(e.dataTransfer.files[0]); };
+
+$("analyze").onclick = async () => {
+  if (!photo) return;
+  if (!names().length) { $("status").textContent = "알레르기를 먼저 입력해 주세요."; return; }
+  $("analyze").disabled = true;
+  $("status").textContent = ocrUp
+    ? "분석 중이에요… 성분표를 읽어야 하면 몇 초 걸려요."
+    : "분석 중이에요… OCR 서버가 꺼져 있어서, 바코드가 안 보이면 몇 분 걸릴 수 있어요.";
+  try {
+    const q = encodeURIComponent(names().join(","));
+    const r = await fetch(`/api/ingredient?allergens=${q}`, {
+      method: "POST", headers: { "Content-Type": photo.type || "application/octet-stream" }, body: photo,
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.statusText);
+    show(d);
+    $("status").textContent = "";
+  } catch (err) {
+    $("status").textContent = `분석하지 못했어요: ${err.message}`;
+  } finally {
+    $("analyze").disabled = false;
+  }
+};
+
+function chip(text, cls = "chip") {
+  return Object.assign(document.createElement("span"), { className: cls, textContent: text });
+}
+
+function show(d) {
+  $("result").style.display = "block";
+  $("sentence").textContent = d.sentence;
+  const warn = ["contains", "may_contain"].includes(d.verdict) || d.occlusion;
+  $("sentence").className = warn ? "warn" : "";
+  $("chips").replaceChildren(chip(`판정: ${d.source_name}`), chip(`${(d.elapsed_ms / 1000).toFixed(1)}초`));
+  if (d.product) $("chips").append(chip(`제품: ${d.product}`));
+  if (d.barcode) $("chips").append(chip(`바코드 ${d.barcode}`));
+  if (d.occlusion) $("chips").append(chip("성분표 일부가 잘림", "chip cut"));
+  showSteps(d.barcode_steps || []);
+  $("where-box").style.display = d.where ? "block" : "none";
+  if (d.where) $("where").src = d.where;
+  showEvidence(d.evidence || [], d.retake);
+  $("ocr-out").replaceChildren(...(d.ocr_text || d.reason ? [ocrBox(d.ocr_text, d.reason)] : []));
+}
+
+function showSteps(steps) {
+  const box = $("steps");
+  box.replaceChildren();
+  steps.forEach((t, i) => {
+    if (i) box.append(Object.assign(document.createElement("span"), { className: "arrow", textContent: "→" }));
+    box.append(chip(t));
+  });
+}
+
+const STATUS = { contains: "들어 있음", may: "섞였을 수 있음", not_found: "찾지 못함" };
+const REASONS = { no_ingredients: "원재료명을 찾지 못했어요", low_ocr_conf: "글자가 흐려서 믿기 어려워요",
+  occluded: "성분표 일부가 가려졌어요", small_text: "글씨가 너무 작아요", unreadable: "글자를 읽지 못했어요" };
+function ocrBox(text, reason) {
+  const box = document.createElement("details");
+  box.style.marginTop = "10px";
+  const sum = document.createElement("summary");
+  sum.style.cursor = "pointer"; sum.style.color = "var(--sub)"; sum.style.fontSize = "14px";
+  sum.textContent = "성분표 OCR이 읽은 글자" + (REASONS[reason] ? ` — ${REASONS[reason]}` : "");
+  const pre = document.createElement("div");
+  pre.style.cssText = "white-space:pre-wrap;font-size:13px;color:var(--sub);background:#0b0e13;border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:6px";
+  pre.textContent = text || "(읽은 글자 없음)";
+  box.append(sum, pre);
+  return box;
+}
+
+
+function showEvidence(rows, retake) {
+  const table = $("ev");
+  table.replaceChildren();
+  if (retake) {
+    table.append(row("—", "다시 찍은 사진으로 확인해 주세요."));
+    return;
+  }
+  // 들어 있음 → 섞였을 수 있음 → 찾지 못함 순서로
+  const order = { contains: 0, may: 1, not_found: 2 };
+  [...rows].sort((a, b) => order[a.status] - order[b.status]).forEach((e) => {
+    const cell = document.createElement("td");
+    cell.append(Object.assign(document.createElement("span"), { className: `tag ${e.status}`, textContent: STATUS[e.status] }));
+    const where = document.createElement("span");
+    where.className = "where";
+    if (e.where.length) {
+      e.where.forEach((w, i) => {
+        if (i) where.append(" · ");
+        where.append(`${w.section}: `, Object.assign(document.createElement("b"), { textContent: w.terms.join(", ") }));
+      });
+    } else {
+      where.textContent = "읽은 글자에서 찾지 못했어요 (없다는 뜻은 아니에요)";
+    }
+    cell.append(where);
+    if (e.ingredient_only) cell.append(Object.assign(document.createElement("span"),
+      { className: "only", textContent: "원재료에서만 찾음 — 함유 표시에는 없음 (오독일 수 있어요)" }));
+    const tr = document.createElement("tr");
+    tr.append(Object.assign(document.createElement("td"), { textContent: e.allergen }), cell);
+    table.append(tr);
+  });
+}
+
+function row(a, b) {
+  const tr = document.createElement("tr");
+  tr.append(Object.assign(document.createElement("td"), { textContent: a }),
+            Object.assign(document.createElement("td"), { textContent: b }));
+  return tr;
+}
+
+// Colab OCR 서버 상태. 꺼져 있으면 10초마다, 켜져 있으면 1분마다 다시 본다.
+let ocrUp = true;
+async function checkOcr() {
+  let s = { remote: false, up: false };
+  try { s = await (await fetch("/api/ocr-status")).json(); } catch {}
+  ocrUp = !s.remote || s.up;
+  const box = $("ocr");
+  if (!s.remote) {
+    box.className = "";
+    $("ocr-text").textContent = "성분표 OCR: 이 PC (CPU) — 성분표 사진은 오래 걸릴 수 있어요";
+  } else if (s.up) {
+    box.className = "up";
+    $("ocr-text").textContent = `성분표 OCR 서버 켜짐 (${s.device === "cpu" ? "CPU" : "GPU"})`;
+  } else {
+    box.className = "down";
+    $("ocr-text").textContent = "성분표 OCR 서버 꺼짐 — Colab 에서 '모두 실행'을 눌러 주세요";
+    if (s.notebook_url) $("ocr-open").href = s.notebook_url;
+    else $("ocr-open").style.display = "none";
+  }
+  setTimeout(checkOcr, s.remote && !s.up ? 10000 : 60000);
+}
+
+loadAllergens();
+checkOcr();
+</script>
+</body>
+</html>

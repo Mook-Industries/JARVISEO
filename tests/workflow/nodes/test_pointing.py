@@ -287,6 +287,40 @@ def test_no_candidates_gives_notice_without_asking():
     assert deps.tts.spoken == [CLARIFY_GIVE_UP]
 
 
+def test_clarify_plays_start_chime_before_reply():
+    """되묻는 말을 다 읽은 뒤, 대답을 듣기 전에 시작음을 낸다."""
+    deps = _deps([], margins=[0.05, 0.5])
+    deps.stt = _ReplySTT(["저거 뭐야?", "왼쪽 거"])
+    chimed: list[tuple[list[str], int]] = []
+    deps.start_chime = lambda: chimed.append((list(deps.tts.spoken), deps.stt.calls))
+
+    build_graph(deps).invoke({})
+
+    # 되묻는 말은 읽었고 대답은 아직 안 들었을 때 한 번만
+    assert chimed == [([QUESTION], 1)]
+
+
+@pytest.mark.parametrize(
+    ("detections", "tts"),
+    [([], {}), (TWO_CUPS, {"fail": [QUESTION]}), (TWO_CUPS, {"interrupt": [QUESTION]})],
+    ids=["no_candidates", "question_failed", "called_again"],
+)
+def test_no_start_chime_without_waiting_for_reply(detections, tts):
+    """후보가 없거나, 되묻는 말이 안 나갔거나, 되묻다 다시 불려 대답을 안 기다리면 시작음도 없다."""
+    chimed: list[str] = []
+    deps = _deps(
+        ["저거 뭐야?", "왼쪽 거"],
+        margins=[0.05],
+        detections=detections,
+        start_chime=lambda: chimed.append("start"),
+    )
+    deps.tts = FakeTextToSpeech(**tts)
+
+    build_graph(deps).invoke({})
+
+    assert chimed == []
+
+
 # --- 되묻는 중에 다시 부름 ---------------------------------------------------
 
 

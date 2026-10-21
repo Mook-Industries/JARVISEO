@@ -34,6 +34,8 @@ __all__ = [
     "FoodQrClient",
     "FoodQrError",
     "is_valid_gtin",
+    "find_gtin",
+    "lookup_code",
     "lookup_product",
     "make_food_qr_client",
     "read_barcodes",
@@ -129,7 +131,38 @@ def read_barcodes(image: np.ndarray) -> list[BarcodeRead]:
             found[code] = BarcodeRead(code=code, symbology=kind, bbox=bbox)
         if found:
             break  # 한 크기에서 읽혔으면 나머지는 볼 필요 없다
+    if not found:
+        # cv2.barcode 는 작고 기울고 휘거나 반사광이 지나간 바코드를 자주 놓친다.
+        # zxing-cpp 로 한 번 더 본다.
+        # 웹캠 실측: 손에 든 크런키 바코드를 cv2 는 못 읽고 zxing 은 읽었다.
+        for read in _read_zxing(image):
+            found.setdefault(read.code, read)
     return list(found.values())
+
+
+# zxing-cpp 의 형식 이름 → 이 모듈의 이름(cv2.barcode 와 같게)
+_ZXING_TYPES = {"EAN13": "EAN_13", "EAN8": "EAN_8", "UPCA": "UPC_A", "UPCE": "UPC_E"}
+
+
+def _read_zxing(image: np.ndarray) -> list[BarcodeRead]:
+    """zxing-cpp 로 소매용 바코드를 읽는다. 설치돼 있지 않으면 빈 목록(cv2 결과만 쓴다)."""
+    try:
+        import zxingcpp
+    except ImportError:
+        return []
+    out = []
+    for r in zxingcpp.read_barcodes(image):
+        kind = _ZXING_TYPES.get(str(r.format).split(".")[-1].replace("-", "").upper())
+        code = (r.text or "").strip()
+        if kind is None or not is_valid_gtin(code):
+            continue
+        pos = r.position
+        pts = [pos.top_left, pos.top_right, pos.bottom_right, pos.bottom_left]
+        xs, ys = [float(q.x) for q in pts], [float(q.y) for q in pts]
+        out.append(
+            BarcodeRead(code=code, symbology=kind, bbox=BBox(min(xs), min(ys), max(xs), max(ys)))
+        )
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -311,7 +344,45 @@ def lookup_product(
     reads = read_barcodes(image)
     if not reads:
         return done(None, None, "no_barcode")
+    return _lookup_reads(reads, store, food_qr, done)
 
+
+# 바코드 아래 찍힌 숫자. OCR 이 사이에 공백 · '-' · ':' · '.' 을 넣어 읽는다("8:801062-640782").
+_GTIN_TEXT = re.compile(r"(?<!\d)\d(?:[\s\-:.]?\d){12}(?!\d)")
+# 한국 상품 바코드 국가 코드. 같은 글자에 숫자 덩어리가 여럿이면 이쪽을 먼저 본다.
+_KOREA_PREFIX = "880"
+
+
+def find_gtin(text: str) -> str | None:
+    """OCR 글자에서 EAN-13 바코드 번호를 찾는다. 체크섬이 맞는 것만. 없으면 None.
+
+    바코드 줄무늬를 못 읽어도(작음 · 흐림) 그 아래 숫자는 OCR 이 읽는 일이 많다(크런키 실측:
+    줄무늬는 cv2 · zxing 둘 다 못 읽고 OCR 은 "8:801062-640782" 로 읽음).
+    품목보고번호 · 전화번호도 숫자라서 13자리 + 체크섬을 통과해야만 받는다.
+    """
+    codes = [re.sub(r"\D", "", m.group()) for m in _GTIN_TEXT.finditer(text or "")]
+    codes = [c for c in codes if is_valid_gtin(c)]
+    codes.sort(key=lambda c: not c.startswith(_KOREA_PREFIX))
+    return codes[0] if codes else None
+
+
+def lookup_code(
+    code: str, store=None, food_qr: FoodQrClient | None = None, symbology: str = "TEXT"
+) -> BarcodeLookup:
+    """바코드 번호(성분표 글자에서 읽은 것 등)로 캐시 → 푸드QR 을 찾는다."""
+    t0 = time.perf_counter()
+
+    def done(
+        read: BarcodeRead | None, product: ProductInfo | None, reason: str = ""
+    ) -> BarcodeLookup:
+        ms = int((time.perf_counter() - t0) * 1000)
+        return BarcodeLookup(barcode=read, product=product, elapsed_ms=ms, reason=reason)
+
+    return _lookup_reads([BarcodeRead(code=code, symbology=symbology)], store, food_qr, done)
+
+
+def _lookup_reads(reads: list[BarcodeRead], store, food_qr, done) -> BarcodeLookup:
+    """읽은 바코드들로 캐시 → 푸드QR 순서로 찾는다. 하나라도 찾으면 그것을 돌려준다."""
     reason = "not_found"
     for read in reads:
         if store is not None:

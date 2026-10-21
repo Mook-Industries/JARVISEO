@@ -4,20 +4,26 @@
 음성 워크플로의 Router Agent 규칙(키워드 사전 매칭)을 따른다.
 
 위에서부터 먼저 걸리는 쪽으로 간다.
-- INGREDIENT : 먹어도·성분·알레르기. "이거 먹어도 돼?"에 지시어도 있어서 가리킴보다 먼저 본다
+- INGREDIENT : 먹어도·성분·알레르기·알러지. "이거 먹어도 돼?"에 지시어도 있어서 가리킴보다 먼저 본다
 - RECALL     : 지난 일을 묻는 말. "아까 본 그거"에 지시어도 있어서 가리킴보다 먼저 본다
-- POINTING   : 지시어(저거·이거·그거)
-- GENERAL    : 그 밖의 전부
+- POINTING   : 물건 하나를 집는 말 — 지시어(이거·이건·쟤), "저기"(저기요는 빼고),
+               위치 말 바로 뒤의 거(왼쪽꺼·위에 있는 거), "가리키", 아무것도 안 붙은 "뭐야?"
+- GENERAL    : 그 밖의 전부. 찾기("어떤 게 X야?")·장면("뭐가 보여?")·영역("왼쪽에는 뭐가 있지?")
+               질문은 VLM 이 전체 사진을 봐야 풀려서 일부러 여기 둔다
 """
 
 from __future__ import annotations
+
+import re
 
 from jarviseo.types import Intent
 
 __all__ = ["classify_intent"]
 
 # 띄어쓰기를 지운 글자와 맞춰 보므로 낱말도 띄어쓰기 없이 적는다.
-_INGREDIENT = ("먹어도", "성분", "알레르기", "원재료", "들어갔")
+# "들어있"은 "나트륨 얼마나 들어 있어?"도 성분 길로 보낸다.
+# 알레르기 질문이 VLM 으로 새는 것보다 낫다(VLM 은 알레르기를 지어낼 수 있다).
+_INGREDIENT = ("먹어도", "성분", "알레르기", "알러지", "원재료", "들어갔", "들어있")
 # 지난 일만 넣는다. "어디 있어"(지금 찾기)는 10/7 소지품 기능을 빼면서 GENERAL 로 정했다.
 # 기억 질문 평가셋(data/eval/recall_set.csv, 질문 30개)으로 잰다: scripts/eval_recall.py
 _RECALL = (
@@ -40,8 +46,31 @@ _RECALL = (
     "있었지",
     "있었더라",
 )
-# "뭐야"는 넣지 않는다. 넣으면 "오늘 날씨 뭐야?"까지 가리킴으로 빠진다.
-_POINTING = ("저거", "이거", "그거", "저것", "이것", "그것", "저게", "이게", "그게")
+# "뭐야"는 넣지 않는다. 넣으면 "오늘 날씨 뭐야?"까지 가리킴으로 빠진다(단독 "뭐야?"는 아래 _BARE).
+# "그건"은 "그건 그렇고"에 걸려 넣지 않는다.
+_POINTING = (
+    "저거",
+    "이거",
+    "그거",
+    "저것",
+    "이것",
+    "그것",
+    "저게",
+    "이게",
+    "그게",
+    "이건",
+    "저건",
+    "이걸",
+    "저걸",
+    "쟤",
+    "가리키",
+)
+# 위치 말 바로 뒤의 거·꺼·것 — 물건 하나를 집는다. "앞으로 할 거"·"위험한 거"는 안 걸린다.
+_POSITION_ONE = re.compile(r"(왼쪽|오른쪽|가운데|위|아래|옆|앞|뒤)(에|에있는|쪽|에놓인)?(꺼|거|것)")
+# "저기 있는 거"는 가리키지만 "저기요"는 부르는 말이다.
+_THERE = re.compile(r"저기(?!요)")
+# 앞에 아무 말도 없는 질문은 보고 있는 물건을 묻는다.
+_BARE = ("뭐야", "뭐지", "뭐예요", "뭐에요", "뭐냐")
 
 
 def classify_intent(text: str) -> Intent:
@@ -52,6 +81,15 @@ def classify_intent(text: str) -> Intent:
         return Intent.INGREDIENT
     if any(word in compact for word in _RECALL):
         return Intent.RECALL
-    if any(word in compact for word in _POINTING):
+    if _points_at_one(compact):
         return Intent.POINTING
     return Intent.GENERAL
+
+
+def _points_at_one(compact: str) -> bool:
+    """띄어쓰기를 지운 질문이 물건 하나를 집는 말인지."""
+    if any(word in compact for word in _POINTING):
+        return True
+    if _POSITION_ONE.search(compact) or _THERE.search(compact):
+        return True
+    return compact.rstrip("?!.~") in _BARE

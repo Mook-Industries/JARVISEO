@@ -2,6 +2,7 @@
 
 듣기는 받아쓰고, 말을 시작한 순간 그 시각 근처에서 가장 선명한 사진을 고른다.
 호출어 2단계 확인(deps.wake_check)이 호출어가 아니라고 하면 되묻기·대답 없이 끝난다.
+호출어만 부르고 멈췄으면 "네, 말씀하세요"를 읽고 시작음(deps.start_chime)을 낸 뒤 한 번 더 듣는다.
 읽기는 답을 소리로 읽는다. 도중에 "자비서"가 들리면 바로 끊긴다.
 """
 
@@ -52,6 +53,8 @@ def listen(state: JarviseoState, deps: GraphDeps) -> dict:
     if utterance is None and wake_at is not None:
         # 호출어만 부르고 멈췄다. 되묻고 한 번 더 듣는다.
         deps.tts.speak(REPROMPT)
+        if deps.start_chime is not None:
+            deps.start_chime()  # 이제 말하라는 신호. 말이 끝나면 종료음은 stt 가 낸다
         utterance = stt.listen(on_speech_start=pick, timeout=REPLY_SEC)
     if utterance is None:
         return checked

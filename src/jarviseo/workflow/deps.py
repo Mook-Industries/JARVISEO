@@ -54,6 +54,9 @@ class GraphDeps:
     # start(t) -> WakeVerdict (voice.wakecheck.WakeCheck). 호출어 2단계 확인(#149).
     # 없으면 호출어 모델이 깨어나기만 하면 질문을 받는다.
     wake_check: Any = None
+    # 되묻는 말(되묻기 · "네, 말씀하세요")을 다 읽고 대답을 듣기 직전에 부른다. 시작음(Chime.start).
+    # 없으면 소리 없이 듣는다. 대답이 끝났을 때 종료음은 stt 의 on_speech_end 가 낸다.
+    start_chime: Callable[[], None] | None = None
     # 꺼져 있으면 기억을 묻는 질문도 GENERAL 로 보낸다(config 의 기능 플래그)
     recall_enabled: bool = config.ENABLE_RECALL
     # 안경 카메라로 기준을 재기 전까지는 흐림을 보지 않는다(None). quality.py 의 100 은

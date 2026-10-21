@@ -92,9 +92,12 @@ OPENAI_API_KEY = _get("OPENAI_API_KEY")
 # 한쪽만 고쳐져서 어긋난다.
 VLM_MODEL = _get("JARVISEO_VLM_MODEL", "gpt-6-sol")
 STT_MODEL = _get("JARVISEO_STT_MODEL", "gpt-transcribe")
-TTS_MODEL = _get("JARVISEO_TTS_MODEL", "gpt-4o-mini-tts")
-# TTS_MODEL 합성이 멈춰서(읽기 타임아웃) 한 번 더 요청할 때 쓰는 모델. gpt-4o-mini-tts 는 긴 대답
-# 8번 중 5번이 읽는 도중 30초 넘게 멈췄고, tts-1 은 4번 모두 끝까지 왔다(#118, 10/20).
+# gpt-4o-mini-tts 는 첫 조각이 0.7초쯤 빠르지만 읽는 도중 자주 멈춰서 기본으로 두지 않는다.
+# 짧은 대답 10번 중 6번이 5.8~10.2초 멈췄고 tts-1 은 0번이었다(10/21). 멈추면 폴백까지 4초를
+# 기다리고 처음부터 다시 읽어서, 첫 조각 0.7초를 아끼는 것보다 훨씬 오래 걸렸다.
+TTS_MODEL = _get("JARVISEO_TTS_MODEL", "tts-1")
+# TTS_MODEL 합성이 멈춰서(읽기 타임아웃) 한 번 더 요청할 때 쓰는 모델. 기본은 같은 tts-1 로
+# 다시 보낸다. gpt-4o-mini-tts 는 긴 대답 8번 중 5번이 30초 넘게 멈췄다(#118, 10/20).
 TTS_FALLBACK_MODEL = _get("JARVISEO_TTS_FALLBACK_MODEL", "tts-1")
 # 기억 검색용 문장 임베딩. 차원(1536)이 observation.embedding 의 VECTOR(1536) 과 같아야 한다.
 EMBED_MODEL = _get("JARVISEO_EMBED_MODEL", "text-embedding-3-small")

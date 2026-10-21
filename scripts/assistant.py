@@ -4,6 +4,8 @@
 질문 한 번을 돌린다: 받아쓰기 → 의도 → (기억 검색 · 가리킴 · 성분 판정) → VLM → 읽기 → 기록.
 대답을 읽거나 기다리는 중에 "자비서"라고 부르면 끊고 새 질문을 받는다(끼어들기).
 부르면 시작음을, 질문하는 말이 끝나면(받아쓰기 전) 종료음을 낸다(JARVISEO_CHIME_VOLUME=0 이면 끔).
+되물을 때("왼쪽 컵이요, 오른쪽 컵이요?", "네, 말씀하세요")도 되묻는 말 뒤에 시작음,
+대답이 끝나면 종료음을 낸다.
 OpenAI 키와 호출어 모델(data/models/jarviseo.onnx, data/README.md)이 필요하다.
 
 실행 (레포 맨 위 폴더에서):
@@ -312,6 +314,7 @@ def main() -> None:
             dialog=dialog,
             collector=collector,
             called_since=barge.called_since,  # 되묻는 동안 다시 불렀는지
+            start_chime=chime.start,  # 되묻는 말 뒤 이제 대답하라는 신호
             detector=object_detector,
             hands=hand_detector,
             resolve=resolve_target,

@@ -3,6 +3,7 @@
 detect      : 사진에서 물체 후보와 가리키는 손을 찾는다 (pointing/detector.py · hands.py)
 resolve     : 후보 중 가리킨 대상을 고른다 (pointing/resolver.py)
 clarify     : 1·2위가 비슷하면 되묻고 대답을 듣는다. 사진은 다시 고르지 않는다.
+              되묻는 말 뒤에 시작음, 대답이 끝나면 종료음을 낸다(처음 질문할 때와 같다)
               2번 넘거나 대답이 없거나 후보가 없으면 "다시 가리켜 주세요"로 끝낸다.
               되묻는 중이나 대답을 기다리는 중에 "자비서"라고 다시 부르면 그 말은 대답이 아니라
               새 질문이다. 빈 대답으로 기록만 하고 끝내서, 새 질문은 다음 턴(BARGE_IN)이 받는다.
@@ -97,6 +98,10 @@ def clarify(state: JarviseoState, deps: GraphDeps) -> dict:
     # 되묻는 말 끝에 걸쳐 부르면 감지가 재생 뒤로 밀리는데(감지 지연 최대 0.33초), 그 감지도 듣기를
     # 시작한 뒤에 들어오므로 여기서 잡힌다. 듣기 전에 그만큼 쉬지 않는 것은, 쉬는 동안 시작한
     # 대답("왼쪽") 앞부분이 잘리기 때문이다(since 없는 listen 은 부른 뒤 소리부터 읽는다).
+    # 되묻는 말을 다 읽었다. 시작음으로 이제 대답하라고 알린다. 대답이 끝나면 stt 가 종료음을 낸다.
+    # 시작음 구간은 VAD 가 말로 안 볼 뿐 녹음에는 남아서, 시작음과 겹쳐 대답해도 앞이 안 잘린다.
+    if deps.start_chime is not None:
+        deps.start_chime()
     reply = deps.stt.listen(timeout=REPLY_SEC, min_letters=1, hints=hints, stop=called_again)
     if called_again():
         return _called_again(state)  # 대답을 기다리는 동안 다시 불렀다. 그 말은 새 질문이다

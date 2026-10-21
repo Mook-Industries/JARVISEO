@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>자비서 · 물어보기</title>
+<style>
+  :root { --bg:#0e1116; --card:#171b22; --line:#2a303a; --text:#e8ebf0; --sub:#9aa3af;
+          --accent:#5ab0ff; --warn:#ffb454; --ok:#5fd38d; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+  nav { display:flex; gap:14px; font-size:14px; margin-bottom:14px; }
+  nav a { color:var(--sub); text-decoration:none; } nav a.on { color:var(--text); font-weight:700; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--sub); margin: 0 0 18px; font-size: 14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; }
+  .card h2 { font-size: 15px; margin: 0 0 10px; color: var(--sub); font-weight: 600; }
+  h3 { font-size:14px; color:var(--sub); margin:16px 0 6px; font-weight:600; }
+  .row { display:flex; gap:8px; align-items:center; }
+  input[type=text] { flex:1; min-width:0; background:#0b0e13; color:var(--text); border:1px solid var(--line);
+                     border-radius:10px; padding:12px; font-size:16px; }
+  button { background:var(--accent); color:#06121f; border:0; border-radius:10px; padding:11px 16px;
+           font-size:15px; font-weight:700; cursor:pointer; white-space:nowrap; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  button.rec { background:var(--warn); }
+  button:disabled { opacity:.45; cursor:default; }
+  .hint { color: var(--sub); font-size: 13px; margin-top: 8px; min-height: 1em; }
+  #drop { border:2px dashed var(--line); border-radius:12px; padding:18px; text-align:center; color:var(--sub); cursor:pointer; }
+  #drop.over { border-color: var(--accent); color: var(--text); }
+  .media { display:none; max-width:100%; max-height:320px; margin:12px auto 0; border-radius:10px; }
+  .photo-row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { background:#0b0e13; border:1px solid var(--line); border-radius:999px; padding:4px 10px; font-size:13px; color:var(--sub); }
+  .chip.warn { border-color:var(--warn); color:var(--warn); }
+  .bubble { background:#0b0e13; border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin:6px 0; line-height:1.5; }
+  .bubble.me { border-color:#2f4a66; }
+  .bubble.bot { font-size:18px; }
+  .bubble small { display:block; color:var(--sub); font-size:12px; margin-bottom:2px; }
+  .imgs { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px; }
+  .imgs figure { margin:0; } .imgs img { width:100%; border-radius:10px; border:1px solid var(--line); }
+  .imgs figcaption { color:var(--sub); font-size:12px; margin-top:4px; }
+  table.ev { width:100%; border-collapse:collapse; font-size:14px; }
+  table.ev td { border-top:1px solid var(--line); padding:6px 4px; vertical-align:top; }
+  table.ev td:first-child { white-space:nowrap; font-weight:700; width:1%; padding-right:12px; }
+  .tag { display:inline-block; border-radius:6px; padding:1px 7px; font-size:12px; margin-right:6px; }
+  .tag.contains { background:var(--warn); color:#111; }
+  .tag.may { border:1px solid var(--warn); color:var(--warn); }
+  .only { color:var(--warn); font-size:12px; margin-left:6px; }
+  .tag.not_found { border:1px solid var(--line); color:var(--sub); }
+  #result { display:none; }
+  label.toggle { color:var(--sub); font-size:13px; display:flex; gap:6px; align-items:center; }
+</style>
+</head>
+<body>
+<main>
+  <nav><a class="on" href="/assistant">물어보기</a><a href="/ingredient">성분 확인</a></nav>
+  <h1>자비서에게 물어보기</h1>
+  <p class="sub">안경 카메라 대신 사진을, 말 대신 글자(또는 마이크)를 넣으면 자비서 전체 흐름으로 대답해요.
+    의도 분류 → 가리킴 → VLM · 기억 · 성분 판정 → 기록까지 팀 그래프를 그대로 돌려요.</p>
+
+  <section class="card">
+    <h2>사진 <span style="font-weight:400">(없어도 돼요)</span></h2>
+    <div id="drop">여기를 눌러 사진을 고르거나, 사진을 끌어다 놓으세요</div>
+    <input id="file" type="file" accept="image/*" hidden>
+    <div class="photo-row">
+      <button id="cam" class="ghost">카메라 켜기</button>
+      <button id="shot" class="ghost" disabled>지금 찍기</button>
+      <button id="clear" class="ghost" disabled>사진 빼기</button>
+    </div>
+    <video id="video" class="media" autoplay playsinline muted></video>
+    <img id="preview" class="media" alt="올린 사진">
+  </section>
+
+  <section class="card">
+    <h2>질문</h2>
+    <div class="row">
+      <input id="q" type="text" placeholder="예: 저거 뭐야? / 이거 먹어도 돼? / 아까 본 거 뭐였지?">
+      <button id="mic" class="ghost" title="말로 묻기 (Chrome)">🎤</button>
+      <button id="ask">묻기</button>
+    </div>
+    <div class="row" style="margin-top:8px; justify-content:space-between">
+      <div id="status" class="hint"></div>
+      <label class="toggle"><input id="speak" type="checkbox" checked> 대답 읽어 주기</label>
+    </div>
+  </section>
+
+  <section id="result" class="card">
+    <h2>대답</h2>
+    <div id="talk"></div>
+    <div id="chips" class="chips" style="margin-top:8px"></div>
+    <div id="pics"></div>
+    <div id="mem"></div>
+    <div id="ing"></div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let photo = null;   // data URL
+let stream = null;
+
+function setPhoto(url) {
+  photo = url;
+  $("preview").src = url || "";
+  $("preview").style.display = url ? "block" : "none";
+  $("clear").disabled = !url;
+}
+
+function choose(file) {
+  if (!file || !file.type.startsWith("image/")) return;
+  const r = new FileReader();
+  r.onload = () => setPhoto(r.result);
+  r.readAsDataURL(file);
+}
+$("drop").onclick = () => $("file").click();
+$("file").onchange = (e) => choose(e.target.files[0]);
+$("drop").ondragover = (e) => { e.preventDefault(); $("drop").classList.add("over"); };
+$("drop").ondragleave = () => $("drop").classList.remove("over");
+$("drop").ondrop = (e) => { e.preventDefault(); $("drop").classList.remove("over"); choose(e.dataTransfer.files[0]); };
+$("clear").onclick = () => setPhoto(null);
+
+$("cam").onclick = async () => {
+  if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; $("video").style.display = "none";
+                $("cam").textContent = "카메라 켜기"; $("shot").disabled = true; return; }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+    $("video").srcObject = stream; $("video").style.display = "block";
+    $("cam").textContent = "카메라 끄기"; $("shot").disabled = false;
+  } catch (e) { $("status").textContent = `카메라를 열지 못했어요: ${e.message}`; }
+};
+function snap() {
+  const v = $("video"), c = document.createElement("canvas");
+  c.width = v.videoWidth; c.height = v.videoHeight;
+  c.getContext("2d").drawImage(v, 0, 0);
+  setPhoto(c.toDataURL("image/jpeg", 0.9));
+}
+$("shot").onclick = snap;
+
+// 말로 묻기: 브라우저 받아쓰기(Chrome). 안 되면 버튼을 숨긴다.
+const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!Rec) $("mic").style.display = "none";
+$("mic").onclick = () => {
+  const rec = new Rec(); rec.lang = "ko-KR"; rec.interimResults = false;
+  $("mic").classList.add("rec");
+  rec.onresult = (e) => { $("q").value = e.results[0][0].transcript; ask(); };
+  rec.onend = () => $("mic").classList.remove("rec");
+  rec.onerror = (e) => { $("status").textContent = `받아쓰기 실패: ${e.error}`; };
+  rec.start();
+};
+
+$("q").addEventListener("keydown", (e) => { if (e.key === "Enter") ask(); });
+$("ask").onclick = () => ask();
+
+async function ask() {
+  const question = $("q").value.trim();
+  if (!question) { $("status").textContent = "질문을 넣어 주세요."; return; }
+  if (stream && !photo) snap();  // 카메라가 켜져 있으면 묻는 순간의 장면을 쓴다(안경처럼)
+  $("ask").disabled = true;
+  $("status").textContent = "생각하는 중이에요…";
+  try {
+    const r = await fetch("/api/ask", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, image: photo }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.statusText);
+    show(d);
+    $("status").textContent = "";
+    if (stream) setPhoto(null);  // 다음 질문은 다시 그 순간의 장면으로
+  } catch (err) {
+    $("status").textContent = `묻지 못했어요: ${err.message}`;
+  } finally {
+    $("ask").disabled = false;
+  }
+}
+
+const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+const chip = (t, cls = "chip") => el("span", { className: cls, textContent: t });
+const INTENTS = { general: "일반 질문", recall: "기억 질문", ingredient: "성분 질문", pointing: "가리킴" };
+const STATUS = { contains: "들어 있음", may: "섞였을 수 있음", not_found: "찾지 못함" };
+const REASONS = { no_ingredients: "원재료명을 찾지 못했어요", low_ocr_conf: "글자가 흐려서 믿기 어려워요",
+  occluded: "성분표 일부가 가려졌어요", small_text: "글씨가 너무 작아요", unreadable: "글자를 읽지 못했어요" };
+function ocrBox(text, reason) {
+  const box = document.createElement("details");
+  box.style.marginTop = "10px";
+  const sum = document.createElement("summary");
+  sum.style.cursor = "pointer"; sum.style.color = "var(--sub)"; sum.style.fontSize = "14px";
+  sum.textContent = "성분표 OCR이 읽은 글자" + (REASONS[reason] ? ` — ${REASONS[reason]}` : "");
+  const pre = document.createElement("div");
+  pre.style.cssText = "white-space:pre-wrap;font-size:13px;color:var(--sub);background:#0b0e13;border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:6px";
+  pre.textContent = text || "(읽은 글자 없음)";
+  box.append(sum, pre);
+  return box;
+}
+
+
+function show(d) {
+  $("result").style.display = "block";
+  const talk = $("talk");
+  talk.replaceChildren(el("div", { className: "bubble me" }, el("small", { textContent: "나" }), d.question));
+  const lines = d.spoken.length ? d.spoken : [d.answer || "(대답 없음)"];
+  lines.forEach((t) => talk.append(el("div", { className: "bubble bot" }, el("small", { textContent: "자비서" }), t)));
+  if ($("speak").checked && window.speechSynthesis && lines.length) {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(lines.join(" ")); u.lang = "ko-KR"; speechSynthesis.speak(u);
+  }
+
+  const chips = $("chips");
+  chips.replaceChildren(chip(`의도: ${INTENTS[String(d.intent).toLowerCase()] || d.intent || "—"}`));
+  if (d.target) chips.append(chip(`고른 대상: ${d.target} (후보 ${d.candidates})`));
+  if (d.retried_whole) chips.append(chip("크롭에서 못 읽어 사진 전체로 다시 읽음", "chip warn"));
+  chips.append(chip(`${(d.elapsed_ms / 1000).toFixed(1)}초`));
+  Object.entries(d.latency_ms || {}).forEach(([k, v]) => chips.append(chip(`${k} ${v}ms`)));
+  if (!d.vlm_real) chips.append(chip("VLM 키 없음 — 가짜 답", "chip warn"));
+  if (d.turn_id) chips.append(chip(`기록 turn ${d.turn_id}`));
+
+  const pics = $("pics");
+  pics.replaceChildren();
+  const figs = [];
+  if (d.boxes) figs.push(el("figure", {}, el("img", { src: d.boxes }), el("figcaption", { textContent: "가리킴 후보 (초록 = 고른 대상, 십자 = 가운데)" })));
+  if (d.crop) figs.push(el("figure", {}, el("img", { src: d.crop }), el("figcaption", { textContent: "VLM · 성분 판정에 간 크롭" })));
+  if (figs.length) pics.append(el("h3", { textContent: "가리킴" }), el("div", { className: "imgs" }, ...figs));
+
+  const mem = $("mem");
+  mem.replaceChildren();
+  if (d.memories.length) {
+    mem.append(el("h3", { textContent: "찾은 기억" }));
+    d.memories.forEach((m) => mem.append(el("div", { className: "bubble" }, el("small", { textContent: `점수 ${m.score}` }), m.text)));
+  }
+
+  const ing = $("ing");
+  ing.replaceChildren();
+  if (d.ingredient) {
+    const steps = el("div", { className: "chips" });
+    d.ingredient.barcode_steps.forEach((t, i) => { if (i) steps.append(" → "); steps.append(chip(t)); });
+    const table = el("table", { className: "ev" });
+    const order = { contains: 0, may: 1, not_found: 2 };
+    [...d.ingredient.evidence].sort((a, b) => order[a.status] - order[b.status]).forEach((e) => {
+      const where = e.where.length
+        ? e.where.map((w) => `${w.section}: ${w.terms.join(", ")}`).join(" · ")
+        : "읽은 글자에서 찾지 못했어요 (없다는 뜻은 아니에요)";
+      table.append(el("tr", {}, el("td", { textContent: e.allergen }),
+        el("td", {}, el("span", { className: `tag ${e.status}`, textContent: STATUS[e.status] }), where,
+          ...(e.ingredient_only ? [el("span", { className: "only",
+            textContent: "원재료에서만 찾음 — 함유 표시에는 없음 (오독일 수 있어요)" })] : []))));
+    });
+    if (d.ingredient.where) ing.append(el("h3", { textContent: "사진에서 찾은 자리" }),
+      el("div", { className: "imgs" }, el("figure", {}, el("img", { src: d.ingredient.where }),
+        el("figcaption", { textContent: "주황 칠 = 들어 있음, 주황 테두리 = 섞였을 수 있음, 파랑 = 바코드" }))));
+    ing.append(el("h3", { textContent: "성분 판정 — 바코드" }), steps,
+               el("h3", { textContent: "알레르기별 근거 (등록한 알레르기 기준)" }), table);
+    if (d.ingredient.ocr_text || d.ingredient.reason) ing.append(ocrBox(d.ingredient.ocr_text, d.ingredient.reason));
+  }
+}
+</script>
+</body>
+</html>

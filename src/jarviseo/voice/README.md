@@ -32,7 +32,7 @@ TTS 는 `user_setting.tts_speed` 를 OpenAI speed 값으로 바꿔 보낸다(SLO
 처음부터 읽는다. 읽던 중이었으면 앞부분이 한 번 더 나온다(#130). 끼어들어 끊긴 뒤에는 다시 요청하지 않는다.
 폴백 요청도 멈추면 받은 만큼만 재생하고, 소리를 하나도 못 냈으면 `None` 을 돌려준다.
 
-모델 이름은 `config.py` 에서만 정한다. 지금은 STT `gpt-transcribe`, TTS `gpt-4o-mini-tts`
+모델 이름은 `config.py` 에서만 정한다. 지금은 STT `gpt-transcribe`, TTS `tts-1`
 (`.env` 의 `JARVISEO_STT_MODEL`, `JARVISEO_TTS_MODEL`).
 
 호출어는 `MicStream` 하나를 열어 `WakeWordDetector` 와 `SpeechToText(mic=...)` 가 같이 읽는다.
@@ -90,6 +90,8 @@ Git 에 없어서 따로 받아야 한다(`data/README.md`). 평가 결과와 �
   필요해지면 쓴다.
 - **시작음·종료음은 게이트 밖이다.** 시작음(`Chime.start()`)은 "자비서"를 알아들은 순간, 종료음(`Chime.end()`)은
   질문하는 말이 끝났다고 판정한 순간(받아쓰기 전) 낸다. 대답이 끝났다는 소리가 아니다. 둘 다 다른 스레드에서 내고 바로 돌아온다.
+  되물을 때(가리킴 되묻기, "네, 말씀하세요")는 되묻는 말을 다 읽은 뒤 그래프가 `GraphDeps.start_chime` 으로 시작음을 한 번 더 내고,
+  사용자 대답이 끝나면 같은 `on_speech_end` 로 종료음이 난다.
   시작음은 "자비서, 이거 뭐야"처럼 이어 말하는 도중에 울려서, 게이트를 닫으면 그동안 말한 질문이 무음으로 바뀐다.
   그래서 둘 다 마이크에 같이 들어간다. 대신 소리가 마이크에 들어가는 구간을 `MIC_GATE.sounding()` 으로 표시하고,
   `listen()` 의 VAD 는 그 구간을 말로 보지 않는다. 안 그러면 "자비서." 하고 쉬었다가 질문할 때 시작음이 쉼을 메워
