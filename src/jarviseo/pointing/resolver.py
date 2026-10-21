@@ -8,14 +8,19 @@ cues.py 가 매긴 단서별 점수를 가중치로 합쳐 후보 순위를 정�
 
 되묻기 대답("왼쪽", "컵")은 단서가 아니다. 사용자가 직접 고른 것이라 점수에 섞지 않고
 후보를 걸러내는 데만 쓴다(10/15 결정 A안). 섞으면 ablation 의 v1 줄이 baseline 이 아니게 된다.
+
+손 단서(v2)는 가리키는 손이 없으면 기권한다. 0점을 주는 게 아니라 그 사진에서 빼고
+켜진 나머지 단서로 다시 나눈다(10/14 요구사항: 손이 없어도 대상을 골라야 한다).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from functools import partial
 
 from jarviseo import config
-from jarviseo.pointing.cues import score_center
+from jarviseo.pointing.cues import score_center, score_point
+from jarviseo.pointing.hands import HandPose, Ray, pointing_ray
 from jarviseo.pointing.labels import korean_name
 from jarviseo.types import (
     CueKind,
@@ -37,16 +42,16 @@ WEIGHTS: dict[CueKind, float] = {
     CueKind.CTX: 0.10,
 }
 
-# 단서 → 점수 함수. 단서를 구현하면 여기에 넣는다.
-_SCORERS: dict[CueKind, Callable[[list[Detection], tuple[int, int]], list[CueScore]]] = {
-    CueKind.CENTER: score_center,
-}
-IMPLEMENTED_CUES = frozenset(_SCORERS)
+# 단서를 구현하면 여기와 _scorers 에 넣는다.
+IMPLEMENTED_CUES = frozenset({CueKind.CENTER, CueKind.POINT})
+
+# 후보 목록만 받아 단서 점수를 돌려주는 함수. 사진 크기 · 손 방향은 _scorers 가 미리 묶는다.
+Scorer = Callable[[list[Detection]], list[CueScore]]
 
 
 def resolve_target(
     candidates: list[Detection],
-    fingertip: Detection | None,
+    hand: HandPose | None,
     gaze_vector: tuple[float, float] | None,
     text: str,
     frame_size: tuple[int, int],
@@ -59,7 +64,7 @@ def resolve_target(
 
     Args:
         candidates: 장면에서 찾은 후보 물체들.
-        fingertip: 손 단서(v2) 자리. v1 은 쓰지 않는다.
+        hand: 가리키는 손(hands.pick_pointing_hand 로 고른 것). None 이면 손 단서는 기권한다.
         gaze_vector: 시선 단서(v3) 자리. v1 은 쓰지 않는다.
         text: 처음 질문 원문. 되묻기 대답은 넣지 않는다(``replies``).
         frame_size: (width, height).
@@ -71,20 +76,25 @@ def resolve_target(
             기본값은 ``config.CLARIFY_MARGIN_THRESHOLD`` 다(두 곳에 적으면 어긋난다).
 
     후보가 0개면 chosen=None, needs_clarify=True, 되물을 문장 없음(그래프가 "다시 가리켜
-    주세요"로 끝낸다). 후보가 1개면 margin 은 1.0(비교 상대가 없으므로 확신)이다.
+    주세요"로 끝낸다). 켜진 단서가 모두 기권해도(손 단서만 켰는데 손이 없음) 같다.
+    후보가 1개면 margin 은 1.0(비교 상대가 없으므로 확신)이다.
     candidates 칸에는 걸러낸 뒤의 순위를 담는다. chosen 이 그 안에 있어야 DB 기록이 맞는다.
     """
     active = IMPLEMENTED_CUES if enabled_cues is None else frozenset(enabled_cues)
     if not active or active - IMPLEMENTED_CUES:
         allowed = ", ".join(k.value for k in IMPLEMENTED_CUES)
         raise ValueError(f"켤 단서가 없거나 구현 안 된 단서가 있다. 켤 수 있는 단서: {allowed}")
+    ray = pointing_ray(hand) if hand is not None else None
+    if ray is None:
+        active -= {CueKind.POINT}  # 기권: 빼고 나머지 가중치로 다시 나눈다
     kinds = [k for k in CueKind if k in active]  # ablation 순서(v1~v5)로 기록한다
 
-    if not candidates:
+    if not candidates or not kinds:
         return TargetResolution([], chosen=None, margin=0.0, needs_clarify=True)
 
-    narrowed = _narrow_by_replies(candidates, replies, kinds, frame_size)
-    ranked = _rank(narrowed, kinds, frame_size)
+    scorers = _scorers(frame_size, ray)
+    narrowed = _narrow_by_replies(candidates, replies, kinds, scorers, frame_size[0])
+    ranked = _rank(narrowed, kinds, scorers)
     margin = 1.0 if len(ranked) == 1 else ranked[0].total_score - ranked[1].total_score
     if margin < margin_threshold:
         question = _build_clarify_question(ranked[0], ranked[1])
@@ -92,11 +102,19 @@ def resolve_target(
     return TargetResolution(ranked, ranked[0], margin, False)
 
 
+def _scorers(frame_size: tuple[int, int], ray: Ray | None) -> dict[CueKind, Scorer]:
+    """이번 사진에서 쓸 단서별 점수 함수. 손이 없으면(ray None) 손 단서는 넣지 않는다."""
+    scorers: dict[CueKind, Scorer] = {CueKind.CENTER: partial(score_center, frame_size=frame_size)}
+    if ray is not None:
+        scorers[CueKind.POINT] = partial(score_point, ray=ray)
+    return scorers
+
+
 def _rank(
-    candidates: list[Detection], kinds: list[CueKind], frame_size: tuple[int, int]
+    candidates: list[Detection], kinds: list[CueKind], scorers: dict[CueKind, Scorer]
 ) -> list[TargetCandidate]:
     """켜진 단서 점수를 가중 평균해 높은 순으로 줄 세운다. 동점이면 들어온 순서를 지킨다."""
-    per_cue = {k: _SCORERS[k](candidates, frame_size) for k in kinds}
+    per_cue = {k: scorers[k](candidates) for k in kinds}
     total_weight = sum(WEIGHTS[k] for k in kinds)
     ranked = [
         TargetCandidate(
@@ -113,7 +131,8 @@ def _narrow_by_replies(
     candidates: list[Detection],
     replies: Sequence[str],
     kinds: list[CueKind],
-    frame_size: tuple[int, int],
+    scorers: dict[CueKind, Scorer],
+    width: int,
 ) -> list[Detection]:
     """되묻기 대답으로 후보를 걸러낸다. 아무것도 안 맞으면 그 대답은 없던 것으로 한다.
 
@@ -126,8 +145,8 @@ def _narrow_by_replies(
         said = reply.replace(" ", "")
         candidates = _by_name(candidates, said) or candidates
         if len(candidates) > 1:
-            asked = [c.detection for c in _rank(candidates, kinds, frame_size)[:2]]
-            candidates = _by_position(asked, said, frame_size[0]) or candidates
+            asked = [c.detection for c in _rank(candidates, kinds, scorers)[:2]]
+            candidates = _by_position(asked, said, width) or candidates
     return candidates
 
 
