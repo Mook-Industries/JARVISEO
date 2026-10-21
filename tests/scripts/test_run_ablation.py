@@ -1,6 +1,7 @@
-"""가리킴 ablation — 정답 표시 읽기, 7분류 채점, 지표, DB 기록, 이전 실행과 비교.
+"""가리킴 ablation — 정답 표시 읽기, 7분류 채점, v1 · v2 채점, 지표, DB 기록, 이전 실행과 비교.
 
-YOLO 없이 정해 둔 후보로 채점한다. DB 기록은 store fixture 로 SQLite 와 실제 Postgres 에서 돈다.
+YOLO · MediaPipe 없이 정해 둔 후보와 손으로 채점한다. DB 기록은 store fixture 로 SQLite 와
+실제 Postgres 에서 돈다.
 """
 
 import csv
@@ -8,6 +9,7 @@ import importlib.util
 from pathlib import Path
 
 from jarviseo.memory import EvalRun, EvalSample
+from jarviseo.pointing.hands import HandPose
 from jarviseo.types import BBox, Detection, TargetCandidate, TargetResolution
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "run_ablation.py"
@@ -23,6 +25,18 @@ RIGHT = BBox(1320, 440, 1520, 640)  # LEFT 와 화면 가운데를 두고 좌우
 
 def _det(bbox: BBox, label: str = "cup") -> Detection:
     return Detection(label=label, confidence=0.9, bbox=bbox)
+
+
+def _hand(base: tuple[float, float], tip: tuple[float, float]) -> HandPose:
+    """검지 뿌리(5) → 끝(8)만 의미 있는 손. 채점은 방향만 쓴다."""
+    landmarks = [(0.0, 0.0)] * 21
+    landmarks[5], landmarks[8] = base, tip
+    return HandPose(tuple(landmarks), ((0.0, 0.0, 0.0),) * 21, "Right", 0.9)
+
+
+# 화면 아래에서 RIGHT 중심(1420, 540) · LEFT 중심(500, 540)을 똑바로 가리키는 손
+TO_RIGHT = _hand(base=(1068.0, 936.0), tip=(1100.0, 900.0))
+TO_LEFT = _hand(base=(852.0, 936.0), tip=(820.0, 900.0))
 
 
 def _sample(gt=GT, *, has_hand=False, ambiguous=False, file="s01/a.jpg") -> dict:
@@ -51,6 +65,7 @@ def _row(**overrides) -> dict:
         "correct": True,
         "margin": 0.3,
         "has_hand": False,
+        "hand_used": False,
         "ambiguous": False,
         "candidate_hit": True,
         "answered": True,
@@ -93,9 +108,9 @@ def test_load_samples_without_file_is_empty(tmp_path):
 
 
 def test_unimplemented_variants_are_skipped():
-    """지금 구현된 단서는 center 하나라 v1 만 돌고 v2~v5 는 건너뛴다."""
+    """지금 구현된 단서는 center · point 라 v1 · v2 만 돌고 v3~v5 는 건너뛴다."""
     ready, skipped = run_ablation.implemented_variants(["v1", "v2", "v5"])
-    assert (ready, skipped) == (["v1"], ["v2", "v5"])
+    assert (ready, skipped) == (["v1", "v2"], ["v5"])
 
 
 # --- 7분류 채점 ---------------------------------------------------------------------
@@ -148,10 +163,11 @@ def test_evaluate_v1_picks_center_and_records_row():
     candidates = {"s01/a.jpg": [_det(BBox(0, 0, 200, 200), "bottle"), _det(GT)]}
     detect_ms, frames = {"s01/a.jpg": 40.0}, {"s01/a.jpg": FRAME}
 
-    [row] = run_ablation.evaluate(samples, candidates, detect_ms, "v1", frames)
+    [row] = run_ablation.evaluate(samples, candidates, detect_ms, "v1", frames, {"s01/a.jpg": None})
 
     assert (row["outcome"], row["correct"], row["pred_label"]) == ("정답", True, "cup")
     assert row["candidate_hit"] is True
+    assert row["hand_used"] is False
     assert row["detect_ms"] == 40.0
 
 
@@ -161,9 +177,51 @@ def test_evaluate_symmetric_tie_clarifies():
     candidates = {"s01/a.jpg": [_det(LEFT), _det(RIGHT)]}
     detect_ms, frames = {"s01/a.jpg": 40.0}, {"s01/a.jpg": FRAME}
 
-    [row] = run_ablation.evaluate(samples, candidates, detect_ms, "v1", frames)
+    [row] = run_ablation.evaluate(samples, candidates, detect_ms, "v1", frames, {"s01/a.jpg": None})
 
     assert (row["outcome"], row["clarified"], row["answered"]) == ("되묻는 게 맞음", True, False)
+
+
+def _evaluate_one(variant, sample, candidates, hand):
+    """사진 한 장을 한 버전으로 채점한다. 후보와 손은 정해 둔 것을 쓴다."""
+    file = sample["file"]
+    [row] = run_ablation.evaluate(
+        [sample], {file: candidates}, {file: 40.0}, variant, {file: FRAME}, {file: hand}
+    )
+    return row
+
+
+def test_evaluate_v2_hand_picks_pointed_cup():
+    """좌우 대칭 컵 둘: v1 은 되묻고, v2 는 손이 가리킨 쪽을 고른다. 두 버전이 같은 손을 쓴다."""
+    sample = _sample(gt=RIGHT, has_hand=True)
+    candidates = [_det(LEFT), _det(RIGHT)]
+
+    v1 = _evaluate_one("v1", sample, candidates, TO_RIGHT)
+    v2 = _evaluate_one("v2", sample, candidates, TO_RIGHT)
+
+    assert (v1["outcome"], v1["hand_used"]) == ("불필요한 되묻기", False)
+    assert (v2["outcome"], v2["hand_used"]) == ("정답", True)
+
+
+def test_evaluate_v2_wrong_direction_is_direction_miss():
+    """손 단서가 점수를 냈는데 다른 쪽을 골랐으면 '방향 오판'이다."""
+    sample = _sample(gt=RIGHT, has_hand=True)
+
+    row = _evaluate_one("v2", sample, [_det(LEFT), _det(RIGHT)], TO_LEFT)
+
+    assert (row["outcome"], row["hand_used"]) == ("방향 오판", True)
+
+
+def test_evaluate_v2_without_hand_is_not_direction_miss():
+    """손 있음 사진이라도 손을 못 찾아 기권했으면, 틀려도 '방향 오판'이 아니다(손 검출 몫)."""
+    corner = BBox(0, 0, 200, 200)
+    sample = _sample(gt=corner, has_hand=True)
+
+    row = _evaluate_one("v2", sample, [_det(corner, "bottle"), _det(GT)], None)
+
+    assert row["hand_used"] is False
+    assert row["correct"] is False
+    assert row["outcome"] != "방향 오판"
 
 
 # --- 지표 ---------------------------------------------------------------------------

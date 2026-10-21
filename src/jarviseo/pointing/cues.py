@@ -3,22 +3,26 @@
 후보 물체 하나하나에 "이게 사용자가 가리킨 것일 가능성"을 단서별로 0.0~1.0 점수로 매긴다.
 여기서 나온 점수를 resolver.py 가 가중치로 합친다. ablation 의 축이 이 파일이다.
 
-지금은 v1 center 만 있다. 단서를 추가할 때는 types.CueKind 에 있는 이름으로 score_* 함수를
-만들고, resolver 의 IMPLEMENTED_CUES 와 단서 → 함수 표에 등록한다.
+v1 center(화면 가운데 · 크기)와 v2 point(검지 방향)가 있다. 단서를 추가할 때는 types.CueKind 에
+있는 이름으로 score_* 함수를 만들고, resolver 의 IMPLEMENTED_CUES 와 단서 → 함수 표에 등록한다.
 
-이 파일의 함수는 딥러닝이 아니다. 좌표로 하는 계산이고, 신경망은 detector.py 까지만 쓴다.
+이 파일의 함수는 딥러닝이 아니다. 좌표로 하는 계산이고, 신경망은 detector.py · hands.py 까지만 쓴다.
 """
 
 from __future__ import annotations
 
 import math
 
+from jarviseo.pointing.hands import Ray, angle_to
 from jarviseo.types import CueKind, CueScore, Detection
 
-__all__ = ["CENTER_WEIGHT", "score_center"]
+__all__ = ["CENTER_WEIGHT", "POINT_SIGMA_DEG", "score_center", "score_point"]
 
 # 가운데 단서 안에서 위치를 얼마나 믿을지. 나머지(0.3)는 크기.
 CENTER_WEIGHT = 0.7
+# 손 방향 점수가 얼마나 빨리 떨어지는지. 15° 면 0.61, 30° 면 0.14.
+# valid 에서 σ 10 · 15 · 20 이 같은 결과(13/62)라 가운데 값을 골랐다.
+POINT_SIGMA_DEG = 15.0
 
 
 def score_center(candidates: list[Detection], frame_size: tuple[int, int]) -> list[CueScore]:
@@ -46,4 +50,20 @@ def score_center(candidates: list[Detection], frame_size: tuple[int, int]) -> li
                 detail={"closeness": closeness, "size": size},
             )
         )
+    return scores
+
+
+def score_point(candidates: list[Detection], ray: Ray) -> list[CueScore]:
+    """검지 끝에서 뻗은 선이 후보 중심을 향할수록 높은 점수. 후보와 같은 순서로 돌려준다.
+
+    선과 '검지 끝 → 후보 중심' 사이 각도를 종 모양(가우시안)으로 바꾼다. 0° 면 1, 손 뒤쪽은 0 쪽.
+    코사인은 30° 에서도 0.87 이라 후보끼리 차이가 안 난다. 선이 박스를 지나는지로 재면 책상의
+    큰 박스(노트북 · 모니터)가 겹쳐 비긴다(valid 10/62, 중심 각도는 13/62).
+    후보 중심이 검지 끝과 같은 자리면 손가락이 그 물건 위에 있는 것이라 1점이다.
+    """
+    scores = []
+    for d in candidates:
+        angle = angle_to(ray, d.bbox.center)
+        score = 1.0 if angle is None else math.exp(-0.5 * (angle / POINT_SIGMA_DEG) ** 2)
+        scores.append(CueScore(kind=CueKind.POINT, score=score, detail={"angle": angle}))
     return scores

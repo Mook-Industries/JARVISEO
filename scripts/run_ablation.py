@@ -27,6 +27,7 @@ from sqlalchemy import select
 
 from jarviseo import config
 from jarviseo.memory import EvalRun, EvalSample, MemoryStore
+from jarviseo.pointing.hands import HandDetector, HandPose, pick_pointing_hand
 from jarviseo.pointing.resolver import IMPLEMENTED_CUES, resolve_target
 from jarviseo.types import BBox, CueKind, Detection, TargetResolution
 
@@ -61,6 +62,7 @@ CSV_COLUMNS = [
     "correct",
     "margin",
     "has_hand",
+    "hand_used",
     "ambiguous",
     "candidate_hit",
     "detect_ms",
@@ -129,8 +131,9 @@ def evaluate(
     detect_ms: dict[str, float],
     variant: str,
     frame_size: dict[str, tuple[int, int]],
+    hands: dict[str, HandPose | None],
 ) -> list[dict]:
-    """한 버전으로 모든 사진을 채점한다. 검출은 밖에서 한 번 해 둔 후보를 쓴다."""
+    """한 버전으로 모든 사진을 채점한다. 검출 · 손은 밖에서 한 번 해 둔 결과를 쓴다."""
     cues = VARIANTS[variant]
     rows = []
     for s in samples:
@@ -139,7 +142,7 @@ def evaluate(
         started = time.perf_counter()
         resolution = resolve_target(
             candidates=found,
-            fingertip=None,  # 손 단서(v2)를 붙일 때 손 관절 결과를 넣는다
+            hand=hands[s["file"]],
             gaze_vector=None,
             text=s["utterance"],
             frame_size=frame_size[s["file"]],
@@ -147,7 +150,11 @@ def evaluate(
             enabled_cues=set(cues),
         )
         resolve_ms = (time.perf_counter() - started) * 1000
-        correct, outcome = judge(s, resolution, hit, CueKind.POINT in cues)
+        # 손 단서를 켰어도 손이 없으면 기권한다. 실제로 점수를 낸 사진만 "방향 오판"으로 센다.
+        hand_used = any(
+            cs.kind is CueKind.POINT for c in resolution.candidates[:1] for cs in c.cue_scores
+        )
+        correct, outcome = judge(s, resolution, hit, hand_used)
         chosen = resolution.chosen
         rows.append(
             {
@@ -158,6 +165,7 @@ def evaluate(
                 "correct": correct,
                 "margin": round(resolution.margin, 3),
                 "has_hand": s["has_hand"],
+                "hand_used": hand_used,
                 "ambiguous": s["ambiguous"],
                 "candidate_hit": hit,
                 "answered": chosen is not None,
@@ -299,8 +307,12 @@ def main() -> None:
     detector = ObjectDetector()
     # 첫 호출은 모델을 올리느라 느리다(실측 861ms, 그다음 30ms 안팎). 재기 전에 한 번 버린다.
     detector.detect(np.zeros((640, 640, 3), np.uint8))
-    candidates, detect_ms, frame_size = {}, {}, {}
-    for s in samples:
+    # 손 단서를 켠 버전이 있을 때만 손을 찾는다. 모델 파일이 없어도 v1 은 돌아야 한다.
+    hand_detector = None
+    if any(CueKind.POINT in VARIANTS[v] for v in ready):
+        hand_detector = HandDetector()
+    candidates, detect_ms, frame_size, hands, hand_ms = {}, {}, {}, {}, []
+    for i, s in enumerate(samples):
         image = read_image(args.raw / s["file"])
         if image is None:
             raise SystemExit(f"사진을 못 읽었다: {args.raw / s['file']}")
@@ -309,21 +321,31 @@ def main() -> None:
         detect_ms[s["file"]] = (time.perf_counter() - started) * 1000
         height, width = image.shape[:2]
         frame_size[s["file"]] = (width, height)
+        hands[s["file"]] = None
+        if hand_detector is not None:
+            if i == 0:
+                hand_detector.detect(image)  # 첫 호출은 모델을 올리느라 느려서 버린다
+            started = time.perf_counter()
+            hands[s["file"]] = pick_pointing_hand(hand_detector.detect(image))
+            hand_ms.append((time.perf_counter() - started) * 1000)
 
     # 쓰는 쪽이라 테이블이 없으면 만든다(이미 있으면 아무것도 안 한다).
     store = MemoryStore(database_url=args.db)
     store.init_schema()
     # 검출은 모든 버전이 같은 결과를 쓰므로 버전 줄마다가 아니라 한 번만 찍는다.
     detect_p50, detect_p95 = percentiles(list(detect_ms.values()))
-    print(
-        f"\n{args.split} {len(samples)}장 · 검출 p50 {detect_p50:.1f}ms · p95 {detect_p95:.1f}ms\n"
-    )
+    print(f"\n{args.split} {len(samples)}장 · 검출 p50 {detect_p50:.1f}ms · p95 {detect_p95:.1f}ms")
+    if hand_ms:
+        hand_p50, hand_p95 = percentiles(hand_ms)
+        found = sum(h is not None for h in hands.values())
+        print(f"가리키는 손 {found}장 · 손 p50 {hand_p50:.1f}ms · p95 {hand_p95:.1f}ms")
+    print()
     print(
         "버전 | 장수 | 정답률 | 답한 것 정답률 | 되묻기율 | "
         "손있음/손없음 | 후보재현율 | resolve p50/p95 ms"
     )
     for variant in ready:
-        rows = evaluate(samples, candidates, detect_ms, variant, frame_size)
+        rows = evaluate(samples, candidates, detect_ms, variant, frame_size, hands)
         metrics = summarize(rows)
         run_id = save_run(store, variant, rows, metrics, args.note)
         previous = previous_accuracy(store, variant, run_id)

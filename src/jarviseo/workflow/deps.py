@@ -38,6 +38,8 @@ class GraphDeps:
     frames: FrameBuffer | None = None
     # detect(image) -> list[Detection]. resolve 와 둘 다 있어야 가리킴 길이 열린다.
     detector: Any = None
+    # detect(image) -> list[HandPose] (pointing.hands.HandDetector). 없으면 손 단서는 기권한다.
+    hands: Any = None
     # resolve_target 과 같은 키워드를 받아 TargetResolution 을 돌려주는 함수
     resolve: Callable[..., TargetResolution] | None = None
     # 없으면 성분 질문에 "확인할 수 없어요"로 답한다. VLM 으로 넘기지 않는다.

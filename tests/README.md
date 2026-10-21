@@ -26,15 +26,15 @@ DB 테스트는 여기에 더해 db job 이 pgvector 컨테이너를 띄워 실�
 | `workflow/test_state.py` | 단계별 지연·되묻기 대답이 덮이지 않고 합쳐지는지, 같은 단계는 시간을 더하는지 |
 | `workflow/test_router.py` | 성분 → 기억 → 가리킴 → 나머지 순으로 의도를 정하는지, 띄어쓰기를 붙여 써도 같은지 |
 | `workflow/test_graph.py` | 질문 한 번이 그래프를 끝까지 도는지 — 사진·기억·호출어만 부르기·사과 문장·"잠깐만요"·답 버리기·대화 기억과 DB 기록 (Fake 로) |
-| `workflow/nodes/test_pointing.py` | 가리킴 길(검출 → 대상 결정 ⇄ 되묻기 → 크롭)과 재촬영 — 크롭이 VLM 에 가는지, 되묻기 상한·한 글자 대답, 가리킴 기록 |
+| `workflow/nodes/test_pointing.py` | 가리킴 길(검출 → 대상 결정 ⇄ 되묻기 → 크롭)과 재촬영 — 크롭이 VLM 에 가는지, 되묻기 상한·한 글자 대답, 가리킴 기록, 손 단서(detect 가 가리키는 손만 상태에 두는지 · 실제 `resolve_target` 이 손 쪽을 되묻지 않고 고르는지 · 되묻기 중에도 손은 한 번만 찾는지 · 손 검출기가 없을 때) |
 | `workflow/nodes/test_ingredient.py` | 성분 질문이 VLM 없이 성분 판정 문장으로 끝나는지 — 크롭·알레르기 전달, 부품·사진 없음, 재촬영 안내 |
 | `tools/test_label_targets.py` | 가리킴 정답 표시 도구: `labels.csv` 읽고 쓰기(헤더 한 번 · 한글 · `0`/`1`), 이미 표시한 사진 건너뛰기, 후보를 왼쪽부터 번호, 미리보기 좌표를 원본으로 되돌리기, 한글 경로 사진 읽기 (YOLO · 화면 없이) |
-| `scripts/test_run_ablation.py` | 가리킴 ablation: split · 제외 거르기, 미구현 버전 건너뛰기, 7분류 채점 순서, v1 실제 `resolve_target` 채점(가운데 · 좌우 대칭 되묻기), 지표(손 없는 사진이 없으면 None), `eval_run` · `eval_sample` 기록과 이전 실행 비교, 사진별 CSV |
+| `scripts/test_run_ablation.py` | 가리킴 ablation: split · 제외 거르기, 미구현 버전 건너뛰기, 7분류 채점 순서, v1 · v2 실제 `resolve_target` 채점(가운데 · 좌우 대칭 되묻기 · 손이 가리킨 쪽 · 손 단서를 쓴 사진만 '방향 오판'), 지표(손 없는 사진이 없으면 None), `eval_run` · `eval_sample` 기록과 이전 실행 비교, 사진별 CSV |
 | `pointing/test_crop.py` | 대상 크롭이 사진 경계를 넘거나 비어도 보낼 사진이 나오는지 |
 | `pointing/test_detector.py` | 후보 검출이 사람·작은 박스를 빼고, YOLO 결과를 Detection 으로 바꾸는지 (모델은 가짜로) |
 | `pointing/test_hands.py` | 손 관절: 3D 굽힘 각도, 가리키는 손 판정(검지만 편 손 · 다 편 손 · 주먹 · 기준값), 검지 끝에서 뻗는 방향 · 각도, 여러 손 중 가리키는 손 고르기(없으면 기권), MediaPipe 결과를 픽셀 좌표로 바꾸기, 모델 파일 없음 안내. 모델 파일 · 평가셋 사진이 있으면 실제 사진 한 장으로 검지 끝 위치 확인(CI 는 건너뜀) |
-| `pointing/test_cues.py` | 가운데 단서가 가운데·크게 찍힌 후보에 높은 점수(0~1)를 주는지 |
-| `pointing/test_resolver.py` | 대상 결정: 순위·margin·되묻기 문장, 되묻기 대답으로 후보 좁히기, 단서 스위치 |
+| `pointing/test_cues.py` | 가운데 단서가 가운데·크게 찍힌 후보에, 손 방향 단서가 검지 선 위 후보에 높은 점수(0~1)를 주는지(σ 만큼 벗어나면 e^-0.5, 손 뒤쪽은 0 쪽) |
+| `pointing/test_resolver.py` | 대상 결정: 순위·margin·되묻기 문장, 되묻기 대답으로 후보 좁히기, 단서 스위치, 손 단서(대칭 두 컵을 손으로 가름 · 손 없음/방향 없음이면 기권해 v1 과 같음 · 손 단서만 켰는데 손이 없으면 다시 가리켜 달라고 함) |
 | `scripts/test_measure_latency.py` | 지연 리포트: 턴이 있는 최근 세션 고르기, 길(가리킴·성분·나머지) 나누기, 끊긴 턴 빼기, 30턴 미만 경고 |
 | `scripts/test_check_hands.py` | 손 관절 측정: 사진별 가리키는 손 · 정답 박스 중심까지 각도, 손 있음/없음 나눠 세기 · 30° 경계, 가리키는 손이 없을 때, 표 한 줄, CSV · 한글 경로 그림 저장 (MediaPipe 없이) |
 

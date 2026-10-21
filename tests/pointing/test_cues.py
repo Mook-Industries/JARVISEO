@@ -1,8 +1,10 @@
-"""가운데 단서 — 가운데·크게 찍힌 후보가 높은 점수를 받는지, 점수가 0~1 인지."""
+"""단서 점수 — 가운데 단서(v1)와 손 방향 단서(v2)가 맞는 후보에 높은 점수(0~1)를 주는지."""
+
+import math
 
 import pytest
 
-from jarviseo.pointing.cues import score_center
+from jarviseo.pointing.cues import POINT_SIGMA_DEG, score_center, score_point
 from jarviseo.types import BBox, CueKind, Detection
 
 FRAME = (1920, 1080)
@@ -70,3 +72,61 @@ def test_score_kind_and_detail():
 def test_no_candidates():
     """후보가 없으면 빈 리스트다(기권인 '전부 0점'과 다르다)."""
     assert score_center([], FRAME) == []
+
+
+# --- 손 방향 단서 (v2) -----------------------------------------------------------
+
+# 검지 끝 (0, 0) 에서 오른쪽(+x)을 가리키는 선
+RAY = ((0.0, 0.0), (1.0, 0.0))
+
+
+def _at(cx: float, cy: float, label: str = "cup") -> Detection:
+    """중심이 (cx, cy) 인 20×20 박스."""
+    return _det(cx - 10, cy - 10, cx + 10, cy + 10, label)
+
+
+def test_point_straight_ahead_scores_one():
+    """선 위에 중심이 있는 후보는 1점이다."""
+    [score] = score_point([_at(300, 0)], RAY)
+    assert score.score == pytest.approx(1.0)
+    assert score.detail["angle"] == pytest.approx(0.0)
+
+
+def test_point_drops_like_bell_curve():
+    """σ 만큼 벗어나면 e^-0.5(약 0.61), 두 배면 e^-2(약 0.14)."""
+    one_sigma = _at(100, 100 * math.tan(math.radians(POINT_SIGMA_DEG)))
+    two_sigma = _at(100, 100 * math.tan(math.radians(2 * POINT_SIGMA_DEG)))
+
+    first, second = score_point([one_sigma, two_sigma], RAY)
+
+    assert first.score == pytest.approx(math.exp(-0.5))
+    assert second.score == pytest.approx(math.exp(-2.0))
+
+
+def test_point_behind_hand_is_almost_zero():
+    """손 뒤쪽(180°) 후보는 0 에 가깝다."""
+    [score] = score_point([_at(-300, 0)], RAY)
+    assert score.score < 1e-6
+
+
+def test_point_center_on_fingertip_scores_one():
+    """후보 중심이 검지 끝과 같은 자리면 손가락이 그 위에 있는 것이라 1점이다."""
+    [score] = score_point([_at(0, 0)], RAY)
+    assert score.score == 1.0
+    assert score.detail["angle"] is None
+
+
+def test_point_kind_and_order():
+    """단서 이름은 point 이고, 후보 순서와 개수를 그대로 따른다."""
+    candidates = [_at(-300, 0), _at(300, 0), _at(300, 300)]
+
+    scores = score_point(candidates, RAY)
+
+    assert [s.kind for s in scores] == [CueKind.POINT] * 3
+    assert scores[1].score == max(s.score for s in scores)
+    assert all(0.0 <= s.score <= 1.0 for s in scores)
+
+
+def test_point_no_candidates():
+    """후보가 없으면 빈 리스트다."""
+    assert score_point([], RAY) == []
