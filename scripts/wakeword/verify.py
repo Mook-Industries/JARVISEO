@@ -20,8 +20,8 @@
     python scripts/wakeword/verify.py --rescore data/datasets/wakeword/results/verify-….csv
 
 --split test 는 고를 때 안 쓴 최종 평가용 녹음(record.py --split test)만 읽는다. 진짜 호출과
-그 폴더의 background 를 같은 방법으로 잰다. 구간·힌트는 정한 값(1.3초, 힌트 있음)으로 고정해서 준다.
-    python scripts/wakeword/verify.py --split test --sec 1.3 --hint on --verbose
+그 폴더의 background 를 같은 방법으로 잰다. 구간·힌트는 정한 값(1.6초, 힌트 있음)으로 고정해서 준다.
+    python scripts/wakeword/verify.py --split test --sec 1.6 --hint on --verbose
 
 결과: data/datasets/wakeword/results/verify-<날짜시각>.csv  (조각마다 받아쓴 글자와 통과 여부)
 호출어로 칠 표기(transcript.has_wake_word)를 바꾸면 --rescore 로 받아쓰기 없이 다시 센다.
