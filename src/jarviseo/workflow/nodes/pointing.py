@@ -1,6 +1,6 @@
 """가리킴 노드 — 검출 · 대상 결정 · 되묻기 · 크롭.  담당: 최홍묵
 
-detect      : 사진에서 물체 후보를 찾는다 (pointing/detector.py)
+detect      : 사진에서 물체 후보와 가리키는 손을 찾는다 (pointing/detector.py · hands.py)
 resolve     : 후보 중 가리킨 대상을 고른다 (pointing/resolver.py)
 clarify     : 1·2위가 비슷하면 되묻고 대답을 듣는다. 사진은 다시 고르지 않는다.
               2번 넘거나 대답이 없거나 후보가 없으면 "다시 가리켜 주세요"로 끝낸다.
@@ -17,6 +17,7 @@ import logging
 from typing import Literal
 
 from jarviseo.pointing.crop import crop_target as cut_target
+from jarviseo.pointing.hands import pick_pointing_hand
 from jarviseo.pointing.labels import korean_name
 from jarviseo.workflow.deps import GraphDeps
 from jarviseo.workflow.messages import CLARIFY_GIVE_UP, canned_response
@@ -41,14 +42,17 @@ REPLY_HINTS = ("왼쪽", "오른쪽", "가운데")
 
 
 def detect(state: JarviseoState, deps: GraphDeps) -> dict:
-    return {"detections": deps.detector.detect(state["frame"].image)}
+    image = state["frame"].image
+    # 손도 여기서 한 번만 찾는다. resolve 는 되묻기 대답마다 다시 돌지만 사진은 그대로다.
+    hand = pick_pointing_hand(deps.hands.detect(image)) if deps.hands is not None else None
+    return {"detections": deps.detector.detect(image), "hand": hand}
 
 
 def resolve(state: JarviseoState, deps: GraphDeps) -> dict:
     # 키워드로 불러야 가짜와 실제 resolve_target 을 바꿔 끼워도 안 깨진다.
     target = deps.resolve(
         candidates=state["detections"],
-        fingertip=None,  # 손 단서(v2)가 붙으면 채운다
+        hand=state.get("hand"),
         gaze_vector=None,
         text=state["utterance"].text,
         frame_size=state["frame"].size,

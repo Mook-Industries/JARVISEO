@@ -38,6 +38,7 @@ listen(STT + 말을 시작한 순간의 사진) ─▶ (recapture ↺) ─▶ ro
 |---|---|---|---|
 | `frames` | 사진 없이 묻는다. 가리킴·재촬영도 안 한다 | `FrameBuffer` | `FrameBuffer` 에 직접 넣는다 |
 | `detector` · `resolve` | 지시어 질문은 전체 사진으로 VLM 이, 성분 질문은 사진 전체로 판정한다 | `ObjectDetector` · `resolve_target` | 테스트 파일 안의 작은 가짜 |
+| `hands` | 손 단서가 기권한다(가운데 단서만, v1 처럼). `assistant.py` 는 모델 파일 · mediapipe 가 없으면 이 칸을 비우고 "손 단서 꺼짐"을 찍는다 | `HandDetector` — `detect` 노드가 YOLO 와 같이 한 번 찾고 가리키는 손만 상태 `hand` 에 둔다. 되묻기로 `resolve` 가 다시 돌아도 다시 안 찾는다 | 테스트 파일 안의 작은 가짜(부른 횟수를 셈) |
 | `checker` | 성분 질문에 "확인할 수 없어요"로 답한다. **VLM 으로 넘기지 않는다** | `IngredientChecker` | 테스트 파일 안의 작은 가짜 |
 | `memory` | 기억 검색 결과가 빈 목록이다 | `VectorMemory` | `FakeEmbedder` 를 쓴 `VectorMemory` |
 | `store` · `dialog` | 턴·성분 기록과 대화 기억 저장을 안 한다. 알레르기 목록도 비어 있다 | `MemoryStore` · `DialogMemory` | SQLite `MemoryStore` |

@@ -47,6 +47,7 @@ from jarviseo.nutrition.barcode import make_food_qr_client
 from jarviseo.nutrition.service import IngredientChecker
 from jarviseo.pointing import resolve_target
 from jarviseo.pointing.detector import ObjectDetector
+from jarviseo.pointing.hands import HandDetector
 from jarviseo.types import MemoryHit
 from jarviseo.vlm import VLMClient
 from jarviseo.voice import (
@@ -271,6 +272,12 @@ def main() -> None:
     # YOLO·동의어 사전을 읽는 데 몇 초 걸린다. 마이크·카메라를 열기 전에 읽어야 그동안 쌓인
     # 소리·사진이 첫 질문에 섞이지 않는다. 아래 WakeWordDetector 와 헷갈리지 않게 이름을 달리 둔다.
     object_detector = ObjectDetector()
+    # 손 모델 파일이나 mediapipe 가 없으면 손 단서 없이(v1 처럼) 돈다. 팀원 PC 에서도 떠야 한다.
+    try:
+        hand_detector = HandDetector()
+    except (FileNotFoundError, ImportError) as e:
+        print(f"손 단서 꺼짐: {e}")
+        hand_detector = None
     # 성분 질문: 바코드 → 캐시 → 푸드QR → 성분표 OCR → 재촬영 안내.
     # 식품안전나라는 쓰지 않는다. 원재료가 '면류, 분말스프'처럼 상위 분류만 오고
     # 바코드가 다른 제품으로 잡히는 일이 있었다(2026-10-16 실측, #81).
@@ -290,6 +297,7 @@ def main() -> None:
             collector=collector,
             called_since=barge.called_since,  # 되묻는 동안 다시 불렀는지
             detector=object_detector,
+            hands=hand_detector,
             resolve=resolve_target,
             checker=checker,
         )
@@ -301,7 +309,8 @@ def main() -> None:
         if photo_dir is not None:
             print(f"사진 {photo_dir}/")
         print(f"기억 검색 {'켜짐' if deps.recall_enabled else '꺼짐 (JARVISEO_ENABLE_RECALL)'}")
-        print("가리킴 v1(가운데 우선) · 성분 판정 켜짐")
+        pointing = "v2(가운데 + 손 방향)" if hand_detector else "v1(가운데 우선)"
+        print(f"가리킴 {pointing} · 성분 판정 켜짐")
         qr_state = "푸드QR" if qr else "푸드QR 꺼짐(JARVISEO_FOOD_QR_API_KEY 없음)"
         ocr_state = "Colab GPU" if config.OCR_REMOTE_URL else "이 PC CPU"
         print(f"성분 판정: 캐시 → {qr_state} → 성분표 OCR({ocr_state})")

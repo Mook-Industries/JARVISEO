@@ -1,8 +1,8 @@
 """가리킴 길(detect → resolve ⇄ clarify → crop_target)과 재촬영이 그래프에서 맞게 도는지.
 
 여기서 보는 것은 "후보가 오면 그래프가 맞는 길로 가는가"다. 검출 정확도·대상 고르기 계산은
-pointing 쪽 테스트가 본다. 그래서 검출기·대상 결정은 이 파일 안의 작은 가짜로 바꿔 끼운다.
-CI 에는 YOLO(ultralytics)가 없어서 실제 검출기는 여기서 쓸 수 없다.
+pointing 쪽 테스트가 본다. 그래서 검출기·손 검출기·대상 결정은 이 파일 안의 작은 가짜로 바꿔 끼운다.
+CI 에는 YOLO(ultralytics) · MediaPipe 가 없어서 실제 검출기는 여기서 쓸 수 없다.
 """
 
 import time
@@ -14,6 +14,7 @@ import pytest
 from jarviseo.capture import FrameBuffer, ImageFolderSource
 from jarviseo.memory import SessionTurn, TurnCandidate, TurnInference, TurnVoice
 from jarviseo.pointing import resolve_target
+from jarviseo.pointing.hands import HandPose
 from jarviseo.types import BBox, Detection, Frame, Intent, TargetCandidate, TargetResolution
 from jarviseo.vlm import FakeVLMClient
 from jarviseo.voice import FakeSpeechToText, FakeTextToSpeech
@@ -472,3 +473,75 @@ def test_no_question_skips_pointing_path(texts):
 
     assert deps.resolve.calls == []
     assert deps.tts.spoken == []
+
+
+# --- 손 단서 (v2) ------------------------------------------------------------
+
+
+class _Hands:
+    """정해 둔 손을 돌려준다. HandDetector.detect(image) 와 모양이 같고, 부른 횟수를 센다."""
+
+    def __init__(self, hands=()) -> None:
+        self.hands = list(hands)
+        self.calls = 0
+
+    def detect(self, image: np.ndarray) -> list[HandPose]:
+        self.calls += 1
+        return list(self.hands)
+
+
+def _hand(pointing: bool, base=(965.0, 1030.0), tip=(1000.0, 1000.0)) -> HandPose:
+    """pointing 이면 검지만 펴고 나머지를 접은 손, 아니면 다 편 손(키보드에 얹은 손).
+
+    방향은 base → tip. 기본값은 화면 아래에서 오른쪽 컵 중심(1350, 700)을 똑바로 가리킨다.
+    """
+    folded = [(0.0, 0.0, 0.0), (0.0, 0.02, 0.0), (0.0, 0.02, 0.02), (0.0, 0.0, 0.02)]
+    straight = [(0.0, 0.0, 0.0), (0.0, 0.02, 0.0), (0.0, 0.04, 0.0), (0.0, 0.06, 0.0)]
+    world = [(0.0, 0.0, 0.0)] * 5 + straight + (folded if pointing else straight) * 3
+    landmarks = [(0.0, 0.0)] * 21
+    landmarks[5], landmarks[8] = base, tip
+    return HandPose(tuple(landmarks), tuple(world), "Right", 0.9)
+
+
+def test_detect_keeps_only_the_pointing_hand():
+    """detect 가 손도 찾아 상태에 둔다. 키보드에 얹은 손은 빼고 가리키는 손만 남긴다."""
+    pointing = _hand(pointing=True)
+    deps = _deps(["저거 뭐야?"], hands=_Hands([_hand(pointing=False), pointing]))
+
+    result = build_graph(deps).invoke({})
+
+    assert result["hand"] is pointing
+
+
+def test_real_resolver_uses_hand_without_asking():
+    """실제 resolve_target 으로: 컵 둘이 비슷해도 손이 오른쪽 컵을 가리키면 되묻지 않고 고른다."""
+    deps = _deps(["저거 뭐야?"], hands=_Hands([_hand(pointing=True)]))
+    deps.resolve = resolve_target
+
+    result = build_graph(deps).invoke({})
+
+    assert deps.tts.spoken == ["컵이에요."]  # 되묻는 말 없이 바로 답
+    assert result["target"].chosen.detection is TWO_CUPS[1]
+    assert [s.kind.value for s in result["target"].chosen.cue_scores] == ["center", "point"]
+
+
+def test_hand_is_found_once_even_when_clarifying():
+    """되묻기 대답으로 resolve 가 다시 돌아도 손은 detect 에서 한 번만 찾는다(같은 사진)."""
+    hands = _Hands()
+    deps = _deps(["저거 뭐야?", "왼쪽 거"], margins=[0.05, 0.5], hands=hands)
+
+    result = build_graph(deps).invoke({})
+
+    assert len(deps.resolve.calls) == 2
+    assert hands.calls == 1
+    assert result["hand"] is None  # 손이 안 보이면 None(손 단서 기권)
+
+
+def test_no_hand_detector_means_no_hand():
+    """손 검출기가 없으면(모델 파일 없음 등) 손은 None 이고 가리킴 길은 그대로 돈다."""
+    deps = _deps(["저거 뭐야?"])
+
+    result = build_graph(deps).invoke({})
+
+    assert result["hand"] is None
+    assert deps.vlm.asked[0][0].image.shape == CROP

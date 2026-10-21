@@ -4,8 +4,9 @@
 types.py 가 '모듈 사이의 계약'이라면, 이 파일은 '노드 사이의 계약'이다.
 
 리듀서가 붙은 키(latency_ms, clarify_replies)는 노드가 돌려준 값이 덮어쓰지 않고 합쳐진다.
-필드를 추가할 때는 types.py 와 같은 규칙을 따른다.
-커밋 타입 뒤에 ! 를 붙이고(feat(state)!: ...) 팀에 공지한다.
+필드를 바꾸거나 지울 때는 types.py 와 같은 규칙을 따른다.
+커밋 타입 뒤에 ! 를 붙이고(feat(state)!: ...) 팀에 공지한다. 새 필드를 더하기만 하면 기존 노드가
+깨지지 않으므로 ! 없이 올리고 공지만 한다.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from typing import Annotated, TypedDict
 import numpy as np
 
 from jarviseo.nutrition.service import IngredientCheck
+from jarviseo.pointing.hands import HandPose
 from jarviseo.types import (
     AssistantResponse,
     Detection,
@@ -69,6 +71,8 @@ class JarviseoState(TypedDict, total=False):
 
     # --- 가리킴 ---
     detections: list[Detection]
+    # 가리키는 손. detect 가 YOLO 와 같이 한 번 찾는다. 없으면 None(손 단서 기권).
+    hand: HandPose | None
     target: TargetResolution
     # 고른 대상만 잘라낸 사진. VLM 과 성분 판정에는 전체 프레임 대신 이것이 간다.
     crop: np.ndarray
