@@ -18,6 +18,7 @@ from jarviseo.nutrition.response import (
     RETAKE_STEADY,
     RETAKE_UNCOVER,
     RETAKE_WHOLE,
+    SMALL_TEXT_NOTE,
 )
 from jarviseo.nutrition.service import IngredientChecker
 from jarviseo.types import AllergenVerdict as V
@@ -64,6 +65,8 @@ def checker(reader, **kw) -> IngredientChecker:
     kw.setdefault("quality_check", None)
     # FakeReader 는 이미지와 상관없이 답하므로 회전 시도를 끈다. 회전은 아래에서 따로 본다.
     kw.setdefault("try_rotation", False)
+    # 가짜 글자 상자는 높이 20px(원본 10px)이라 작은 글씨에 걸린다. 작은 글씨는 아래에서 따로 본다.
+    kw.setdefault("min_text_px", 0)
     return IngredientChecker(reader=reader, conf_threshold=0.8, **kw)
 
 
@@ -539,3 +542,52 @@ def test_visible_label_has_no_occlusion(monkeypatch):
     rows = [("원재료명:", 20), ("밀가루, 설탕,", 50), ("대두 함유", 80)]
     r = checker(BoxReader(rows)).check(CROP, ["밀"])
     assert r.occlusion == "" and r.message == "해당 제품에는 밀이 들어 있어요."
+
+
+# --- 글씨가 작게 찍혔을 때 --------------------------------------------------------
+
+# 가짜 상자 높이 20px ÷ 배율 2 = 원본 글줄 10px
+SMALL = [("원재료명: 밀가루, 설탕,", 20), ("대두 함유, 정제소금", 50)]
+
+
+def test_small_text_with_allergen_warns_and_says_may_miss(monkeypatch):
+    """글씨가 작아도 찾은 경고는 바로 전하고, 빠진 성분이 있을 수 있다고 덧붙인다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    r = checker(BoxReader(SMALL), min_text_px=22).check(CROP, ["밀"])
+    assert r.text_px == 10 and r.judgement.verdict is V.CONTAINS
+    assert r.message == f"해당 제품에는 밀이 들어 있어요. {SMALL_TEXT_NOTE}"
+    assert r.retake is None
+
+
+def test_small_text_without_allergen_asks_closer(monkeypatch):
+    """글씨가 작은데 못 찾았으면 '못 찾았어요' 대신 더 가까이 보여 달라고 한다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    r = checker(BoxReader(SMALL), min_text_px=22).check(CROP, ["땅콩"])
+    assert r.judgement.verdict is V.UNDETERMINED and r.judgement.reason == "small_text"
+    assert r.retake == RETAKE_CLOSER and r.message == RETAKE_CLOSER
+
+
+def test_small_text_after_max_retakes_says_could_not_read(monkeypatch):
+    """재촬영을 다 써도 글씨가 작으면 정확히 읽지 못했다고 말하고 끝낸다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    r = checker(BoxReader(SMALL), min_text_px=22, max_retake=2).check(
+        CROP, ["땅콩"], retake_count=2
+    )
+    assert r.retake is None
+    assert r.message.startswith("글씨가 작아서 성분표를 정확히 읽지 못했어요.")
+
+
+def test_small_text_ocr_is_not_cached(monkeypatch):
+    """글씨가 작은 사진에서 읽은 성분은 캐시에 남기지 않는다. 오독이 굳으면 안 된다."""
+    monkeypatch.setattr(service, "lookup_product", miss(CODE, "not_found"))
+    store = MemoryStore(database_url="sqlite://")
+    store.init_schema()
+    checker(BoxReader(SMALL), store=store, min_text_px=22).check(CROP, ["밀"])
+    assert store.get_product(CODE) is None
+
+
+def test_large_enough_text_has_no_note(monkeypatch):
+    """글씨가 기준보다 크면 평소대로 말한다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    r = checker(BoxReader(SMALL), min_text_px=8).check(CROP, ["밀"])
+    assert r.message == "해당 제품에는 밀이 들어 있어요."

@@ -25,6 +25,7 @@ __all__ = [
     "RETAKE_UNCOVER",
     "MAX_WARNING_CHARS",
     "RETAKE_WHOLE",
+    "SMALL_TEXT_NOTE",
     "build_message",
     "josa",
     "warning_sentence",
@@ -39,6 +40,9 @@ RETAKE_WHOLE = "성분표 전체가 보이도록 가리켜 주세요."
 # 가려진 자리에 알레르기가 있을 수 있어서 '못 찾았어요'라고 말하지 않는다.
 OCCLUDED_NOTE = "성분표 일부가 가려져서 다 확인하지는 못했어요."
 RETAKE_UNCOVER = "성분표 일부가 가려져서 잘 인식하지 못했어요. 가리지 않게 다시 보여 주세요."
+# 성분표 글씨가 작게 찍혔을 때 (service.MIN_TEXT_PX). 찾은 경고 뒤에 붙인다.
+# 못 찾았으면 RETAKE_CLOSER 로 더 가까이 보여 달라고 한다.
+SMALL_TEXT_NOTE = "글씨가 작게 보여서 빠진 성분이 있을 수 있어요."
 # OCR 전 품질 검사에서 걸렸을 때 (nutrition/quality.py). 반사는 보정으로 못 살려서
 # 촬영 방법을 바꿔 달라고 한다 (멘토 피드백 2026-10-14).
 RETAKE_STEADY = "성분표를 가까이, 흔들리지 않게 다시 보여 주세요."
@@ -57,6 +61,7 @@ _UNDETERMINED = {
     "unreadable": f"성분표 글자를 정확히 읽지 못했어요. {_CHECK_PACKAGE}",
     "no_ingredients": "원재료명을 찾지 못했어요. 성분표 전체가 보이게 비춰 주세요.",
     "occluded": f"성분표 일부가 가려져서 잘 인식하지 못했어요. {_CHECK_PACKAGE}",
+    "small_text": f"글씨가 작아서 성분표를 정확히 읽지 못했어요. {_CHECK_PACKAGE}",
     "opaque_ingredient": f"성분을 알 수 없는 원료가 들어 있어 확인할 수 없어요. {_CHECK_PACKAGE}",
     "blurry": f"사진이 흐려서 성분표를 읽지 못했어요. {_CHECK_PACKAGE}",
     "glare": f"빛이 반사돼서 성분표를 읽지 못했어요. {_CHECK_PACKAGE}",
