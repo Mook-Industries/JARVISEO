@@ -1,7 +1,9 @@
 """웨이크워드 녹음 도구.  담당: 문태현
 
 말할 문구를 띄우고, 한 번 말할 때마다 VAD 로 잘라 16kHz 모노 wav 로 저장한다.
-평가용(eval)과 학습용(train)은 폴더를 나눠 저장한다. 저장 위치는 data/datasets/wakeword/ 이고
+평가용(eval)·학습용(train)·최종 평가용(test)은 폴더를 나눠 저장한다. test 는 임계값·2단계 확인 값을
+고를 때 쓰지 않은 녹음(처음 듣는 사람·다른 방송)으로, 값을 고정한 뒤 한 번만 잰다(#149).
+저장 위치는 data/datasets/wakeword/ 이고
 Git 에는 올라가지 않는다(.gitignore).
 
 파일마다 화자·거리·환경을 그 폴더의 metadata.csv 에 한 줄씩 남긴다. 평가 스크립트가 이걸 보고
@@ -13,6 +15,7 @@ Git 에는 올라가지 않는다(.gitignore).
     python scripts/wakeword/record.py similar 20                       # 비슷한 발음을 돌아가며
     python scripts/wakeword/record.py background --minutes 30 --env tv # TV 소리를 30분 그대로
     python scripts/wakeword/record.py wake 30 --split train --speaker s02 --distance 2m
+    python scripts/wakeword/record.py wake 20 --split test --speaker s04 --env noisy
     python scripts/wakeword/record.py wake 100 --tts                   # TTS 로 합성 (키 필요)
     python scripts/wakeword/record.py speech 1000 --split train --tts  # 일상 문장 합성
     python scripts/wakeword/record.py wake 600 --split train --tts --variant pause  # "자, 비서"
@@ -312,7 +315,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="웨이크워드 녹음")
     parser.add_argument("label", choices=["wake", "similar", "speech", "background"])
     parser.add_argument("count", type=int, nargs="?", default=30, help="녹음할 횟수")
-    parser.add_argument("--split", choices=["eval", "train"], default="eval")
+    parser.add_argument("--split", choices=["eval", "train", "test"], default="eval")
     parser.add_argument("--text", action="append", help="띄울 문구. 여러 번 주면 돌아가며 띄운다")
     parser.add_argument("--minutes", type=float, default=30, help="background 녹음 길이(분)")
     parser.add_argument("--speaker", default="s01", help="화자 번호. 실명은 쓰지 않는다")

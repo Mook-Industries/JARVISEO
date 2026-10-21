@@ -19,6 +19,10 @@
     python scripts/wakeword/verify.py --wake-only --sec 1.3 --hint on --workers 1   # 왕복 시간
     python scripts/wakeword/verify.py --rescore data/datasets/wakeword/results/verify-….csv
 
+--split test 는 고를 때 안 쓴 최종 평가용 녹음(record.py --split test)만 읽는다. 진짜 호출과
+그 폴더의 background 를 같은 방법으로 잰다. 구간·힌트는 정한 값(1.3초, 힌트 있음)으로 고정해서 준다.
+    python scripts/wakeword/verify.py --split test --sec 1.3 --hint on --verbose
+
 결과: data/datasets/wakeword/results/verify-<날짜시각>.csv  (조각마다 받아쓴 글자와 통과 여부)
 호출어로 칠 표기(transcript.has_wake_word)를 바꾸면 --rescore 로 받아쓰기 없이 다시 센다.
 """
@@ -67,10 +71,13 @@ def detections(scores: np.ndarray, threshold: float) -> list[tuple[float, float]
     return found
 
 
-def backgrounds() -> list[tuple[str, dict]]:
-    """(종류, metadata 행). eval 의 TV·일반 대화와 train 의 방송."""
+def backgrounds(split: str = "eval") -> list[tuple[str, dict]]:
+    """(종류, metadata 행). eval 이면 eval 의 TV·대화와 train 의 방송, test 면 test 폴더 것만."""
     rows = []
-    for folder, name in ((EVAL, "eval"), (TRAIN, "train")):
+    folders = ((EVAL, "eval"), (TRAIN, "train")) if split == "eval" else ((ROOT / split, split),)
+    for folder, name in folders:
+        if not (folder / "metadata.csv").exists():
+            continue
         with (folder / "metadata.csv").open(encoding="utf-8") as f:
             for r in csv.DictReader(f):
                 if r["label"] == "background" and (folder / r["file"]).exists():
@@ -79,14 +86,14 @@ def backgrounds() -> list[tuple[str, dict]]:
 
 
 def candidates(
-    model: str, thresholds: list[float], background: bool = True
+    model: str, thresholds: list[float], background: bool = True, split: str = "eval"
 ) -> tuple[list[dict], dict[str, float]]:
     """1차가 깨어난 곳들과, 오탐 후보 녹음 종류별 길이(시간). background 가 False 면 진짜 호출만."""
     rng = np.random.default_rng(0)
     found = []
-    wakes = real_wakes()
+    wakes = real_wakes(folder=ROOT / split)
     for i, r in enumerate(wakes, 1):
-        audio = read_wav(EVAL / r["file"])
+        audio = read_wav(ROOT / split / r["file"])
         pad = round(PAD_SEC * SAMPLE_RATE)
         audio = np.concatenate([np.zeros(pad, np.int16), audio, np.zeros(pad, np.int16)])
         audio[:pad] = rng.normal(0, NOISE, pad).astype(np.int16)
@@ -102,7 +109,7 @@ def candidates(
         print(f"\r  진짜 호출 {i}/{len(wakes)}", end="", flush=True)
     print()
     hours: dict[str, float] = {}
-    for kind, r in backgrounds() if background else []:
+    for kind, r in backgrounds(split) if background else []:
         audio = read_wav(r["path"])
         hours[kind] = hours.get(kind, 0.0) + len(audio) / SAMPLE_RATE / 3600
         print(f"  {kind} {r['file']} ({len(audio) / SAMPLE_RATE / 60:.0f}분) 점수 내는 중")
@@ -146,7 +153,7 @@ def transcribe_all(
     ]
 
 
-def rescore(path: Path) -> tuple[list[dict], dict[str, float]]:
+def rescore(path: Path, split: str = "eval") -> tuple[list[dict], dict[str, float]]:
     """저장한 CSV 의 받아쓴 글자를 다시 읽는다. 받아쓰기는 부르지 않는다. 오탐 후보 녹음 길이는
     wav 머리만 읽어 다시 센다."""
     with path.open(encoding="utf-8") as f:
@@ -155,7 +162,7 @@ def rescore(path: Path) -> tuple[list[dict], dict[str, float]]:
             for r in csv.DictReader(f)
         ]
     hours: dict[str, float] = {}
-    for kind, r in backgrounds():
+    for kind, r in backgrounds(split):
         with wave.open(str(r["path"]), "rb") as w:
             hours[kind] = hours.get(kind, 0.0) + w.getnframes() / SAMPLE_RATE / 3600
     return rows, hours
@@ -238,6 +245,9 @@ def main() -> None:
         "--workers", type=int, default=6, help="받아쓰기를 같이 보낼 수 (왕복 시간을 잴 때는 1)"
     )
     parser.add_argument(
+        "--split", choices=["eval", "test"], default="eval", help="test = 고를 때 안 쓴 녹음"
+    )
+    parser.add_argument(
         "--rescore", type=Path, help="받아쓰기 없이 저장한 CSV 를 지금 규칙으로 다시 센다"
     )
     parser.add_argument(
@@ -245,15 +255,18 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    n_wakes = len(real_wakes())
+    n_wakes = len(real_wakes(folder=ROOT / args.split))
     if args.rescore is not None:
-        rows, hours = rescore(args.rescore)
+        rows, hours = rescore(args.rescore, args.split)
         summarize(rows, hours, n_wakes, args.verbose)
         return
-    found, hours = candidates(args.model, args.thresholds, background=not args.wake_only)
+    found, hours = candidates(
+        args.model, args.thresholds, background=not args.wake_only, split=args.split
+    )
     rows = transcribe_all(found, args.sec, args.hint, args.workers)
     RESULTS.mkdir(parents=True, exist_ok=True)
-    out = RESULTS / f"verify-{datetime.now():%Y%m%d-%H%M%S}.csv"
+    split = "" if args.split == "eval" else f"{args.split}-"
+    out = RESULTS / f"verify-{split}{datetime.now():%Y%m%d-%H%M%S}.csv"
     summarize(rows, hours, n_wakes, args.verbose)
     with out.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDS)

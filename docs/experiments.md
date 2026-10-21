@@ -1197,4 +1197,4 @@ psycopg 3.3.6 이 윈도우에서 닫힌 포트에 연결할 때 `wait_conn` 의
   거른 호출은 받아쓴 글자와 같이 한 줄씩 찍힌다. 시작음은 깬 즉시 울려서 오탐에도 "띵"은 난다.
 - 진짜 호출 20회(바로 이어 말하기 10 · "자비서." 하고 쉬었다가 질문 10)에서 놓친 수와, `JARVISEO_WAKE_CHECK=false` 일 때와 지연(stt · total 중앙값) 비교.
 - 학습 · eval 에 없는 사람 1명 이상 "자비서" 20회 이상(조용 · 소음)과 다른 방송 1시간 이상을 녹음해 eval 에 넣지 않고 따로 잰다. 임계값 0.97 · 위 값은 고정.
-  지금 evaluate.py · verify.py 는 eval 폴더만 읽어서, 그 폴더를 읽게 하는 옵션은 녹음할 때 더한다.
+  `record.py --split test` 로 `data/datasets/wakeword/test/` 에 녹음하고 `evaluate.py --split test` · `verify.py --split test --sec 1.3 --hint on` 으로 잰다.
