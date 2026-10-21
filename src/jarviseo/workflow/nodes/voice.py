@@ -1,6 +1,7 @@
 """듣기 · 읽기 노드.  담당: 최홍묵 (부르는 모듈: voice/ 문태현)
 
 듣기는 받아쓰고, 말을 시작한 순간 그 시각 근처에서 가장 선명한 사진을 고른다.
+호출어 2단계 확인(deps.wake_check)이 호출어가 아니라고 하면 되묻기·대답 없이 끝난다.
 읽기는 답을 소리로 읽는다. 도중에 "자비서"가 들리면 바로 끊긴다.
 """
 
@@ -35,8 +36,17 @@ def listen(state: JarviseoState, deps: GraphDeps) -> dict:
             picked.append(frame)
 
     wake_at = state.get("wake_at")
+    # 호출어 2단계 확인(#149). 질문을 듣는 동안 감지 직전 구간을 따로 받아쓴다.
+    # 호출어가 아니라고 나오면 듣던 것도 멈춘다(TV 소리는 끝없이 이어져 10초를 다 채운다).
+    verdict = None
+    if deps.wake_check is not None and wake_at is not None:
+        verdict = deps.wake_check.start(wake_at)
+    stop = verdict.rejected if verdict is not None else None
     # 호출어를 잡은 시각부터 거슬러 읽어야 "자비서, 저거 뭐야"의 "저거"가 안 잘린다.
-    utterance = stt.listen(on_speech_start=pick, timeout=LISTEN_SEC, since=wake_at)
+    utterance = stt.listen(on_speech_start=pick, timeout=LISTEN_SEC, since=wake_at, stop=stop)
+    if verdict is not None and not verdict.passed():
+        # TV 소리 같은 것에 깨어났다. 되묻지도 대답하지도 않고 호출어 대기로 돌아간다.
+        return {"wake_rejected": True, "wake_check_text": verdict.text}
     if utterance is None and wake_at is not None:
         # 호출어만 부르고 멈췄다. 되묻고 한 번 더 듣는다.
         deps.tts.speak(REPROMPT)
@@ -55,7 +65,9 @@ def listen(state: JarviseoState, deps: GraphDeps) -> dict:
 
 def after_listen(
     state: JarviseoState, deps: GraphDeps
-) -> Literal["no_question", "bad_frame", "heard"]:
+) -> Literal["wake_rejected", "no_question", "bad_frame", "heard"]:
+    if state.get("wake_rejected"):
+        return "wake_rejected"
     if state.get("utterance") is None:
         return "no_question"
     if deps.frames is not None and is_bad_frame(state.get("frame"), deps.sharpness_threshold):
