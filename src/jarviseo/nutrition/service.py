@@ -38,11 +38,14 @@ from jarviseo.nutrition.allergen import (
     judge_allergens,
     judge_product,
     load_synonyms,
+    normalize_term,
     user_labels,
 )
 from jarviseo.nutrition.barcode import (
     BarcodeLookup,
     FoodQrClient,
+    find_gtin,
+    lookup_code,
     lookup_product,
     make_food_qr_client,
 )
@@ -63,6 +66,7 @@ from jarviseo.nutrition.response import (
     OCCLUDED_NOTE,
     RETAKE_CLOSER,
     RETAKE_GLARE,
+    RETAKE_OTHER_SIDE,
     RETAKE_STEADY,
     RETAKE_UNCOVER,
     RETAKE_WHOLE,
@@ -83,6 +87,8 @@ __all__ = ["IngredientCheck", "IngredientChecker"]
 # 성분표를 읽었지만 알레르기 표시가 없던 제품을 캐시에 남길 때 쓴다. 판정 쪽은 비었는지만 본다.
 OCR_NO_NOTICE = "알레르기 유발물질 표시 없음 (성분표 판독)"
 
+# 원재료명 없이 이만큼(공백 뺀 글자 수) 읽었으면 성분표가 아닌 다른 면을 보여 준 것으로 본다.
+_OTHER_SIDE_CHARS = 60
 # 원본 사진에서 성분표 글줄 높이(px, 중앙값)가 이보다 작으면 '글씨가 작다'고 본다.
 # 키워 읽어도 없는 정보는 생기지 않아서 '밀'을 '일'로 읽는 식의 오독이 남는다.
 # 실측(평가 세트 21장, PaddleOCR): 22px 미만 4장(label_05·09·14·19)이 모두 알레르기를 하나씩 놓쳤다.
@@ -113,6 +119,9 @@ class IngredientCheck:
     panel_region: BBox | None = None  # 자동으로 찾은 성분표 영역 (못 찾았거나 끄면 None)
     # 원본 사진 기준 글줄 높이(px). MIN_TEXT_PX 보다 작으면 오독으로 놓쳤을 수 있다고 알린다.
     text_px: float = 0.0
+    # OCR 글줄과 그 위치. 위치는 check() 에 들어온 사진 기준 좌표다(확대 · 회전을 되돌렸다).
+    # 화면에서 "사진의 어디에서 찾았는지" 박스를 그리는 데 쓴다.
+    ocr_lines: list[OCRLine] = field(default_factory=list)
 
 
 @dataclass
@@ -124,6 +133,9 @@ class _OcrPass:
     size: tuple[int, int] = (0, 0)  # 읽은 이미지 (너비, 높이). 돌려 읽었으면 돌린 뒤 크기
     borders: Borders = field(default_factory=Borders)  # 읽은 이미지의 변이 사진 가장자리인가
     scale: float = 1.0  # 원본 대비 키운 배율
+    # 읽은 이미지 → 원본 사진 좌표로 되돌릴 값: 잘라 읽은 영역, 확대 배율(x, y)
+    region: BBox | None = None
+    zoom: tuple[float, float] = (1.0, 1.0)
 
     @property
     def text_px(self) -> float:
@@ -132,6 +144,24 @@ class _OcrPass:
             ln.bbox.height / self.scale for ln in self.lines if len(ln.text) >= _TEXT_PX_MIN_CHARS
         )
         return hs[len(hs) // 2] if hs else 0.0
+
+    def source_lines(self) -> list[OCRLine]:
+        """글줄 좌표를 원본 사진(check 에 들어온 사진) 기준으로 되돌린다."""
+        if self.region is None:
+            return list(self.lines)
+        w, h = self.size  # 돌려 읽었으면 돌린 뒤 크기
+        out = []
+        for ln in self.lines:
+            pts = [(ln.bbox.x1, ln.bbox.y1), (ln.bbox.x2, ln.bbox.y2)]
+            if self.angle == 90:  # 시계 방향으로 돌려 읽었다: 돌린 (x, y) = 확대본 (y, H-1-x)
+                pts = [(y, w - 1 - x) for x, y in pts]
+            elif self.angle == 270:  # 반시계: 돌린 (x, y) = 확대본 (W-1-y, x)
+                pts = [(h - 1 - y, x) for x, y in pts]
+            xs = [self.region.x1 + x / self.zoom[0] for x, _ in pts]
+            ys = [self.region.y1 + y / self.zoom[1] for _, y in pts]
+            box = BBox(min(xs), min(ys), max(xs), max(ys))
+            out.append(OCRLine(text=ln.text, confidence=ln.confidence, bbox=box))
+        return out
 
     def occlusion(self) -> str:
         s = self.sections
@@ -309,7 +339,10 @@ class IngredientChecker:
         r = region or BBox(0, 0, w, h)
         borders = Borders(r.y1 <= 1, r.x2 >= w - 1, r.y2 >= h - 1, r.x1 <= 1).rotated(angle)
         scale_used = panel.shape[1] / max(1.0, r.width)  # 최대 크기 제한으로 줄었을 수 있다
-        return _OcrPass(lines, sections, mean_confidence(lines), angle, size, borders, scale_used)
+        zoom = (scale_used, panel.shape[0] / max(1.0, r.height))
+        return _OcrPass(
+            lines, sections, mean_confidence(lines), angle, size, borders, scale_used, r, zoom
+        )
 
     def _passes(self, p: _OcrPass) -> bool:
         return p.conf >= self.conf_threshold and p.sections.has_ingredient_header
@@ -357,6 +390,20 @@ class IngredientChecker:
                 best = again
         timings["ocr"] = _ms(t0)
 
+        if lookup.barcode is None:
+            # 줄무늬는 못 읽었어도 성분표 글자에 바코드 숫자가 찍혀 있으면 그 번호로 찾아본다.
+            # 원재료 면을 한 번 읽어 캐시에 남긴 제품은 이걸로 바로 답한다.
+            code = find_gtin(best.text)
+            if code is not None:
+                t0 = time.perf_counter()
+                by_text = lookup_code(code, store=self.store, food_qr=self.food_qr)
+                timings["barcode_text"] = _ms(t0)
+                if by_text.hit:
+                    found = self._from_product(by_text, user_allergens, timings)
+                    if not self._needs_label(found, by_text.product, user_allergens):
+                        return found
+                lookup = by_text  # 못 찾았어도 번호는 남긴다(이번 OCR 결과를 그 번호로 캐시)
+
         readable = self._passes(best)
         reason = "" if readable else (
             "no_ingredients" if not best.sections.has_ingredient_header else "low_ocr_conf"
@@ -391,6 +438,7 @@ class IngredientChecker:
             barcode=lookup,
             ingredients=parse_ingredient_text(sec.ingredients),
             ocr_text=best.text,
+            ocr_lines=best.source_lines(),
             ocr_conf=best.conf,
             reprocessed=reprocessed,
             retake_count=retake_count,
@@ -425,7 +473,12 @@ class IngredientChecker:
         )
         if needs_retake:
             # 원재료명이 안 보이면 잘린 것이다. 신뢰도만 낮으면 멀거나 흐린 것이다.
-            result.retake = RETAKE_WHOLE if reason == "no_ingredients" else RETAKE_CLOSER
+            if reason != "no_ingredients":
+                result.retake = RETAKE_CLOSER
+            elif len(normalize_term(best.text)) >= _OTHER_SIDE_CHARS:
+                result.retake = RETAKE_OTHER_SIDE  # 글자는 읽었는데 원재료명이 없다 = 다른 면
+            else:
+                result.retake = RETAKE_WHOLE
             result.message = result.retake
             return result
 
