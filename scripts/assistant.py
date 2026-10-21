@@ -228,6 +228,10 @@ def run(
             wakes["rejected"] += 1
             print(f"  호출어 아님 (2단계 확인 받아쓰기 {state.get('wake_check_text')!r}) → 무시")
         else:
+            if "wake_check_text" in state:
+                text = state["wake_check_text"]
+                shown = "받아쓰지 못함" if text is None else f"받아쓰기 {text!r}"
+                print(f"  2단계 확인 통과 ({shown})")
             show(state)
             number += 1
             if photo_dir is not None:

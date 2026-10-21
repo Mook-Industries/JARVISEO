@@ -467,7 +467,26 @@ def test_confirmed_wake_answers_as_before(text):
     result = graph.invoke({"wake_at": time.monotonic()})
 
     assert "wake_rejected" not in result
+    assert result["wake_check_text"] == text  # 통과한 턴에도 무엇을 받아썼는지 남는다
     assert tts.spoken == ["컵이에요."]
+
+
+def test_confirmed_wake_without_question_keeps_check_text():
+    """호출어만 부르고 질문이 없던 턴도 확인에서 받아쓴 글자를 남긴다."""
+    tts = FakeTextToSpeech()
+    graph = build_graph(
+        GraphDeps(
+            stt=FakeSpeechToText([]),
+            tts=tts,
+            vlm=FakeVLMClient(),
+            wake_check=FakeWakeCheck("자비서."),
+        )
+    )
+
+    result = graph.invoke({"wake_at": time.monotonic()})
+
+    assert result["wake_check_text"] == "자비서."
+    assert tts.spoken == [REPROMPT]
 
 
 def test_wake_check_skipped_without_wake_time():
