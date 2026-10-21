@@ -10,24 +10,166 @@ macOS 의 Docker 는 USB 장치 접근이 사실상 불가능하다.
 HTTP/WebSocket 으로 잇는다. 이 파일은 후자에 해당한다.
 
 대시보드 레이아웃: 실시간 영상 / 현재 대화 / 채팅 이력 / 단계별 지연 그래프
+
+지금 되는 것 (성분 확인)
+------------------------
+    uvicorn jarviseo.api.main:app --port 8000      # 레포 맨 위 폴더에서
+    http://localhost:8000/ingredient                # 사진을 올리면 성분을 분석한다
+
+    GET  /api/ocr-status     Colab OCR 서버가 켜져 있는지 (꺼져 있으면 페이지에 "Colab 열기" 버튼)
+    GET  /api/allergens      등록된 알레르기
+    PUT  /api/allergens      알레르기 목록 바꾸기   {"allergens": ["계란", "땅콩"]}
+    POST /api/ingredient     본문 = 사진 바이트(JPEG/PNG). ?allergens=계란,땅콩 이 없으면 등록된 것
+
+알레르기는 assistant.py · register_allergens.py 와 같은 DB · 같은 사용자(owner)에 둔다.
+성분표 OCR 은 .env 에 JARVISEO_OCR_REMOTE_URL 이 있으면 Colab GPU 에서 돈다.
+무료 · 유료 Colab 모두 밖에서 노트북을 켜는 방법이 없어서, 꺼져 있으면 페이지가 알려 주고
+JARVISEO_OCR_NOTEBOOK_URL(서버 노트북 주소)을 여는 버튼을 보여 준다. 켜면 페이지가 알아서 바뀐다.
 """
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+import os
+import threading
+import time
+from contextlib import asynccontextmanager
+from pathlib import Path
 
-app = FastAPI(title="자비서 (JARVISEO)", version="0.1.0")
+import anyio
+import cv2
+import httpx
+import numpy as np
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+
+from jarviseo import config
+from jarviseo.memory import MemoryStore
+from jarviseo.nutrition.service import IngredientChecker, make_checker
+
+# assistant.py 의 기본 DB 와 같아야 등록한 알레르기를 앱과 같이 쓴다.
+API_DB = os.environ.get("JARVISEO_API_DB", "sqlite:///data/assistant.db")
+PAGES = Path(__file__).parent / "pages"
+MAX_IMAGE_BYTES = 15 * 1024 * 1024  # 휴대폰 원본 사진도 들어가는 크기
+OCR_NOTEBOOK_URL = os.environ.get("JARVISEO_OCR_NOTEBOOK_URL", "")
+OCR_STATUS_TTL_SEC = 5.0  # 여러 탭이 동시에 물어봐도 Colab 에는 5초에 한 번만 묻는다
+SOURCE_NAMES = {"barcode": "바코드 · 푸드QR", "ocr": "성분표 OCR", "retake": "다시 찍기 안내"}
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    """서버가 살아 있는지 확인한다."""
-    return {"status": "ok"}
+class Allergens(BaseModel):
+    allergens: list[str]
 
 
-# TODO(권용현): 아래 엔드포인트들
-# GET  /              대시보드 페이지
-# WS   /ws/stream     실시간 영상 프레임 + 현재 상태 전송
-# GET  /api/history   대화 이력 조회 (이것만 선택적으로 서버 배포 가능)
-# GET  /api/latency   단계별 지연 통계 (p50/p95)
-# POST /api/ask       텍스트로 질문 (카메라 없이 테스트할 때)
+def create_app(
+    store: MemoryStore | None = None, checker: IngredientChecker | None = None
+) -> FastAPI:
+    """앱을 만든다. 테스트에서는 가짜 store · checker 를 넣는다."""
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.store = store or MemoryStore(database_url=API_DB)
+        app.state.store.init_schema()
+        app.state.user_id = app.state.store.ensure_user()
+        # OCR 모델 · 동의어 사전 · 푸드QR 연결을 한 번만 만든다.
+        app.state.checker = checker or make_checker(app.state.store)
+        app.state.lock = threading.Lock()  # OCR 엔진 하나를 여러 요청이 동시에 쓰지 않게
+        yield
+        app.state.checker.close()
+
+    app = FastAPI(title="자비서 (JARVISEO)", version="0.1.0", lifespan=lifespan)
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        """서버가 살아 있는지 확인한다."""
+        return {"status": "ok"}
+
+    @app.get("/ingredient", include_in_schema=False)
+    def ingredient_page() -> FileResponse:
+        """사진을 올려 성분을 확인하는 페이지."""
+        return FileResponse(PAGES / "ingredient.html")
+
+    @app.get("/api/ocr-status")
+    def ocr_status(request: Request) -> dict:
+        """Colab OCR 서버 상태. remote=False 면 원래부터 이 PC CPU 로 읽는 설정이다."""
+        s = request.app.state
+        now = time.monotonic()
+        cached = getattr(s, "ocr_status", None)
+        if cached is None or now - cached[0] > OCR_STATUS_TTL_SEC:
+            cached = (now, _probe_ocr(config.OCR_REMOTE_URL))
+            s.ocr_status = cached
+        return {**cached[1], "notebook_url": OCR_NOTEBOOK_URL}
+
+    @app.get("/api/allergens")
+    def get_allergens(request: Request) -> Allergens:
+        s = request.app.state
+        return Allergens(allergens=s.store.get_user_allergens(s.user_id))
+
+    @app.put("/api/allergens")
+    def put_allergens(body: Allergens, request: Request) -> Allergens:
+        s = request.app.state
+        names = list(dict.fromkeys(a.strip() for a in body.allergens if a.strip()))
+        s.store.set_user_allergens(s.user_id, names)
+        return Allergens(allergens=s.store.get_user_allergens(s.user_id))
+
+    @app.post("/api/ingredient")
+    async def analyze(request: Request, allergens: str | None = None) -> dict:
+        """사진 한 장을 분석한다. 본문은 사진 바이트 그대로(JPEG/PNG)."""
+        data = await request.body()
+        if not 0 < len(data) <= MAX_IMAGE_BYTES:
+            raise HTTPException(413 if data else 400, "사진이 없거나 너무 큽니다 (15MB 까지)")
+        image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise HTTPException(400, "사진을 읽을 수 없습니다 (JPEG/PNG)")
+        s = request.app.state
+        names = [a.strip() for a in (allergens or "").split(",") if a.strip()]
+        names = names or s.store.get_user_allergens(s.user_id)
+        return await _run_in_thread(lambda: _check(s, image, names))
+
+    return app
+
+
+def _probe_ocr(url: str | None) -> dict:
+    """OCR 서버의 /health 를 짧게 물어본다. 꺼져 있으면 ngrok 이 안내 페이지(HTML)를 준다."""
+    if not url:
+        return {"remote": False, "up": False, "device": None}
+    try:
+        r = httpx.get(f"{url.rstrip('/')}/health", timeout=3.0)
+        body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    except (httpx.HTTPError, ValueError):
+        body = {}
+    up = bool(body.get("ok"))
+    return {"remote": True, "up": up, "device": body.get("device") if up else None}
+
+
+async def _run_in_thread(fn):
+    # OCR 은 수 초 걸린다. 그동안 다른 요청(페이지 · 알레르기 조회)이 멈추지 않게 스레드에서 돌린다.
+    return await anyio.to_thread.run_sync(fn)
+
+
+def _check(s, image: np.ndarray, allergens: list[str]) -> dict:
+    t0 = time.perf_counter()
+    with s.lock:
+        r = s.checker.check(image, allergens)
+    lookup, product = r.barcode, r.judgement.product
+    if r.retake:
+        source = "retake"
+    elif lookup is not None and lookup.hit and not r.ocr_text:
+        source = "barcode"
+    else:
+        source = "ocr"
+    return {
+        "sentence": r.retake or r.message,
+        "verdict": r.judgement.verdict.value,
+        "source": source,
+        "source_name": SOURCE_NAMES[source],
+        "retake": bool(r.retake),
+        "occlusion": r.occlusion,
+        "barcode": lookup.barcode.code if lookup and lookup.barcode else None,
+        "product": product.product_name if product and product.product_name else None,
+        "allergens": allergens,
+        "timings_ms": r.timings_ms,
+        "elapsed_ms": round((time.perf_counter() - t0) * 1000),
+    }
+
+
+app = create_app()
