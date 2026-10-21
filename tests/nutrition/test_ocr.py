@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from jarviseo.nutrition.ocr import (
+    _group_lines,
     crop_and_upscale,
     join_lines,
     mean_confidence,
@@ -416,3 +417,40 @@ def test_keeps_may_contain_phrase_with_list():
     )
     sec = split_sections(text)
     assert "땅콩" in sec.cross_contamination and sec.cross_contamination.endswith("대두, 호두")
+
+
+# --- 표의 "원재료명" 칸이 내용 가운데에 있을 때 (label_05 새우깡) -------------------
+
+
+def _box(x1, y1, x2, y2, text):
+    return (BBox(x1, y1, x2, y2), text, 0.9)
+
+
+def test_centered_header_moves_before_first_content_line():
+    """제목 칸이 내용 여러 줄의 세로 가운데에 있으면, 제목 위 내용 줄도 원재료로 본다."""
+    boxes = [
+        _box(700, 210, 760, 240, "식품유형"), _box(780, 210, 900, 240, "과자"),
+        _box(780, 245, 1200, 275, "쉬림프크래커(소맥분, 새우,"),
+        _box(780, 275, 1200, 305, "혼합제제(말토덱스트린)),"),
+        _box(700, 287, 760, 320, "원재료명"),
+        _box(780, 302, 1200, 335, "미강유(태국산), 매운맛시즈닝,"),
+        _box(780, 338, 1150, 365, "밀, 새우, 대두 함유"),
+        _box(700, 367, 760, 397, "유통기한"), _box(780, 367, 900, 397, "후면 표기일까지"),
+    ]  # fmt: skip
+    text = join_lines(_group_lines(boxes))
+    assert "과자 원재료명 쉬림프크래커" in text
+    assert "소맥분" in split_sections(text).ingredients
+
+
+def test_header_aligned_with_first_line_stays():
+    """보통 표(제목이 내용 첫 줄과 나란함)는 그대로 둔다. 위 칸 내용을 끌어오지 않는다."""
+    boxes = [
+        _box(700, 210, 760, 240, "제품명"), _box(780, 210, 1100, 240, "새우깡 매운맛"),
+        _box(780, 245, 1100, 275, "(스낵과자)"),
+        _box(700, 280, 760, 310, "원재료명"), _box(780, 280, 1200, 310, "소맥분, 새우,"),
+        _box(780, 315, 1200, 345, "미강유, 대두 함유"),
+        _box(700, 350, 760, 380, "유통기한"), _box(780, 350, 900, 380, "후면 표기일까지"),
+    ]  # fmt: skip
+    text = join_lines(_group_lines(boxes))
+    assert "(스낵과자) 원재료명 소맥분" in text
+    assert "스낵과자" not in split_sections(text).ingredients

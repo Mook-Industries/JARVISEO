@@ -490,6 +490,71 @@ def _to_bbox(points) -> BBox:
     )
 
 
+# 제목 칸 위로 거슬러 올라가 볼 내용 줄 수. 원재료가 이보다 길면 위쪽 줄은 놓친다.
+_MAX_ROWS_ABOVE = 3
+# 제목이 같은 줄 내용보다 이만큼(제목 높이 대비) 위아래로 어긋나야 '가운데 놓인 제목'으로 본다.
+# 보통 표는 제목과 내용 첫 줄이 나란해서 어긋남이 0 에 가깝다. label_05 실측 0.4.
+_HEADER_SHIFT = 0.25
+
+_Row = list[tuple[BBox, str, float]]
+
+
+def _left(row: _Row) -> float:
+    return min(b.x1 for b, _, _ in row)
+
+
+def _top(row: _Row) -> float:
+    return min(b.y1 for b, _, _ in row)
+
+
+def _bottom(row: _Row) -> float:
+    return max(b.y2 for b, _, _ in row)
+
+
+def _move_centered_header(rows: list[_Row]) -> None:
+    """표의 "원재료명" 칸이 내용 여러 줄의 세로 가운데에 있으면, 제목을 내용 첫 줄 앞으로 옮긴다.
+
+    표는 왼쪽에 제목 칸, 오른쪽에 내용 칸이다. 내용이 여러 줄이면 제목이 그 가운데에 오는
+    포장이 있다(실측 label_05 새우깡). 그대로 위→아래로 이으면 제목보다 위에 있는 내용 줄
+    ("쉬림프크래커[소맥분, 옥수수전분, 새우 …")이 제목 앞에 붙어서 원재료 구간에서 빠진다.
+
+    1) 제목이 같은 줄 내용과 세로로 어긋나 있을 때만 본다. 나란하면 보통 표라 그대로 둔다.
+       (내용이 홀수 줄이라 제목이 가운데 줄과 딱 나란한 표는 못 잡는다.)
+    2) 오른쪽 칸에만 글자가 있는 줄(제목 칸 오른쪽에서 시작)을 제목 줄 위아래로 모으고,
+       위쪽 줄을 몇 개 넣어야 제목이 내용 덩어리의 세로 가운데에 가장 가까운지 본다.
+    다른 칸 내용을 끌어오면 과잉 경고가 될 수 있지만, 원재료를 놓치는 것보다는 낫다.
+    """
+    for i, row in enumerate(rows):
+        first = min(row, key=lambda b: b[0].x1)  # 제목 칸은 줄의 맨 왼쪽
+        if not _INGREDIENT_HEADER.fullmatch(first[1].strip()):
+            continue
+        hb, unit = first[0], first[0].height
+        others = [b for b, _, _ in row if b is not hb]
+        if others:
+            cy = sum(b.center[1] for b in others) / len(others)
+            if abs(hb.center[1] - cy) < unit * _HEADER_SHIFT:
+                return  # 제목과 내용 첫 줄이 나란한 보통 표
+        edge = hb.x2 - unit * 0.3  # 이보다 오른쪽에서 시작하는 줄은 내용 칸에만 글자가 있다
+        above = 0
+        while above < _MAX_ROWS_ABOVE and i - above >= 1 and _left(rows[i - above - 1]) >= edge:
+            above += 1
+        below = i
+        while below + 1 < len(rows) and _left(rows[below + 1]) >= edge:
+            below += 1
+        bottom = _bottom(rows[below]) if below > i else _bottom(row)
+        offsets = [
+            abs(hb.center[1] - (_top(rows[i - n] if n else row) + bottom) / 2)
+            for n in range(above + 1)
+        ]
+        best = min(range(above + 1), key=offsets.__getitem__)
+        if best:
+            row.remove(first)
+            rows[i - best].append(first)  # 줄 안 순서는 뒤에서 왼쪽→오른쪽으로 다시 정렬한다
+            if not row:
+                rows.pop(i)
+        return  # 원재료명 제목은 하나뿐이다
+
+
 def _group_lines(boxes: list[tuple[BBox, str, float]]) -> list[OCRLine]:
     """EasyOCR 은 글자 덩어리 단위로 준다. 세로 중심이 가까운 덩어리를 한 줄로 묶는다.
 
@@ -507,6 +572,7 @@ def _group_lines(boxes: list[tuple[BBox, str, float]]) -> list[OCRLine]:
                 last.append(item)
                 continue
         rows.append([item])
+    _move_centered_header(rows)
 
     lines = []
     for row in rows:
