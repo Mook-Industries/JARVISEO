@@ -31,7 +31,7 @@ TTS 는 `user_setting.tts_speed` 를 OpenAI speed 값으로 바꿔 보낸다(SLO
 처음부터 읽는다. 읽던 중이었으면 앞부분이 한 번 더 나온다(#130). 끼어들어 끊긴 뒤에는 다시 요청하지 않는다.
 폴백 요청도 멈추면 받은 만큼만 재생하고, 소리를 하나도 못 냈으면 `None` 을 돌려준다.
 
-모델 이름은 `config.py` 에서만 정한다. 지금은 STT `gpt-transcribe`, TTS `gpt-4o-mini-tts`
+모델 이름은 `config.py` 에서만 정한다. 지금은 STT `gpt-transcribe`, TTS `tts-1`
 (`.env` 의 `JARVISEO_STT_MODEL`, `JARVISEO_TTS_MODEL`).
 
 호출어는 `MicStream` 하나를 열어 `WakeWordDetector` 와 `SpeechToText(mic=...)` 가 같이 읽는다.
