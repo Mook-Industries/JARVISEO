@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from jarviseo import config
 from jarviseo.voice import stt
 from jarviseo.voice.gate import MicGate
 from jarviseo.voice.mic import BLOCK, SAMPLE_RATE, MicStream
@@ -164,7 +165,7 @@ def test_listen_transcribes_only_after_since_on_shared_mic(monkeypatch):
     with wave.open(str(DATA / "jarviseo_question.wav"), "rb") as f:
         voice = np.frombuffer(f.readframes(f.getnframes()), dtype="<i2")
     silence = np.zeros(SAMPLE_RATE, np.int16)
-    audio = np.concatenate([silence, voice, silence, silence])
+    audio = np.concatenate([silence, voice, silence, silence, silence])
     blocks = [
         (audio[i : i + BLOCK], i / SAMPLE_RATE) for i in range(0, len(audio) - BLOCK + 1, BLOCK)
     ]
@@ -175,8 +176,10 @@ def test_listen_transcribes_only_after_since_on_shared_mic(monkeypatch):
         client = FakeClient()
         listener = stt.SpeechToText(mic=mic, client=client)
         before = listener.listen(since=0.5, timeout=2.0)  # 말 시작(1초) 앞을 잡았다
-        # 말이 끝나고 1.2초 뒤 (앞으로 1초 당겨 읽어도 말이 끝난 뒤다)
-        after = listener.listen(since=2.2 + len(voice) / SAMPLE_RATE, timeout=2.0)
+        # 앞으로 WAKE_LOOKBACK_SEC 당겨 읽어도 말이 끝나고 0.2초 뒤다. .env 값에 따라 달라지지 않게
+        # config 에서 읽는다(로컬 .env 1.0 에서만 통과하고 기본값 1.5 에서는 깨졌다).
+        voice_end = 1.0 + len(voice) / SAMPLE_RATE
+        after = listener.listen(since=voice_end + config.WAKE_LOOKBACK_SEC + 0.2, timeout=2.0)
 
     assert before.text == "저거 뭐야?"
     assert before.started_at == pytest.approx(1.0, abs=0.06)
