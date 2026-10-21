@@ -35,6 +35,19 @@
           font-size:13px; color:var(--sub); }
   .chip.cut { border-color: var(--warn); color: var(--warn); }
   #result { display:none; }
+  h3 { font-size:14px; color:var(--sub); margin:16px 0 6px; font-weight:600; }
+  #steps { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:14px; }
+  #steps .arrow { color:var(--sub); }
+  table.ev { width:100%; border-collapse:collapse; font-size:14px; }
+  table.ev td { border-top:1px solid var(--line); padding:7px 4px; vertical-align:top; }
+  table.ev td:first-child { white-space:nowrap; font-weight:700; width:1%; padding-right:12px; }
+  .tag { display:inline-block; border-radius:6px; padding:1px 7px; font-size:12px; margin-right:6px; }
+  .tag.contains { background:var(--warn); color:#111; }
+  .tag.may { border:1px solid var(--warn); color:var(--warn); }
+  .tag.not_found { border:1px solid var(--line); color:var(--sub); }
+  .where { color:var(--sub); }
+  .only { color:var(--warn); font-size:12px; margin-left:6px; }
+  .where b { color:var(--text); font-weight:600; }
   #ocr { display:flex; align-items:center; gap:8px; font-size:14px; color:var(--sub); margin:0 0 14px; }
   #ocr .dot { width:9px; height:9px; border-radius:50%; background:var(--sub); }
   #ocr.up .dot { background:#5fd38d; }
@@ -54,10 +67,11 @@
   <section class="card">
     <h2>내 알레르기</h2>
     <div class="row">
-      <input id="allergens" type="text" placeholder="예: 계란, 땅콩, 새우">
+      <input id="allergens" type="text" placeholder="예: 계란, 땅콩, 새우  (시험: 모두)">
       <button id="save" class="ghost">저장</button>
     </div>
     <div id="allergen-hint" class="hint"></div>
+    <div class="hint">'모두' 또는 '테스트'를 넣으면 법정 알레르기 전체로 확인해요(인식 시험용).</div>
   </section>
 
   <section class="card">
@@ -73,6 +87,16 @@
     <h2>결과</h2>
     <p id="sentence"></p>
     <div id="chips" class="chips"></div>
+    <h3>바코드</h3>
+    <div id="steps"></div>
+    <div id="where-box" style="display:none">
+      <h3>사진에서 찾은 자리</h3>
+      <img id="where" alt="찾은 자리" style="width:100%;border-radius:10px;border:1px solid var(--line)">
+      <div class="hint">주황 칠 = 들어 있음, 주황 테두리 = 섞였을 수 있음, 파랑 = 바코드</div>
+    </div>
+    <h3>알레르기별 근거</h3>
+    <table id="ev" class="ev"></table>
+    <div id="ocr-out"></div>
   </section>
 </main>
 <script>
@@ -147,6 +171,75 @@ function show(d) {
   if (d.product) $("chips").append(chip(`제품: ${d.product}`));
   if (d.barcode) $("chips").append(chip(`바코드 ${d.barcode}`));
   if (d.occlusion) $("chips").append(chip("성분표 일부가 잘림", "chip cut"));
+  showSteps(d.barcode_steps || []);
+  $("where-box").style.display = d.where ? "block" : "none";
+  if (d.where) $("where").src = d.where;
+  showEvidence(d.evidence || [], d.retake);
+  $("ocr-out").replaceChildren(...(d.ocr_text || d.reason ? [ocrBox(d.ocr_text, d.reason)] : []));
+}
+
+function showSteps(steps) {
+  const box = $("steps");
+  box.replaceChildren();
+  steps.forEach((t, i) => {
+    if (i) box.append(Object.assign(document.createElement("span"), { className: "arrow", textContent: "→" }));
+    box.append(chip(t));
+  });
+}
+
+const STATUS = { contains: "들어 있음", may: "섞였을 수 있음", not_found: "찾지 못함" };
+const REASONS = { no_ingredients: "원재료명을 찾지 못했어요", low_ocr_conf: "글자가 흐려서 믿기 어려워요",
+  occluded: "성분표 일부가 가려졌어요", small_text: "글씨가 너무 작아요", unreadable: "글자를 읽지 못했어요" };
+function ocrBox(text, reason) {
+  const box = document.createElement("details");
+  box.style.marginTop = "10px";
+  const sum = document.createElement("summary");
+  sum.style.cursor = "pointer"; sum.style.color = "var(--sub)"; sum.style.fontSize = "14px";
+  sum.textContent = "성분표 OCR이 읽은 글자" + (REASONS[reason] ? ` — ${REASONS[reason]}` : "");
+  const pre = document.createElement("div");
+  pre.style.cssText = "white-space:pre-wrap;font-size:13px;color:var(--sub);background:#0b0e13;border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:6px";
+  pre.textContent = text || "(읽은 글자 없음)";
+  box.append(sum, pre);
+  return box;
+}
+
+
+function showEvidence(rows, retake) {
+  const table = $("ev");
+  table.replaceChildren();
+  if (retake) {
+    table.append(row("—", "다시 찍은 사진으로 확인해 주세요."));
+    return;
+  }
+  // 들어 있음 → 섞였을 수 있음 → 찾지 못함 순서로
+  const order = { contains: 0, may: 1, not_found: 2 };
+  [...rows].sort((a, b) => order[a.status] - order[b.status]).forEach((e) => {
+    const cell = document.createElement("td");
+    cell.append(Object.assign(document.createElement("span"), { className: `tag ${e.status}`, textContent: STATUS[e.status] }));
+    const where = document.createElement("span");
+    where.className = "where";
+    if (e.where.length) {
+      e.where.forEach((w, i) => {
+        if (i) where.append(" · ");
+        where.append(`${w.section}: `, Object.assign(document.createElement("b"), { textContent: w.terms.join(", ") }));
+      });
+    } else {
+      where.textContent = "읽은 글자에서 찾지 못했어요 (없다는 뜻은 아니에요)";
+    }
+    cell.append(where);
+    if (e.ingredient_only) cell.append(Object.assign(document.createElement("span"),
+      { className: "only", textContent: "원재료에서만 찾음 — 함유 표시에는 없음 (오독일 수 있어요)" }));
+    const tr = document.createElement("tr");
+    tr.append(Object.assign(document.createElement("td"), { textContent: e.allergen }), cell);
+    table.append(tr);
+  });
+}
+
+function row(a, b) {
+  const tr = document.createElement("tr");
+  tr.append(Object.assign(document.createElement("td"), { textContent: a }),
+            Object.assign(document.createElement("td"), { textContent: b }));
+  return tr;
 }
 
 // Colab OCR 서버 상태. 꺼져 있으면 10초마다, 켜져 있으면 1분마다 다시 본다.

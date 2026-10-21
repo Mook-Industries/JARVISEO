@@ -20,6 +20,7 @@ HTTP/WebSocket 으로 잇는다. 이 파일은 후자에 해당한다.
     GET  /api/allergens      등록된 알레르기
     PUT  /api/allergens      알레르기 목록 바꾸기   {"allergens": ["계란", "땅콩"]}
     POST /api/ingredient     본문 = 사진 바이트(JPEG/PNG). ?allergens=계란,땅콩 이 없으면 등록된 것
+                             알레르기에 '모두' · '테스트'를 넣으면 법정 알레르기 전체(시험용)
 
 알레르기는 assistant.py · register_allergens.py 와 같은 DB · 같은 사용자(owner)에 둔다.
 성분표 OCR 은 .env 에 JARVISEO_OCR_REMOTE_URL 이 있으면 Colab GPU 에서 돈다.
@@ -44,8 +45,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from jarviseo import config
+from jarviseo.api.marks import jpeg_data_url, mark_findings
 from jarviseo.memory import MemoryStore
+from jarviseo.nutrition.allergen import KNOWN_ALLERGENS, find_allergens, normalize_term
 from jarviseo.nutrition.service import IngredientChecker, make_checker
+from jarviseo.types import IngredientSource
 
 # assistant.py 의 기본 DB 와 같아야 등록한 알레르기를 앱과 같이 쓴다.
 API_DB = os.environ.get("JARVISEO_API_DB", "sqlite:///data/assistant.db")
@@ -54,6 +58,10 @@ MAX_IMAGE_BYTES = 15 * 1024 * 1024  # 휴대폰 원본 사진도 들어가는 �
 OCR_NOTEBOOK_URL = os.environ.get("JARVISEO_OCR_NOTEBOOK_URL", "")
 OCR_STATUS_TTL_SEC = 5.0  # 여러 탭이 동시에 물어봐도 Colab 에는 5초에 한 번만 묻는다
 SOURCE_NAMES = {"barcode": "바코드 · 푸드QR", "ocr": "성분표 OCR", "retake": "다시 찍기 안내"}
+# 알레르기 칸에 이 말을 넣으면 법정 알레르기 전체로 판정한다. 인식 성능을 볼 때 쓴다.
+ALL_KEYWORDS = {"모두", "테스트", "전체"}
+# 근거 구간 이름. 원재료·알레르기 표시에서 찾으면 함유, 혼입 문장에서만 찾으면 혼입 가능이다.
+SECTIONS = (("ingredients", "원재료"), ("notice", "알레르기 표시"), ("cross", "같은 제조시설"))
 
 
 class Allergens(BaseModel):
@@ -61,7 +69,8 @@ class Allergens(BaseModel):
 
 
 def create_app(
-    store: MemoryStore | None = None, checker: IngredientChecker | None = None
+    store: MemoryStore | None = None,
+    checker: IngredientChecker | None = None,
 ) -> FastAPI:
     """앱을 만든다. 테스트에서는 가짜 store · checker 를 넣는다."""
 
@@ -122,7 +131,7 @@ def create_app(
             raise HTTPException(400, "사진을 읽을 수 없습니다 (JPEG/PNG)")
         s = request.app.state
         names = [a.strip() for a in (allergens or "").split(",") if a.strip()]
-        names = names or s.store.get_user_allergens(s.user_id)
+        names = expand_allergens(names or s.store.get_user_allergens(s.user_id))
         return await _run_in_thread(lambda: _check(s, image, names))
 
     return app
@@ -167,9 +176,113 @@ def _check(s, image: np.ndarray, allergens: list[str]) -> dict:
         "barcode": lookup.barcode.code if lookup and lookup.barcode else None,
         "product": product.product_name if product and product.product_name else None,
         "allergens": allergens,
+        "evidence": (ev := evidence(r, allergens, getattr(s.checker, "synonyms", {}) or {})),
+        "barcode_steps": barcode_steps(r),
+        "where": jpeg_data_url(where_image(image, r, ev)),
+        "ocr_text": r.ocr_text,
+        "reason": r.judgement.reason,
         "timings_ms": r.timings_ms,
         "elapsed_ms": round((time.perf_counter() - t0) * 1000),
     }
+
+
+def where_image(image: np.ndarray, r, ev: list[dict]) -> np.ndarray | None:
+    """판정에 쓴 사진에 찾은 글줄 · 바코드 자리를 그린다(api/marks.py)."""
+    read = r.barcode.barcode if r.barcode is not None else None
+    return mark_findings(
+        image,
+        getattr(r, "ocr_lines", []) or [],
+        ev,
+        barcode=read.bbox if read is not None else None,
+        barcode_code=read.code if read is not None else None,
+    )
+
+
+def expand_allergens(names: list[str]) -> list[str]:
+    """'모두' · '테스트'가 있으면 법정 알레르기 전체를 더한다. 나머지 이름은 그대로 둔다."""
+    if not any(n.strip() in ALL_KEYWORDS for n in names):
+        return names
+    rest = [n for n in names if n.strip() not in ALL_KEYWORDS]
+    return list(dict.fromkeys([*KNOWN_ALLERGENS, *rest]))
+
+
+def evidence(r, allergens: list[str], synonyms: dict[str, list[str]]) -> list[dict]:
+    """알레르기마다 어디서(원재료 · 알레르기 표시 · 같은 제조시설) 어떤 글자로 찾았는지.
+
+    판정(allergen.judge_allergens)과 같은 동의어 사전 · 같은 찾기 함수를 쓴다.
+    status: contains(함유) / may(혼입 가능) / not_found(못 찾음). 못 찾음은 '안 들어 있음'이 아니다.
+    ingredient_only: '~ 함유' 알레르기 표시가 읽혔는데 원재료에서만 찾았다. 판정은 그대로
+    함유로 두지만(놓치는 것보다 낫다), 오독일 수 있어서 화면에 따로 알린다
+    (크런키 실측: '코코아분말'을 '코코아분밀'로 읽어 밀).
+    """
+    p = r.judgement.product
+    texts = {
+        "ingredients": p.raw_ingredients if p else "",
+        "notice": p.allergen_notice if p else "",
+        "cross": p.cross_contamination if p else "",
+    }
+    canonical = {normalize_term(t): a for a, ts in synonyms.items() for t in ts}
+    table = dict(synonyms)
+    wanted: dict[str, str] = {}  # 표준명 → 사용자가 쓴 이름
+    for a in allergens:
+        key = canonical.get(normalize_term(a), normalize_term(a))
+        if key and key not in wanted:
+            wanted[key] = a.strip()
+            table.setdefault(key, [key])
+    hits = {k: find_allergens(t, table) for k, t in texts.items()}
+    notice_read = bool(hits["notice"])  # 함유 표시에서 알레르기 이름을 하나라도 읽었나
+    out = []
+    for key, label in wanted.items():
+        where = [{"section": name, "terms": hits[k][key]} for k, name in SECTIONS if key in hits[k]]
+        found = {w["section"] for w in where}
+        if found & {"원재료", "알레르기 표시"}:
+            status = "contains"
+        elif found:
+            status = "may"
+        else:
+            status = "not_found"
+        only = status == "contains" and notice_read and found == {"원재료"}
+        out.append({"allergen": label, "status": status, "where": where, "ingredient_only": only})
+    return out
+
+
+def barcode_steps(r) -> list[str]:
+    """바코드로 무엇을 시도했는지 순서대로. 화면에 '바코드 → 조회 → 성분표' 단계로 보여 준다."""
+    lookup = r.barcode
+    if lookup is None:
+        return ["바코드 확인 안 함"]
+    if lookup.barcode is None:
+        return ["바코드를 찾지 못함", "성분표를 읽음"] if r.ocr_text else ["바코드를 찾지 못함"]
+    if lookup.barcode.symbology == "TEXT":
+        # 줄무늬는 못 읽고, 성분표 OCR 글자에 찍힌 바코드 숫자로 찾았다(service._from_ocr)
+        steps = [
+            "바코드 줄무늬를 못 읽음",
+            "성분표를 읽음",
+            f"글자에서 바코드 번호 {lookup.barcode.code} 찾음",
+        ]
+        if lookup.hit:
+            where = "저장된 정보" if lookup.product.source is IngredientSource.CACHE else "푸드QR"
+            return [*steps, f"{where}에서 제품을 찾음"]
+        reasons = {"not_found": "푸드QR에 제품 정보가 없음", "api_error": "푸드QR 조회 실패"}
+        no_panel = r.judgement.reason == "no_ingredients"
+        last = "원재료명을 찾지 못함" if no_panel else "읽은 성분표로 판정"
+        return [*steps, reasons.get(lookup.reason, "제품을 찾지 못함"), last]
+    steps = [f"바코드 {lookup.barcode.code} 읽음"]
+    if lookup.hit:
+        where = "저장된 정보" if lookup.product.source is IngredientSource.CACHE else "푸드QR"
+        steps.append(f"{where}에서 제품을 찾음")
+        if r.ocr_text:
+            steps.append("알레르기 표시가 없어 성분표도 읽음")
+        return steps
+    reasons = {
+        "not_found": "푸드QR에 제품 정보가 없음",
+        "no_ingredients": "원재료 정보가 없음",
+        "api_error": "푸드QR 조회 실패",
+    }
+    steps.append(reasons.get(lookup.reason, "제품을 찾지 못함"))
+    if r.ocr_text:
+        steps.append("성분표를 읽음")
+    return steps
 
 
 app = create_app()
