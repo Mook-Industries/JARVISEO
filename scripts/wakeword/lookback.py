@@ -9,7 +9,8 @@ config.WAKE_LOOKBACK_SEC 를 바꿔 가며 비교할 수 있다.
               호출어 끝만 들어가 "그래서 …"처럼 받아써진다.
     gap 1.0   "자비서." 하고 쉬었다가 질문. 호출어만 받아써지면 listen() 이 한 번 더 듣는다.
 
-WAKE_LOOKBACK_SEC=1.0 의 근거다(docs/experiments.md "끼어들기·턴 음성 기록 (D11)").
+WAKE_LOOKBACK_SEC 의 근거다. 처음 1.0 은 docs/experiments.md "끼어들기·턴 음성 기록 (D11)",
+지금 1.5 는 "호출어 2단계 확인 (#149)" 의 실측 1단계(--lag 로 늦은 감지 재현).
 
 --chime 은 시작음(#104)이 마이크에 같이 들어간 소리도 받아써 본다. 감지 CHIME_DELAY_SEC 뒤에
 시작음을 섞고, 크기는 질문 말소리보다 몇 dB 작게 할지로 준다(0 이면 같은 크기, 음수면 더 크게).
