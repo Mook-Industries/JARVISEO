@@ -29,6 +29,9 @@ OpenAI 키가 필요하다.
 같다). 빼면 둘 다 안 낸다. 켜고 끈 채 같은 질문을 해서 받아쓰기가 나빠지지 않는지 본다(#104).
     python scripts/voice_loop.py --wake --chime     # 켬
     python scripts/voice_loop.py --wake             # 끔
+--csv 는 턴마다 아래 구간(ms)을 한 줄씩 바로 쓴다. 도중에 꺼져도 그때까지는 남는다. 주소를 안 주면
+data/datasets/latency/voice_loop-<날짜시각>.csv. 끝낼 때는 구간마다 p50 · p95 · 건수를 찍는다(#118).
+    python scripts/voice_loop.py 1 --wake --chime --csv
 
 찍는 값 (ms)
     말끝 대기    말이 끝나고 VAD 가 끝으로 판정해 녹음을 멈추기까지 (무음 700ms 가 대부분)
@@ -43,9 +46,12 @@ OpenAI 키가 필요하다.
 """
 
 import argparse
+import csv
 import statistics
 import time
 from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 
@@ -58,6 +64,10 @@ from jarviseo.voice.mic import MicStream
 from jarviseo.voice.wakeword import load_scorer
 
 STAGES = ("말끝 대기", "STT 왕복", "TTS 첫 조각", "재생", "말 끝 → 첫 조각")
+# --wake 에서만 있는 구간. 그 턴에 없던 것(끼어들기가 아닌 턴의 감지 → 멈춤 등)은 비워 둔다
+WAKE_STAGES = ("감지 → 멈춤", "시작음", "호출어 끝 → 시작음", "말 끝 → 종료음")
+CSV_FIELDS = ["턴", "trigger", "질문", "끊김", *STAGES, *WAKE_STAGES]
+CSV_DIR = config.DATASETS_DIR / "latency"
 # 호출어("자비서")는 일부러 넣지 않는다. 자기 목소리에 깨는지 볼 때 답에 호출어가 있으면 안 된다.
 LONG_ANSWER = (
     " 지금부터 조금 긴 대답을 읽어 드릴게요. 중간에 끼어들 수 있는지 시험하려고 일부러 길게 만든 "
@@ -72,6 +82,41 @@ DEFAULT_DB = "sqlite:///data/voice_loop.db"
 
 # 턴 하나를 DB 에 남기는 함수. (질문, 대답, 단계별 지연, trigger_type)
 Record = Callable[[Utterance, str, dict[str, float], str], None]
+
+
+def percentiles(values: list[float]) -> tuple[float, float]:
+    """p50 · p95. measure_latency.py · store.latency_percentiles 와 같은 nearest-rank."""
+    ordered = sorted(values)
+
+    def pick(q: float) -> float:
+        return ordered[min(len(ordered) - 1, int(q * len(ordered)))]
+
+    return pick(0.50), pick(0.95)
+
+
+def spread(values: list[float]) -> str:
+    """'p50 X · p95 Y ms (N건)'."""
+    p50, p95 = percentiles(values)
+    return f"p50 {p50:.0f} · p95 {p95:.0f}ms ({len(values)}건)"
+
+
+class CsvLog:
+    """턴마다 구간(ms)을 csv 에 한 줄씩 바로 쓴다. 도중에 꺼져도 그때까지 쓴 줄은 남는다."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.count = 0
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", newline="", encoding="utf-8-sig") as f:  # 엑셀에서 한글이 안 깨지게
+            csv.DictWriter(f, CSV_FIELDS).writeheader()
+
+    def __call__(self, turn: dict) -> None:
+        self.count += 1
+        row = {"턴": self.count} | {
+            k: round(v) if isinstance(v, float) else v for k, v in turn.items()
+        }
+        with self.path.open("a", newline="", encoding="utf-8") as f:  # BOM 은 머리줄에만
+            csv.DictWriter(f, CSV_FIELDS, restval="", extrasaction="ignore").writerow(row)
 
 
 def echo(
@@ -100,6 +145,7 @@ def echo(
     }
     cut = " (끊김)" if tts.last_interrupted else ""
     print("  " + ", ".join(f"{name} {turn[name]:.0f}" for name in STAGES) + cut)
+    turn |= {"질문": utterance.text, "끊김": "O" if tts.last_interrupted else ""}  # csv 용
     return answer, turn
 
 
@@ -144,7 +190,12 @@ class PlaybackPeak:
 
 
 def enter_loop(
-    stt: SpeechToText, tts: TextToSpeech, turns: list, long: bool, record: Record | None
+    stt: SpeechToText,
+    tts: TextToSpeech,
+    turns: list,
+    long: bool,
+    record: Record | None,
+    on_turn: Callable[[dict], None] | None = None,
 ) -> None:
     while input("\nEnter 를 누르고 말하세요 (끝내려면 q): ").strip().lower() != "q":
         utterance = stt.listen(timeout=8.0)
@@ -152,6 +203,8 @@ def enter_loop(
             print(f"  질문 없음 (원문 {stt.last_raw_text!r})")
         elif result := echo(stt, tts, utterance, long):
             turns.append(result[1])
+            if on_turn is not None:
+                on_turn(result[1])
             if record is not None:
                 record(utterance, *result, "WAKEWORD")
 
@@ -166,6 +219,7 @@ def wake_loop(
     playback_threshold: float,
     chime: Chime | None,
     short: bool = False,
+    on_turn: Callable[[dict], None] | None = None,
 ) -> tuple[
     list[float],
     list[float],
@@ -214,6 +268,7 @@ def wake_loop(
             if wake is None:
                 continue
             called = time.monotonic()
+            extra: dict = {"trigger": trigger}  # 이 턴의 --wake 구간. echo 가 낸 구간에 더한다
             if chime:
                 chime.start()
             if trigger == "BARGE_IN" and tts.speaker.stopped_at is None:
@@ -221,6 +276,7 @@ def wake_loop(
                 print(f"\n끼어들기 (점수 {wake.score:.3f}, 재생 뒤 감지)")
             elif trigger == "BARGE_IN":
                 stops.append((tts.speaker.stopped_at - wake.t) * 1000)
+                extra["감지 → 멈춤"] = stops[-1]
                 print(f"\n끼어들기 (점수 {wake.score:.3f}, 감지 → 멈춤 {stops[-1]:.0f}ms)")
             else:
                 print(f"\n호출어 감지 (점수 {wake.score:.3f})")
@@ -236,9 +292,11 @@ def wake_loop(
             if chime and chime.start_played_at is not None:
                 started = chime.start_played_at
                 starts.append(((started - called) * 1000, (started - wake.t) * 1000))
+                extra["시작음"], extra["호출어 끝 → 시작음"] = starts[-1]
                 line = f"  시작음 {starts[-1][0]:.0f}ms (호출어 끝부터 {starts[-1][1]:.0f}ms)"
                 if utterance is not None and chime.end_played_at is not None:
                     ends.append((chime.end_played_at - utterance.ended_at) * 1000)
+                    extra["말 끝 → 종료음"] = ends[-1]
                     line += f", 말 끝 → 종료음 {ends[-1]:.0f}ms"
                 print(line)
             result = late = None
@@ -247,7 +305,10 @@ def wake_loop(
                 print(f"  질문 없음 (원문 {stt.last_raw_text!r})")
             elif result := echo(stt, tts, utterance, long, short):
                 ended = time.monotonic()
+                result[1].update(extra)
                 turns.append(result[1])
+                if on_turn is not None:
+                    on_turn(result[1])
                 if record is not None:
                     record(utterance, *result, trigger)
                 if not tts.last_interrupted:
@@ -339,7 +400,17 @@ def main() -> None:
     parser.add_argument(
         "--chime", action="store_true", help="--wake 에서 시작음·종료음을 낸다 (#104)"
     )
+    parser.add_argument(
+        "--csv",
+        nargs="?",
+        type=Path,
+        const=CSV_DIR / f"voice_loop-{datetime.now():%Y%m%d-%H%M}.csv",
+        help=f"턴마다 구간을 csv 에 바로 쓴다 (기본 {CSV_DIR}/voice_loop-<날짜시각>.csv)",
+    )
     args = parser.parse_args()
+    log = CsvLog(args.csv) if args.csv else None
+    if log is not None:
+        print(f"턴 구간: {log.path}")
 
     turns: list[dict[str, float]] = []
     stops: list[float] = []
@@ -356,19 +427,32 @@ def main() -> None:
             stt = SpeechToText(mic=mic, on_speech_end=chime.end if chime else None)
             record = recorder(args.db, tts, stt) if args.db else None
             stops, peaks, missed, starts, ends, reprompts, shorts = wake_loop(
-                stt, tts, mic, turns, args.long, record, args.playback_threshold, chime, args.short
+                stt,
+                tts,
+                mic,
+                turns,
+                args.long,
+                record,
+                args.playback_threshold,
+                chime,
+                args.short,
+                log,
             )
     else:
         stt = SpeechToText(device=args.mic)
         record = recorder(args.db, tts, stt) if args.db else None
-        enter_loop(stt, tts, turns, args.long, record)
+        enter_loop(stt, tts, turns, args.long, record, log)
 
     if turns:
-        print(f"\n중앙값 ({len(turns)}턴, ms)")
-        for name in STAGES:
-            print(f"  {name} {statistics.median(t[name] for t in turns):.0f}")
+        print(f"\n구간별 지연 ({len(turns)}턴)")
+        for name in (*STAGES, *WAKE_STAGES):
+            values = [t[name] for t in turns if name in t]
+            if values:
+                print(f"  {name} {spread(values)}")
+    if log is not None:
+        print(f"턴 구간 {log.count}줄: {log.path}")
     if stops:
-        print(f"끼어들기 {len(stops)}회, 감지 → 멈춤 중앙값 {statistics.median(stops):.0f}ms")
+        print(f"끼어들기 {len(stops)}회, 감지 → 멈춤 {spread(stops)}")
     if peaks:
         print(f"끝까지 읽은 대답 {len(peaks)}개, 재생 중 호출어 최고 점수 {max(peaks):.3f}")
     if missed:
@@ -378,12 +462,11 @@ def main() -> None:
         )
     if starts:
         print(
-            f"시작음 {len(starts)}번, 호출 받음 → 시작음 중앙값 "
-            f"{statistics.median(c[0] for c in starts):.0f}ms "
-            f"(호출어 끝부터 {statistics.median(c[1] for c in starts):.0f}ms)"
+            f"시작음 {len(starts)}번, 호출 받음 → 시작음 {spread([c[0] for c in starts])}, "
+            f"호출어 끝부터 {spread([c[1] for c in starts])}"
         )
     if ends:
-        print(f"종료음 {len(ends)}번, 말 끝 → 종료음 중앙값 {statistics.median(ends):.0f}ms")
+        print(f"종료음 {len(ends)}번, 말 끝 → 종료음 {spread(ends)}")
     if args.wake:
         print(f"되물음 {reprompts}번")
     if args.wake and args.short:
