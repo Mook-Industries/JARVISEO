@@ -5,6 +5,7 @@
 | 파일 | 하는 일 | 어디서 도나 | 책임 지표 |
 |---|---|---|---|
 | `wakeword.py` | 호출어 감지. 80ms 마다 openWakeWord 점수를 내고 임계값을 넘으면 `on_detect(t, score)` | 로컬 (상시) | FAR / FRR |
+| `wakecheck.py` | 호출어 2단계 확인. 모델이 깨어나면 감지 직전 1.3초를 따로 받아써서 "자비서"가 없으면 거절한다(#149) | OpenAI STT | 최종 오탐 / FRR 증가 |
 | `stt.py` | 호출어 뒤 발화 받아쓰기 (`listen()` 이 녹음·VAD·받아쓰기·정리를 묶는다) | OpenAI STT | — |
 | `transcript.py` | 받아쓴 원문에서 호출어·필러를 빼고, 비었거나 너무 짧은 발화를 거른다 | 로컬 | — |
 | `tts.py` | 응답 음성 합성과 재생 (`speak()` 이 `synthesize()` 의 PCM 조각을 받는 대로 재생한다) | OpenAI TTS | — |

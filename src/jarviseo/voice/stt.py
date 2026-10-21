@@ -200,7 +200,7 @@ class SpeechToText:
         sent_at = time.monotonic()
         result = self.client.audio.transcriptions.create(
             model=self.model,
-            file=("speech.wav", _to_wav(audio)),
+            file=("speech.wav", to_wav(audio)),
             language=self.language,
             # 힌트가 없으면 호출어 "자비서"가 "자비스"로 받아써졌다(스파이크 02).
             prompt=", ".join(hints) if hints else config.WAKE_WORD,
@@ -210,7 +210,7 @@ class SpeechToText:
         return Utterance(result.text, started_at, ended_at)
 
 
-def _to_wav(audio: np.ndarray) -> bytes:
+def to_wav(audio: np.ndarray) -> bytes:
     """int16 배열을 WAV 로 감싼다. API 는 헤더를 보고 형식과 샘플레이트를 안다."""
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:

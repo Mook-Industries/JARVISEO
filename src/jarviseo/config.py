@@ -199,6 +199,10 @@ WAKEWORD_PLAYBACK_THRESHOLD = _get_float("JARVISEO_WAKEWORD_PLAYBACK_THRESHOLD",
 # 잘리지 않게 한다. 호출어("자비서" 길이 중앙 0.57초)가 통째로 들어가야 받아쓴 뒤
 # transcript.clean 이 지운다. 0.4초로는 끝 "서"만 들어가 "그래서"·"여기서"로 받아써졌다.
 WAKE_LOOKBACK_SEC = _get_float("JARVISEO_WAKE_LOOKBACK_SEC", 1.0)
+# 호출어 2단계 확인(voice/wakecheck.py, #149). 모델이 깨어나면 감지 직전 WAKE_CHECK_SEC 초를
+# 따로 받아써서 "자비서"가 있을 때만 질문을 받는다. TV 소리에 깨어나도 대답하지 않게 한다.
+WAKE_CHECK = _get_bool("JARVISEO_WAKE_CHECK", True)
+WAKE_CHECK_SEC = _get_float("JARVISEO_WAKE_CHECK_SEC", 1.3)
 # 시작음("자비서"를 알아들음)·종료음(질문을 다 들음) 크기. 0~1 로 파일 소리에 곱한다. 0 이면 끔.
 CHIME_VOLUME = _get_float("JARVISEO_CHIME_VOLUME", 1.0)
 # VLM 답이 이 시간(초) 안에 안 오면 "잠깐만요"를 먼저 읽는다. 안경에는 화면이 없어서
