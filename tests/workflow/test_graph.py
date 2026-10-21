@@ -282,6 +282,37 @@ def test_wake_word_only_asks_and_listens_again():
     assert result["utterance"].text == "이거 뭐야?"
 
 
+def test_reprompt_plays_start_chime_before_listening_again():
+    """호출어만 부르면 "네, 말씀하세요"를 읽은 뒤, 다시 듣기 전에 시작음을 낸다."""
+    tts = FakeTextToSpeech()
+    chimed: list[list[str]] = []
+    deps = GraphDeps(
+        stt=FakeSpeechToText(["자비서.", "이거 뭐야?"]),
+        tts=tts,
+        vlm=FakeVLMClient(["컵이에요."]),
+        start_chime=lambda: chimed.append(list(tts.spoken)),
+    )
+
+    build_graph(deps).invoke({"wake_at": time.monotonic()})
+
+    assert chimed == [[REPROMPT]]  # 되묻는 말 뒤, 대답 전에 한 번
+
+
+def test_question_after_wake_word_has_no_extra_start_chime():
+    """호출어에 이어 바로 질문하면 그래프는 시작음을 안 낸다(호출 때 assistant.py 가 냈다)."""
+    chimed: list[str] = []
+    deps = GraphDeps(
+        stt=FakeSpeechToText(["자비서, 이거 뭐야?"]),
+        tts=FakeTextToSpeech(),
+        vlm=FakeVLMClient(["컵이에요."]),
+        start_chime=lambda: chimed.append("start"),
+    )
+
+    build_graph(deps).invoke({"wake_at": time.monotonic()})
+
+    assert chimed == []
+
+
 def test_vlm_failure_reads_apology():
     """VLM 이 실패하면 사과 문장을 읽는다."""
     tts = FakeTextToSpeech()
