@@ -11,6 +11,12 @@ HTTP/WebSocket 으로 잇는다. 이 파일은 후자에 해당한다.
 
 대시보드 레이아웃: 실시간 영상 / 현재 대화 / 채팅 이력 / 단계별 지연 그래프
 
+대시보드 (사용자 목업 디자인)
+----------------------------
+    http://localhost:8000/                          # 모니터: 호출 → 질문 → 팀 그래프 → 대답
+    api/static/ 의 목업은 그대로 두고(직접 고치지 않는다), 디자인을 복사한
+    pages/dashboard.html · dashboard.js 에 실제 API 를 붙였다. CSS 는 /static/jarviseo.css 원본.
+
 지금 되는 것 (성분 확인)
 ------------------------
     uvicorn jarviseo.api.main:app --port 8000      # 레포 맨 위 폴더에서
@@ -49,6 +55,7 @@ import httpx
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from jarviseo import config
@@ -62,6 +69,7 @@ from jarviseo.types import IngredientSource
 # assistant.py 의 기본 DB 와 같아야 등록한 알레르기를 앱과 같이 쓴다.
 API_DB = os.environ.get("JARVISEO_API_DB", "sqlite:///data/assistant.db")
 PAGES = Path(__file__).parent / "pages"
+STATIC = Path(__file__).parent / "static"  # 사용자 목업(디자인 원본). 읽기만 한다
 MAX_IMAGE_BYTES = 15 * 1024 * 1024  # 휴대폰 원본 사진도 들어가는 크기
 OCR_NOTEBOOK_URL = os.environ.get("JARVISEO_OCR_NOTEBOOK_URL", "")
 OCR_STATUS_TTL_SEC = 5.0  # 여러 탭이 동시에 물어봐도 Colab 에는 5초에 한 번만 묻는다
@@ -109,6 +117,18 @@ def create_app(
     def health() -> dict[str, str]:
         """서버가 살아 있는지 확인한다."""
         return {"status": "ok"}
+
+    if STATIC.is_dir():
+        app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+    @app.get("/", include_in_schema=False)
+    def dashboard_page() -> FileResponse:
+        """대시보드(모니터 · 관리자 · 환경설정). 목업 디자인에 실제 API 를 붙였다."""
+        return FileResponse(PAGES / "dashboard.html")
+
+    @app.get("/dashboard.js", include_in_schema=False)
+    def dashboard_js() -> FileResponse:
+        return FileResponse(PAGES / "dashboard.js", media_type="text/javascript")
 
     @app.get("/ingredient", include_in_schema=False)
     def ingredient_page() -> FileResponse:

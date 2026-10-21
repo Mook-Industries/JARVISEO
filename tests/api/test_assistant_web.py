@@ -162,3 +162,13 @@ def test_other_questions_keep_plain_pointing(tmp_path):
     vlm_web = web_with(tmp_path, NoObjects(), PanelOnlyInWholePhoto(IMAGE.shape))
     state, _ = vlm_web.ask("저거 뭐야?", IMAGE)
     assert state.get("crop") is None and not vlm_web.retried_whole
+
+
+def test_dashboard_is_served_with_its_script(client):
+    """첫 화면은 목업 디자인의 대시보드다. 스크립트는 실제 API 를 부른다."""
+    c, _ = client
+    page = c.get("/")
+    assert page.status_code == 200 and "/static/jarviseo.css" in page.text
+    js = c.get("/dashboard.js")
+    assert js.status_code == 200 and "/api/ask" in js.text and "/api/allergens" in js.text
+    assert c.get("/static/jarviseo.css").status_code == 200  # 목업 원본 CSS 를 그대로 쓴다
