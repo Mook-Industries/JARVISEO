@@ -27,7 +27,9 @@
 TTS 는 `user_setting.tts_speed` 를 OpenAI speed 값으로 바꿔 보낸다(SLOW 0.85, FAST 1.2, NORMAL 은 안 보냄).
 첫 조각을 받기까지 걸린 시간은 `last_latency_ms` 에 남고, 그래프가 `latency_ms["tts"]` 로 넘기면
 `turn_voice.tts_ms` 에 적힌다. `speak()` 은 재생이 끝날 때까지 기다리고 같은 값을 돌려준다.
-합성이 도중에 끊기면 받은 만큼만 재생하고, 소리를 하나도 못 냈으면 `None` 을 돌려준다.
+합성이 멈추면(읽기 타임아웃 4초) 폴백 모델(`JARVISEO_TTS_FALLBACK_MODEL`, 기본 `tts-1`)로 한 번 더 요청해
+처음부터 읽는다. 읽던 중이었으면 앞부분이 한 번 더 나온다(#130). 끼어들어 끊긴 뒤에는 다시 요청하지 않는다.
+폴백 요청도 멈추면 받은 만큼만 재생하고, 소리를 하나도 못 냈으면 `None` 을 돌려준다.
 
 모델 이름은 `config.py` 에서만 정한다. 지금은 STT `gpt-transcribe`, TTS `gpt-4o-mini-tts`
 (`.env` 의 `JARVISEO_STT_MODEL`, `JARVISEO_TTS_MODEL`).

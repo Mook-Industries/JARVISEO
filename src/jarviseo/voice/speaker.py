@@ -34,17 +34,27 @@ class Speaker:
     """``Speaker().play(tts.synthesize(text))``. 다른 스레드에서 ``stop()`` 으로 끊는다."""
 
     def __init__(
-        self, device: int | None = None, gate: MicGate | None = None, latency: str = "high"
+        self,
+        device: int | None = None,
+        gate: MicGate | None = None,
+        latency: str = "high",
+        piece_bytes: int | None = PIECE_BYTES,
     ) -> None:
         """gate 는 테스트에서만 넘긴다. 기본은 STT 와 같이 쓰는 ``MIC_GATE``.
 
         latency 는 sounddevice 출력 버퍼 크기("high"/"low"). 조각이 네트워크로 띄엄띄엄 오는
         TTS 는 "high", 소리를 통째로 들고 있는 시작음·종료음은 "low" 로 첫 소리를 당긴다
         (노트북 스피커 MME 에서 출력 지연 182ms → 93ms, #104).
+
+        piece_bytes 는 스피커에 한 번에 쓰는 크기다. None 이면 받은 조각을 통째로 한 번에 쓴다.
+        write() 는 버퍼에 자리가 날 때까지 GIL 을 놓고 C 안에서 기다리는데, 나눠 쓰면 조각마다
+        GIL 을 다시 받아야 해서 다른 파이썬 스레드가 바쁘면 버퍼가 비어 소리가 끊긴다.
+        대신 stop() 은 통째로 쓴 조각이 다 나간 뒤에야 듣는다. 끊을 일이 없는 짧은 소리용이다.
         """
         self.device = device
         self.gate = gate or MIC_GATE
         self.latency = latency
+        self.piece_bytes = piece_bytes
         self._stop = threading.Event()
         # 마지막 play() 가 stop() 으로 끊겼으면 True, 그때 소리를 멈춘 시각(monotonic).
         self.interrupted = False
@@ -123,11 +133,12 @@ class Speaker:
 
     def _write(self, out: sd.RawOutputStream, chunk: bytes) -> bool:
         """chunk 를 나눠 쓴다. 도중에 멈춤 신호가 오면 멈춘 시각을 남기고 False."""
-        for i in range(0, len(chunk), PIECE_BYTES):
+        step = self.piece_bytes or len(chunk)
+        for i in range(0, len(chunk), step):
             if self._stop.is_set():
                 self._interrupted()
                 return False
-            out.write(chunk[i : i + PIECE_BYTES])
+            out.write(chunk[i : i + step])
         return True
 
     def _interrupted(self) -> None:

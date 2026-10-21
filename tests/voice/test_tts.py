@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 import httpx2
+import openai
 import pytest
 
 from jarviseo import config
@@ -215,17 +216,61 @@ def test_stop_then_stall_does_not_request_again(played):
     assert tts.last_interrupted is True
 
 
-def test_broken_stream_plays_received_part_without_raising(played):
-    """받는 도중 끊기면 받은 만큼만 재생하고 예외를 올리지 않는다."""
+def test_stall_while_reading_requests_fallback_and_reads_from_start(played):
+    """읽는 도중 합성이 멈추면 폴백 모델로 한 번 더 요청해 처음부터 끝까지 읽는다(#130)."""
+
+    def stalled(size):
+        yield b"\x01" * size
+        client.chunks = two_chunks  # 다시 요청하면 이번에는 끝까지 온다
+        raise httpx2.ReadTimeout("읽는 도중 서버가 멈췄다")  # openai 가 감싸지 않고 그대로 올라온다
+
+    client = FakeClient(stalled)
+    tts = TextToSpeech(voice="alloy", speed="FAST", client=client)
+
+    took = tts.speak("컵이에요.")
+
+    assert [r["model"] for r in client.requests] == [config.TTS_MODEL, config.TTS_FALLBACK_MODEL]
+    assert client.requests[0] | {"model": None} == client.requests[1] | {"model": None}
+    # 앞부분이 한 번 더 나오고 끝까지 읽었다
+    assert b"".join(played) == b"\x01" * CHUNK_BYTES * 2 + b"\x02" * CHUNK_BYTES
+    assert took == tts.last_latency_ms >= 0  # 처음 받은 첫 조각 시간
+    assert tts.last_interrupted is False
+
+
+def test_stall_again_after_fallback_plays_received_part_without_raising(played):
+    """폴백 요청도 도중에 멈추면 받은 만큼만 재생하고 예외를 올리지 않는다. 세 번째 요청은 없다."""
 
     def cut(size):
         yield b"\x01" * size
-        raise httpx2.ReadTimeout("끊김")  # openai 가 감싸지 않고 그대로 올라온다
+        raise httpx2.ReadTimeout("끊김")
 
-    took = TextToSpeech(client=FakeClient(cut)).speak("안녕하세요.")
+    client = FakeClient(cut)
+    took = TextToSpeech(client=client).speak("안녕하세요.")
 
-    assert b"".join(played) == b"\x01" * CHUNK_BYTES
+    assert len(client.requests) == 2
+    assert b"".join(played) == b"\x01" * CHUNK_BYTES * 2
     assert took is not None
+
+
+def test_stop_then_stall_while_reading_does_not_request_again(played):
+    """읽는 도중 끊긴 뒤 합성이 멈춰도 다시 요청하지 않는다."""
+
+    def stalled(size):
+        yield b"\x01" * size
+        wait_until(lambda: len(b"".join(played)) == size)  # 첫 조각을 다 읽었다
+        client.chunks = two_chunks
+        tts.stop()  # 끊은 바로 그때 읽기 타임아웃이 났다
+        raise httpx2.ReadTimeout("읽는 도중 서버가 멈췄다")
+
+    client = FakeClient(stalled)
+    tts = TextToSpeech(client=client)
+
+    tts.speak("안녕하세요.")
+    time.sleep(0.2)  # 다시 요청했다면 이때까지 보냈다
+
+    assert len(client.requests) == 1
+    assert b"".join(played) == b"\x01" * CHUNK_BYTES
+    assert tts.last_interrupted is True
 
 
 def test_no_first_chunk_plays_nothing_and_returns_none(played):
@@ -243,7 +288,7 @@ def test_no_first_chunk_plays_nothing_and_returns_none(played):
 
 
 def test_stalled_before_first_chunk_retries(played):
-    """첫 조각 전에 멈췄으면 새로 요청해서 읽는다."""
+    """첫 조각 전에 멈췄으면 폴백 모델로 새로 요청해서 읽는다."""
 
     def stalled_once(size):
         client.chunks = two_chunks  # 다음 요청은 정상
@@ -255,9 +300,42 @@ def test_stalled_before_first_chunk_retries(played):
 
     took = tts.speak("안녕하세요.")
 
-    assert len(client.requests) == 2
+    assert [r["model"] for r in client.requests] == [config.TTS_MODEL, config.TTS_FALLBACK_MODEL]
     assert b"".join(played) == b"" * CHUNK_BYTES + b"" * CHUNK_BYTES
     assert took == tts.last_latency_ms >= 0
+
+
+def test_no_response_head_falls_back(played):
+    """응답 머리도 못 받아 openai 가 `APITimeoutError` 를 올리면 폴백 모델로 새로 요청한다."""
+
+    def no_head(size):
+        client.chunks = two_chunks
+        request = httpx2.Request("POST", "https://api.openai.com/v1/audio/speech")
+        raise openai.APITimeoutError(request=request)  # openai 가 RETRIES 만큼 다시 보낸 뒤
+        yield
+
+    client = FakeClient(no_head)
+    tts = TextToSpeech(client=client)
+
+    took = tts.speak("안녕하세요.")
+
+    assert [r["model"] for r in client.requests] == [config.TTS_MODEL, config.TTS_FALLBACK_MODEL]
+    assert b"".join(played) == b"" * CHUNK_BYTES + b"" * CHUNK_BYTES
+    assert took is not None
+
+
+def test_other_api_error_does_not_fall_back(played):
+    """멈춤이 아닌 API 오류(크레딧 소진 429 등)는 다시 요청하지 않고 소리 없이 None 을 준다."""
+
+    def refused(size):
+        raise openai.OpenAIError("크레딧이 없다")
+        yield
+
+    client = FakeClient(refused)
+
+    assert TextToSpeech(client=client).speak("안녕하세요.") is None
+    assert len(client.requests) == 1
+    assert played == []
 
 
 def test_first_chunk_wait_is_short_with_one_retry(monkeypatch):
@@ -326,6 +404,30 @@ def test_failed_prefetch_makes_speak_silent_none(played):
 
     assert tts.speak("컵이에요.") is None
     assert played == []
+
+
+def test_prefetched_stall_while_reading_falls_back(played):
+    """미리 받던 대답이 "잠깐만요" 뒤 읽는 도중 멈춰도 폴백 모델로 처음부터 끝까지 읽는다.
+
+    #117 실측 88 · 90 턴: 필러 뒤 대답이 "네"까지만 나오고 조용히 끝났다.
+    """
+
+    def stalled(size):
+        yield b"" * size
+        client.chunks = two_chunks
+        raise httpx2.ReadTimeout("읽는 도중 서버가 멈췄다")
+
+    client = FakeClient(stalled)
+    tts = TextToSpeech(client=client)
+
+    tts.prefetch("컵이에요.")
+    time.sleep(0.1)  # "잠깐만요"를 읽는 동안 받기 시작했다
+    took = tts.speak("컵이에요.")
+
+    assert [r["model"] for r in client.requests] == [config.TTS_MODEL, config.TTS_FALLBACK_MODEL]
+    assert b"".join(played) == b"" * CHUNK_BYTES * 2 + b"" * CHUNK_BYTES
+    assert took is not None
+    assert tts.last_interrupted is False
 
 
 @pytest.mark.parametrize(
