@@ -36,6 +36,8 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from sqlalchemy import make_url
+from sqlalchemy.exc import OperationalError
 
 from jarviseo import config
 from jarviseo.capture import FrameBuffer, FrameSource, WebcamSource
@@ -227,6 +229,25 @@ def run(
             barge.clear()
 
 
+def open_store(url: str) -> MemoryStore:
+    """DB 를 열고 테이블을 만든다. 못 붙으면 할 일을 알려 주고 끝낸다.
+
+    마이크·카메라를 열기 전에 한다. 도커를 안 켠 채 시연을 시작해도 몇 초 안에 이유를 안다(#131).
+    """
+    store = MemoryStore(database_url=url)
+    try:
+        store.init_schema()
+    except OperationalError as e:
+        where = make_url(url).render_as_string(hide_password=True)
+        reason = str(e.orig or e).strip().splitlines()[0]
+        raise SystemExit(
+            f"DB 에 연결하지 못했습니다: {where}\n  {reason}\n"
+            "  Postgres 면 도커를 켜고 `docker compose up -d db` 를 하거나, "
+            f"--db 를 빼고 SQLite({DEFAULT_DB})로 돌리세요."
+        ) from None
+    return store
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="호출어 → 질문 → VLM → 음성 대답")
     parser.add_argument("mic", type=int, nargs="?", help="sounddevice 입력 장치 번호")
@@ -236,8 +257,7 @@ def main() -> None:
     parser.add_argument("--no-photos", action="store_true", help=f"{PHOTO_DIR}/ 에 사진 안 남김")
     args = parser.parse_args()
 
-    store = MemoryStore(database_url=args.db)
-    store.init_schema()
+    store = open_store(args.db)
     user_id = store.ensure_user()
     session_id = store.start_session(user_id, title="assistant")
     vlm = VLMClient()

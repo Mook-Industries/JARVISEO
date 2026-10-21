@@ -175,6 +175,10 @@ DB_PASSWORD = _get("JARVISEO_DB_PASSWORD", "jarviseo")
 DATABASE_URL = _get("JARVISEO_DATABASE_URL") or (
     f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 )
+# Postgres 연결을 기다리는 최대 시간(초). 없으면 윈도우에서 컨테이너가 꺼져 있을 때
+# psycopg 가 닫힌 포트를 알아채지 못하고 끝없이 기다린다(#131).
+# localhost 는 주소 두 개(127.0.0.1, ::1)를 차례로 시도해서 실제로는 이것의 2배까지 걸린다.
+DB_CONNECT_TIMEOUT_SEC = _get_int("JARVISEO_DB_CONNECT_TIMEOUT_SEC", 3)
 
 # --- 음성 ----------------------------------------------------------------
 WAKE_WORD = _get("JARVISEO_WAKE_WORD", "자비서")

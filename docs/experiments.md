@@ -674,6 +674,26 @@ D14 통합 실측(세션 14)에서 "자비서, 아까 본 지갑 기억나?"에 
 | assistant.py 15턴 이상(8분 이상): `total − (stt + vlm + tts)` 가 턴이 지나도 늘지 않음 | 아직 | 실측 남음 |
 | CI 4개 job | 로컬 485 passed / 21 skipped. CI 는 푸시 뒤 | CI 남음 |
 
+## Postgres 가 꺼져 있을 때 연결 대기 (#131, 2026-10-21)
+
+#118 점검 중 Postgres(도커)를 안 띄운 채 `assistant.py --db postgresql+psycopg://…localhost:5432/…` 를 켜니 아무것도 찍지 않고
+3분 넘게 멈췄다. psycopg 3.3.6 이 윈도우에서 닫힌 포트에 연결할 때 `wait_conn` 의 select 가 실패를 알아채지 못하고,
+`create_engine` 에 `connect_timeout` 이 없어서 끝이 없다(테스트 conftest 는 3초를 줘서 안 보였다).
+
+이 노트북(윈도우, 5432 닫힘)에서 잰 연결 실패까지 걸린 시간:
+
+| connect_timeout | 실패까지 | 비고 |
+|---|---|---|
+| 없음 | 끝없음(25초에 강제 종료) | 고치기 전 |
+| 2초 | 4.0초 | `localhost` 는 127.0.0.1 · ::1 을 차례로 시도해서 2배 |
+| 5초 | 10.0초 | 이슈에 적은 기본값 |
+| **3초(기본)** | `assistant.py` 의 연결 단계 6.6초(2번 잼) | `JARVISEO_DB_CONNECT_TIMEOUT_SEC` |
+
+- `MemoryStore` 가 Postgres 주소면 `connect_timeout` 을 준다. 5초는 `localhost` 에서 10초가 걸려서 3초로 정했다.
+- `assistant.py` 는 마이크 · 카메라를 열기 전에 DB 를 열어 보고, 못 붙으면 주소(비밀번호 가림) · 원인 · 할 일을 찍고 끝낸다.
+- 켜고 안내가 나오기까지 전체는 18.8초다. 그중 약 9.8초는 import(openai 패키지 6.2초 등)라 SQLite 로 켜도 똑같이 걸린다.
+  연결을 기다리는 시간만 보면 6.6초다. 시작 import 를 줄이는 것은 이 이슈와 따로 본다.
+
 ## VLM 사진 크기별 왕복 (spike 3, 2026-10-19)
 
 `scripts/spike/spike_03_vlm.py`. 맥북(M3), VLM `gpt-6-sol`(reasoning none).
