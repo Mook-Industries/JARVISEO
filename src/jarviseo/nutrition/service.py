@@ -66,6 +66,7 @@ from jarviseo.nutrition.response import (
     RETAKE_STEADY,
     RETAKE_UNCOVER,
     RETAKE_WHOLE,
+    SMALL_TEXT_NOTE,
     build_message,
 )
 from jarviseo.types import (
@@ -81,6 +82,13 @@ __all__ = ["IngredientCheck", "IngredientChecker"]
 
 # 성분표를 읽었지만 알레르기 표시가 없던 제품을 캐시에 남길 때 쓴다. 판정 쪽은 비었는지만 본다.
 OCR_NO_NOTICE = "알레르기 유발물질 표시 없음 (성분표 판독)"
+
+# 원본 사진에서 성분표 글줄 높이(px, 중앙값)가 이보다 작으면 '글씨가 작다'고 본다.
+# 키워 읽어도 없는 정보는 생기지 않아서 '밀'을 '일'로 읽는 식의 오독이 남는다.
+# 실측(평가 세트 21장, PaddleOCR): 22px 미만 4장(label_05·09·14·19)이 모두 알레르기를 하나씩 놓쳤다.
+MIN_TEXT_PX = 22.0
+# 글줄 높이를 잴 때 쓰는 줄의 최소 글자 수. 짧은 조각(숫자·기호)은 높이가 들쭉날쭉하다.
+_TEXT_PX_MIN_CHARS = 8
 
 
 @dataclass
@@ -103,6 +111,8 @@ class IngredientCheck:
     # 성분표가 잘린 사유 (occlusion.CUT_HEADER / CUT_EDGE). 빈 문자열이면 다 보였다.
     occlusion: str = ""
     panel_region: BBox | None = None  # 자동으로 찾은 성분표 영역 (못 찾았거나 끄면 None)
+    # 원본 사진 기준 글줄 높이(px). MIN_TEXT_PX 보다 작으면 오독으로 놓쳤을 수 있다고 알린다.
+    text_px: float = 0.0
 
 
 @dataclass
@@ -113,6 +123,15 @@ class _OcrPass:
     angle: int = 0  # 회전 보정으로 돌린 각도 (시계 방향)
     size: tuple[int, int] = (0, 0)  # 읽은 이미지 (너비, 높이). 돌려 읽었으면 돌린 뒤 크기
     borders: Borders = field(default_factory=Borders)  # 읽은 이미지의 변이 사진 가장자리인가
+    scale: float = 1.0  # 원본 대비 키운 배율
+
+    @property
+    def text_px(self) -> float:
+        """원본 사진 기준 글줄 높이(px)의 중앙값. 잴 줄이 없으면 0."""
+        hs = sorted(
+            ln.bbox.height / self.scale for ln in self.lines if len(ln.text) >= _TEXT_PX_MIN_CHARS
+        )
+        return hs[len(hs) // 2] if hs else 0.0
 
     def occlusion(self) -> str:
         s = self.sections
@@ -143,6 +162,7 @@ class IngredientChecker:
         quality_check: OCR 전 품질 검사. None 이면 검사하지 않는다(테스트용 단색 이미지 등).
         try_rotation: 원재료명을 못 찾으면 90°·270° 로 돌려서도 읽는다(ocr.read_upright).
         auto_region: 성분표 영역을 먼저 찾아 그 부분만 크게 읽는다(region.locate_panel).
+        min_text_px: 글씨가 작다고 볼 글줄 높이(원본 px). 0 이면 보지 않는다.
     """
 
     def __init__(
@@ -157,7 +177,9 @@ class IngredientChecker:
         try_rotation: bool = config.OCR_TRY_ROTATION,
         food_qr: FoodQrClient | None = None,
         auto_region: bool = config.OCR_AUTO_REGION,
+        min_text_px: float = MIN_TEXT_PX,
     ) -> None:
+        self.min_text_px = min_text_px
         self.try_rotation = try_rotation
         self.auto_region = auto_region
         self.store = store
@@ -286,7 +308,8 @@ class IngredientChecker:
         # 영역만 잘라 읽었으면, 그 영역의 변이 사진 가장자리에 닿은 쪽만 '잘림'을 본다.
         r = region or BBox(0, 0, w, h)
         borders = Borders(r.y1 <= 1, r.x2 >= w - 1, r.y2 >= h - 1, r.x1 <= 1).rotated(angle)
-        return _OcrPass(lines, sections, mean_confidence(lines), angle, size, borders)
+        scale_used = panel.shape[1] / max(1.0, r.width)  # 최대 크기 제한으로 줄었을 수 있다
+        return _OcrPass(lines, sections, mean_confidence(lines), angle, size, borders, scale_used)
 
     def _passes(self, p: _OcrPass) -> bool:
         return p.conf >= self.conf_threshold and p.sections.has_ingredient_header
@@ -376,7 +399,9 @@ class IngredientChecker:
             rotation=best.angle,
             panel_region=region,
             occlusion=occlusion,
+            text_px=best.text_px,
         )
+        small = readable and 0 < result.text_px < self.min_text_px
 
         found = judgement.verdict in (AllergenVerdict.CONTAINS, AllergenVerdict.MAY_CONTAIN)
         if occlusion and not found:
@@ -384,6 +409,13 @@ class IngredientChecker:
             judgement.verdict, judgement.reason = AllergenVerdict.UNDETERMINED, "occluded"
             if retake_count < self.max_retake:
                 result.retake = result.message = RETAKE_UNCOVER
+                return result
+
+        if small and not found and judgement.verdict is AllergenVerdict.NOT_DETECTED:
+            # 글씨가 작으면 오독으로 놓쳤을 수 있다(실측: '밀'→'일'). '못 찾았어요'라고 하지 않는다.
+            judgement.verdict, judgement.reason = AllergenVerdict.UNDETERMINED, "small_text"
+            if retake_count < self.max_retake:
+                result.retake = result.message = RETAKE_CLOSER
                 return result
 
         needs_retake = (
@@ -403,9 +435,12 @@ class IngredientChecker:
         if occlusion and found:
             # 찾은 경고는 바로 전하고, 가려진 데가 있었다는 것도 함께 말한다.
             judgement.response_text += " " + OCCLUDED_NOTE
+        elif small and found:
+            # 찾은 경고는 바로 전하고, 글씨가 작아 빠진 게 있을 수 있다는 것도 함께 말한다.
+            judgement.response_text += " " + SMALL_TEXT_NOTE
         result.message = judgement.response_text
         # 가려진 사진에서 읽은 성분은 캐시에 남기지 않는다. 일부만 읽은 정보가 굳으면 안 된다.
-        if readable and not occlusion and self.store is not None and barcode:
+        if readable and not occlusion and not small and self.store is not None and barcode:
             # OCR 로 처음 읽은 제품은 확인 전(pending)으로 캐시한다. 틀린 판독이 굳지 않게.
             # 성분표를 직접 읽었는데 알레르기 표시가 없었다는 것도 정보다. 칸을 비워 두면
             # 다음에 캐시에서 꺼냈을 때 '표시를 못 받은 정보'로 보고 또 OCR 을 돌린다.
