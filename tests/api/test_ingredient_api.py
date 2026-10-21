@@ -12,14 +12,16 @@ import pytest
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from jarviseo.api.main import create_app  # noqa: E402
+from jarviseo.api.main import barcode_steps, create_app, evidence, expand_allergens  # noqa: E402
 from jarviseo.memory import MemoryStore  # noqa: E402
+from jarviseo.nutrition.allergen import KNOWN_ALLERGENS  # noqa: E402
 from jarviseo.nutrition.barcode import BarcodeLookup  # noqa: E402
 from jarviseo.nutrition.service import IngredientCheck  # noqa: E402
 from jarviseo.types import (  # noqa: E402
     AllergenJudgement,
     AllergenVerdict,
     BarcodeRead,
+    IngredientSource,
     ProductInfo,
 )
 
@@ -140,3 +142,97 @@ def test_ocr_status_probes_remote_server(client_and_checker, monkeypatch, health
     d = client.get("/api/ocr-status").json()
     assert d["remote"] is True and d["up"] is up
     assert d["notebook_url"] == "https://colab.example/nb"
+
+
+# --- 시험용 '모두' · 근거 · 바코드 단계 ----------------------------------------------
+
+
+@pytest.mark.parametrize("word", ["모두", "테스트"])
+def test_all_keyword_expands_to_every_known_allergen(word):
+    names = expand_allergens([word, "키위"])
+    assert names[: len(KNOWN_ALLERGENS)] == KNOWN_ALLERGENS and names[-1] == "키위"
+
+
+def test_without_keyword_names_stay():
+    assert expand_allergens(["계란", "땅콩"]) == ["계란", "땅콩"]
+
+
+def test_ingredient_with_all_keyword_checks_every_allergen(client_and_checker):
+    client, checker = client_and_checker
+    client.post("/api/ingredient?allergens=모두", content=jpeg())
+    assert checker.calls[-1] == KNOWN_ALLERGENS
+
+
+def ocr_result(ingredients="", notice="", cross="") -> IngredientCheck:
+    info = ProductInfo(barcode=None, product_name="", raw_ingredients=ingredients,
+                       allergen_notice=notice, cross_contamination=cross,
+                       source=IngredientSource.OCR)  # fmt: skip
+    return IngredientCheck(
+        judgement=AllergenJudgement(verdict=AllergenVerdict.CONTAINS, product=info),
+        message="",
+        barcode=BarcodeLookup(None, None, reason="no_barcode"),
+        ocr_text="원재료명 ...",
+    )
+
+
+def test_evidence_shows_where_each_allergen_was_found():
+    """알레르기마다 어느 구간에서 어떤 글자로 찾았는지, 못 찾은 것도 함께 준다."""
+    synonyms = {"밀": ["밀", "소맥분"], "우유": ["우유", "탈지분유"], "알류": ["알류", "계란"]}
+    r = ocr_result("소맥분, 설탕", "밀 함유", "이 제품은 계란을 사용한 제품과 같은 제조시설")
+    rows = {e["allergen"]: e for e in evidence(r, ["밀", "계란", "우유"], synonyms)}
+    assert rows["밀"]["status"] == "contains"
+    assert rows["밀"]["where"] == [
+        {"section": "원재료", "terms": ["소맥분"]},
+        {"section": "알레르기 표시", "terms": ["밀"]},
+    ]
+    assert rows["계란"]["status"] == "may"  # 사용자가 쓴 이름으로 돌려준다
+    assert rows["우유"] == {
+        "allergen": "우유",
+        "status": "not_found",
+        "where": [],
+        "ingredient_only": False,
+    }
+    assert not rows["밀"]["ingredient_only"]  # 함유 표시에도 있다
+
+
+def test_barcode_steps_when_not_found_then_ocr():
+    r = ocr_result("소맥분")
+    r.barcode = BarcodeLookup(BarcodeRead("8801234567893", "EAN_13"), None, reason="not_found")
+    assert barcode_steps(r) == [
+        "바코드 8801234567893 읽음", "푸드QR에 제품 정보가 없음", "성분표를 읽음",
+    ]  # fmt: skip
+
+
+def test_barcode_steps_when_no_barcode():
+    assert barcode_steps(ocr_result("소맥분")) == ["바코드를 찾지 못함", "성분표를 읽음"]
+
+
+def test_barcode_steps_when_found():
+    r = barcode_result()
+    assert barcode_steps(r) == ["바코드 8801234567893 읽음", "푸드QR에서 제품을 찾음"]
+
+
+def test_ingredient_response_has_evidence_and_steps(client_and_checker):
+    client, _ = client_and_checker
+    d = client.post("/api/ingredient?allergens=밀", content=jpeg()).json()
+    # 가짜 판정기에는 동의어 사전이 없어서 '소맥분'을 밀로 보지 못한다. 칸이 채워지는지만 본다.
+    assert d["evidence"] == [
+        {"allergen": "밀", "status": "not_found", "where": [], "ingredient_only": False}
+    ]
+    assert d["barcode_steps"][0].startswith("바코드 8801234567893")
+
+
+def test_evidence_flags_ingredient_only_hit_when_notice_was_read():
+    """함유 표시가 읽혔는데 원재료에서만 찾은 이름은 판정은 함유 그대로, 표시만 따로 단다."""
+    synonyms = {"밀": ["밀"], "우유": ["우유", "유당"]}
+    r = ocr_result("코코아분밀, 유당", "우유 함유")  # '코코아분말'을 잘못 읽음
+    rows = {e["allergen"]: e for e in evidence(r, ["밀", "우유"], synonyms)}
+    assert rows["밀"]["status"] == "contains" and rows["밀"]["ingredient_only"]
+    assert not rows["우유"]["ingredient_only"]
+
+
+def test_evidence_without_notice_does_not_flag():
+    """함유 표시를 못 읽었으면 원재료가 곧 근거라 따로 달지 않는다."""
+    r = ocr_result("소맥분", "")
+    rows = evidence(r, ["밀"], {"밀": ["밀", "소맥분"]})
+    assert rows[0]["status"] == "contains" and not rows[0]["ingredient_only"]
