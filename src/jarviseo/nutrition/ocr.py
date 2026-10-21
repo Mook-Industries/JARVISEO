@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -443,18 +444,33 @@ def _local_reader() -> OcrReader:
     return easyocr.Reader(["ko", "en"], gpu=False, verbose=False)
 
 
+def google_vision_key() -> str:
+    """.env 의 GOOGLE_VISION_API_KEY. 있으면 성분표 OCR 을 Google Vision 으로 읽는다."""
+    return os.environ.get("GOOGLE_VISION_API_KEY", "").strip()
+
+
+def _colab_or_local() -> OcrReader:
+    """Colab 서버 주소가 설정돼 있으면 그쪽(GPU), 아니면 이 PC 의 EasyOCR(CPU)."""
+    if config.OCR_REMOTE_URL:
+        from jarviseo.nutrition.ocr_remote import RemoteOcrReader
+
+        return RemoteOcrReader(
+            config.OCR_REMOTE_URL, config.OCR_REMOTE_TOKEN, fallback=_local_reader
+        )
+    return _local_reader()
+
+
 def _get_reader() -> OcrReader:
-    """OCR 엔진. Colab 서버 주소가 설정돼 있으면 그쪽(GPU), 아니면 이 PC 의 EasyOCR(CPU)."""
+    """OCR 엔진. Google Vision 키가 있으면 Vision, 실패하면 Colab · 이 PC 순으로 대신 읽는다."""
     global _reader
     if _reader is None:
-        if config.OCR_REMOTE_URL:
-            from jarviseo.nutrition.ocr_remote import RemoteOcrReader
+        key = google_vision_key()
+        if key:
+            from jarviseo.nutrition.ocr_google import GoogleVisionReader
 
-            _reader = RemoteOcrReader(
-                config.OCR_REMOTE_URL, config.OCR_REMOTE_TOKEN, fallback=_local_reader
-            )
+            _reader = GoogleVisionReader(key, fallback=_colab_or_local)
         else:
-            _reader = _local_reader()
+            _reader = _colab_or_local()
     return _reader
 
 

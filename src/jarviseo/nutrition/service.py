@@ -54,6 +54,7 @@ from jarviseo.nutrition.ocr import (
     OcrReader,
     PanelSections,
     crop_and_upscale,
+    google_vision_key,
     join_lines,
     mean_confidence,
     parse_ingredient_text,
@@ -542,4 +543,12 @@ def make_checker(store=None, **kwargs) -> IngredientChecker:
 
     OCR 모델과 동의어 사전을 한 번만 읽도록 앱 시작 때 하나만 만들어 돌려 쓴다.
     """
+    if google_vision_key():
+        # Vision 은 회전 · 반사 · 작은 글자를 스스로 잘 읽는다. 품질 검사로 미리 막으면
+        # 평가 세트 21장 중 6장을 읽어 보지도 않고 재촬영을 시켰다(그중 5장은 Vision 이 다 읽음).
+        # 영역 찾기 · 회전 · 재처리는 모두 OCR 을 한 번 더 부르는 일이라 요금과 시간만 는다.
+        kwargs.setdefault("quality_check", None)
+        kwargs.setdefault("auto_region", False)
+        kwargs.setdefault("try_rotation", False)
+        kwargs.setdefault("max_reprocess", 0)
     return IngredientChecker(store=store, food_qr=make_food_qr_client(), **kwargs)
