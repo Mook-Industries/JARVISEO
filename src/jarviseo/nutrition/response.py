@@ -24,6 +24,7 @@ __all__ = [
     "RETAKE_STEADY",
     "RETAKE_UNCOVER",
     "MAX_WARNING_CHARS",
+    "RETAKE_OTHER_SIDE",
     "RETAKE_WHOLE",
     "SMALL_TEXT_NOTE",
     "build_message",
@@ -34,6 +35,8 @@ __all__ = [
 # 재처리 후에도 판독이 안 될 때 다시 비춰 달라고 하는 안내 (기획 05-workflow 5.4)
 RETAKE_CLOSER = "성분표를 더 가까이 가리켜 주세요."
 RETAKE_WHOLE = "성분표 전체가 보이도록 가리켜 주세요."
+# 글자는 꽤 읽었는데 원재료명이 없을 때. 영양정보 · 주의사항 면을 보여 준 경우가 많다(크런키 실측).
+RETAKE_OTHER_SIDE = "원재료명이 안 보여요. 원재료명이 적힌 면을 보여 주세요."
 # 성분표 일부가 가려졌거나 잘렸을 때 (nutrition/occlusion.py).
 # 찾은 경고가 있으면 경고 뒤에 OCCLUDED_NOTE 를 붙이고,
 # 없으면 RETAKE_UNCOVER 로 다시 보여 달라고 한다.

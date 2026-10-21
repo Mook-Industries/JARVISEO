@@ -15,6 +15,7 @@ from jarviseo.nutrition.response import (
     OCCLUDED_NOTE,
     RETAKE_CLOSER,
     RETAKE_GLARE,
+    RETAKE_OTHER_SIDE,
     RETAKE_STEADY,
     RETAKE_UNCOVER,
     RETAKE_WHOLE,
@@ -591,3 +592,35 @@ def test_large_enough_text_has_no_note(monkeypatch):
     monkeypatch.setattr(service, "lookup_product", miss())
     r = checker(BoxReader(SMALL), min_text_px=8).check(CROP, ["밀"])
     assert r.message == "해당 제품에는 밀이 들어 있어요."
+
+
+# --- 성분표 글자에 찍힌 바코드 숫자 (크런키 실측) ------------------------------------
+
+BACK = [  # 영양정보 · 주의사항 면: 원재료명은 없고 바코드 숫자는 있다
+    ("영양정보 총 내용량 36 g 185 kcal 나트륨 탄수화물 당류 지방 포화지방 단백질", 20),
+    ("8:801062-640782 고객지원센터 080-024-6060 부정불량식품신고는 국번없이 1399", 50),
+]
+
+
+def test_barcode_number_in_ocr_text_finds_cached_product(monkeypatch):
+    """줄무늬는 못 읽어도 OCR 글자의 바코드 숫자로 캐시를 찾으면 그걸로 답한다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    store = MemoryStore(database_url="sqlite://")
+    store.init_schema()
+    code = "8801062640782"
+    store.save_product(
+        ProductInfo(barcode=code, product_name="크런키", raw_ingredients="밀가루, 전지분유",
+                    allergen_notice="밀, 우유 함유", source=IngredientSource.OCR),
+        status="pending",
+    )  # fmt: skip
+    r = checker(BoxReader(BACK), store=store).check(CROP, ["우유"])
+    assert r.message == "해당 제품에는 우유가 들어 있어요."
+    assert r.barcode.barcode.code == code and r.barcode.barcode.symbology == "TEXT"
+
+
+def test_other_side_without_ingredients_asks_for_ingredient_side(monkeypatch):
+    """글자는 꽤 읽었는데 원재료명이 없으면 원재료명이 적힌 면을 보여 달라고 한다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    r = checker(BoxReader(BACK)).check(CROP, ["우유"])
+    assert r.retake == RETAKE_OTHER_SIDE
+    assert r.barcode.barcode.code == "8801062640782"  # 번호는 남겼다(다음에 캐시로 쓰게)

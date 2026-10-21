@@ -289,3 +289,49 @@ def test_invalid_cache_is_ignored(store):
         info = qr.lookup(CODE)
     store.save_product(info, status="invalid")
     assert store.get_product(CODE) is None
+
+
+def test_zxing_reads_when_cv2_misses(monkeypatch):
+    """cv2.barcode 가 못 읽으면 zxing-cpp 로 한 번 더 읽는다."""
+    zxingcpp = pytest.importorskip("zxingcpp")
+    import cv2
+
+    from jarviseo.nutrition import barcode as bc
+
+    img = np.asarray(zxingcpp.write_barcode(zxingcpp.BarcodeFormat.EAN13, "8801062640782"))
+    img = cv2.copyMakeBorder(cv2.resize(img, None, fx=3, fy=3), 40, 40, 40, 40,
+                             cv2.BORDER_CONSTANT, value=255)  # fmt: skip
+
+    class Blind:
+        def detectAndDecodeWithType(self, image):  # noqa: N802 (cv2 이름)
+            return False, (), (), None
+
+    monkeypatch.setattr(bc, "_detector", Blind())
+    reads = bc.read_barcodes(img)
+    assert [r.code for r in reads] == ["8801062640782"] and reads[0].symbology == "EAN_13"
+    assert reads[0].bbox is not None
+
+
+@pytest.mark.parametrize(
+    ("text", "code"),
+    [
+        ("영양정보 8:801062-640782 080-024-6060", "8801062640782"),  # OCR 이 끼운 기호
+        ("품목보고번호 2001054954120 8801234567893", "8801234567893"),  # 880 을 먼저
+        ("품목보고번호 19940377084640 전화 080-024-6060", None),  # 14자리 · 전화번호
+        ("8801062640781", None),  # 체크섬 틀림
+    ],
+)
+def test_find_gtin_in_ocr_text(text, code):
+    from jarviseo.nutrition.barcode import find_gtin
+
+    assert find_gtin(text) == code
+
+
+def test_lookup_code_uses_cache(store):
+    from jarviseo.nutrition.barcode import lookup_code
+
+    with fake_qr([qr_row("밀")]) as qr:
+        info = qr.lookup(CODE)
+    store.save_product(info, status="verified")
+    found = lookup_code(CODE, store=store)
+    assert found.hit and found.barcode.code == CODE and found.barcode.symbology == "TEXT"
