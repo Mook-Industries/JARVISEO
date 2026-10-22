@@ -4,10 +4,11 @@
 카메라·마이크·스피커가 노트북에 꽂혀 있고, 맥·윈도우의 Docker 는 이 장치를 컨테이너로 넘기지 못하기 때문이다.
 대화 기록은 노트북의 SQLite(`data/assistant.db`)에 남는다. 클라우드 대시보드로 보내는 일은 #143·#144 에서 한다.
 
-이 문서는 두 부분이다.
+이 문서는 세 부분이다.
 
 - **처음 한 번 — 설치**: 새 노트북에서 30분쯤. 인터넷이 필요하다.
 - **매번 — 켜기**: 바탕화면 아이콘 더블클릭. 이 노트북에서 30초쯤 뒤 "자비서"를 기다린다.
+- **클라우드 서버(AWS)**: 휴대폰으로 여는 대시보드. main 에 머지되면 저절로 새 버전이 뜬다.
 
 ---
 
@@ -181,3 +182,123 @@ python scripts/start.py --db postgresql+psycopg://jarviseo:jarviseo@localhost:54
 3. PR 로 머지한다. 각 노트북은 `data/models/jarviseo.onnx` 를 지우고 `download_models.py` 를 다시 돌린다.
 
 옛 릴리스는 지우지 않는다. 새 모델이 나쁘면 태그만 되돌리면 된다.
+
+---
+
+## 클라우드 서버 (AWS)
+
+휴대폰에서 `https://<도메인>` 으로 여는 대시보드다. 지금은 `/health` · `/health/db` 만 있고,
+기록 화면과 노트북이 턴을 보내는 길은 #144 에서 붙인다. 카메라 · 마이크를 쓰는 본체는 여전히 노트북에서 돈다.
+
+```
+휴대폰 ──https──▶ <이름>.duckdns.org ──▶ EC2 (서울 ap-northeast-2, t3.micro, 고정 IP)
+                                          ├─ caddy   80·443, https 인증서 자동 발급 · 갱신
+                                          ├─ api     Dockerfile.api (api/cloud.py)
+                                          └─ db      pgvector/pgvector:pg16, 바깥에 안 열림
+GitHub main 머지 ─▶ Actions(deploy.yml) ─OIDC─▶ AWS 역할 ─SSM─▶ 서버에서 deploy/update.sh
+```
+
+| 파일 | 무엇 |
+|---|---|
+| `deploy/compose.yml` | 서버에서 띄우는 세 컨테이너. DB 포트는 열지 않는다 |
+| `deploy/Caddyfile` | 도메인으로 온 요청을 api 로. 인증서는 Caddy 가 알아서 받는다 |
+| `deploy/update.sh` | 서버에서 돈다: api 빌드 → 다시 띄우기 → 스키마 맞추기 → `/health/db` 확인 |
+| `deploy/schema.sql` | `scripts/schema_sql.py` 가 모델에서 뽑은 스키마. 모델을 바꾸면 다시 뽑는다 |
+| `deploy/env.example` | 서버의 `/opt/jarviseo/.env` 모양(도메인 · DB 비밀번호). 실제 값은 서버에만 |
+| `.github/workflows/deploy.yml` | main 머지 때 서버에 새 버전을 띄운다 |
+
+### AWS 에 만든 것
+
+전부 서울 리전이고 `Project=jarviseo` 태그가 붙어 있다. 같은 계정의 다른 자원은 건드리지 않는다.
+
+| 자원 | 이름 | 내용 |
+|---|---|---|
+| EC2 | `jarviseo` | t3.micro, Ubuntu 24.04, 디스크 20GB gp3(암호화), 첫 부팅에 Docker · compose · 스왑 1GB |
+| Elastic IP | `jarviseo` | 서버에 붙은 고정 IP. DuckDNS 도메인이 이 IP 를 가리킨다 |
+| 보안 그룹 | `jarviseo-web` | 80 · 443 만 연다. **SSH(22)는 열지 않는다** — 서버 명령은 SSM 으로 보낸다 |
+| IAM 역할 | `jarviseo-ec2-ssm` | 서버가 SSM 명령을 받는 권한(`AmazonSSMManagedInstanceCore`) |
+| OIDC 제공자 + IAM 역할 | `jarviseo-github-deploy` | GitHub Actions 가 키 없이 빌리는 역할. `Mook-Industries/JARVISEO` 의 main 에서만, 그 서버 한 대에 SSM 명령만 |
+| 예산 | `jarviseo-monthly` | `Project=jarviseo` 비용 월 $10, 실제 80% · 예상 100% 에서 메일 |
+
+GitHub 저장소 변수(Settings → Secrets and variables → Actions → **Variables**)에 `AWS_DEPLOY_ROLE_ARN` · `EC2_INSTANCE_ID` 를 넣어 두었다.
+비밀값이 아니라 위치 정보다. GitHub 에는 AWS 키도, 서버 비밀번호도 없다.
+
+### 비용 (서울, 2026-10-22 AWS 요금 API)
+
+| 항목 | 단가 | 한 달 |
+|---|---|---|
+| EC2 t3.micro | $0.013/시간 | $9.49 |
+| 공인 IPv4(고정 IP) | $0.005/시간 | $3.65 |
+| 디스크 gp3 20GB | $0.0912/GB-월 | $1.82 |
+| **합계** | | **약 $15** (데이터 전송은 이 규모면 무료 범위) |
+
+예산은 태그로 걸러서 본다. 태그는 **결제 콘솔에서 비용 분류 태그로 켜야** 예산에 잡히는데, 자원에 태그를 단 뒤
+청구 데이터에 나타나기까지 최대 24시간이 걸린다. 그 전에는 켜기가 `Tag keys not found` 로 실패한다.
+
+```bash
+aws ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=Project,Status=Active --region us-east-1 --profile jarviseo
+```
+
+### AWS CLI 로그인
+
+액세스 키를 만들지 않고 콘솔 로그인으로 임시 자격 증명을 받는다(AWS CLI 2.32 이상의 `aws login`).
+브라우저가 열리면 로그인하고, 터미널에 `Updated profile jarviseo ...` 가 나올 때까지 그 터미널을 닫지 않는다.
+
+```bash
+aws login --profile jarviseo --region ap-northeast-2
+aws sts get-caller-identity --profile jarviseo
+```
+
+자격 증명은 시간이 지나면 만료된다. 명령이 `ExpiredToken` 으로 실패하면 다시 로그인한다.
+
+### 처음 한 번 — 서버 `.env` 와 첫 배포
+
+DuckDNS 에서 도메인을 만들고 current ip 에 고정 IP 를 넣은 뒤(update ip), 서버에 `.env` 를 만든다.
+DB 비밀번호는 서버에서 만들어 서버에만 둔다(root 만 읽음). 명령은 JSON 파일로 넘긴다. 셸 따옴표가 덜 꼬인다.
+`env-cmd.json` (도메인만 바꾼다):
+
+```json
+{"commands": [
+  "set -e",
+  "mkdir -p /opt/jarviseo",
+  "if [ -f /opt/jarviseo/.env ]; then echo 'already exists'; else umask 077; printf 'DOMAIN=%s\nDB_PASSWORD=%s\n' jarviseo.duckdns.org $(openssl rand -hex 24) > /opt/jarviseo/.env; echo created; fi",
+  "grep '^DOMAIN=' /opt/jarviseo/.env"
+]}
+```
+
+```bash
+aws ssm send-command --profile jarviseo --region ap-northeast-2 --instance-ids <EC2_INSTANCE_ID> --document-name AWS-RunShellScript --parameters file://env-cmd.json --query Command.CommandId --output text
+```
+
+이미 `.env` 가 있으면 건드리지 않는다. DB 를 만든 뒤 비밀번호를 바꾸면 기존 DB 와 맞지 않으니 바꾸지 않는다.
+
+그다음 GitHub **Actions → Deploy → Run workflow**(main)로 첫 배포를 한다. 이후로는 main 에 머지될 때마다
+(`src/jarviseo/**` · `deploy/**` · `Dockerfile.api` · `requirements-api.txt` 가 바뀌었으면) 저절로 돈다.
+
+### 상태 보기 · 로그
+
+SSH 대신 SSM 으로 명령을 보낸다. 결과는 `get-command-invocation` 으로 읽는다.
+
+```bash
+aws ssm send-command --profile jarviseo --region ap-northeast-2 --instance-ids <EC2_INSTANCE_ID> --document-name AWS-RunShellScript --parameters 'commands=["cd /opt/jarviseo/repo/deploy && docker compose --env-file /opt/jarviseo/.env ps && docker compose --env-file /opt/jarviseo/.env logs --tail 30 api caddy"]' --query Command.CommandId --output text
+aws ssm get-command-invocation --profile jarviseo --region ap-northeast-2 --instance-id <EC2_INSTANCE_ID> --command-id <위에서 나온 ID> --query StandardOutputContent --output text
+```
+
+### 끄기 · 지우기
+
+- **잠깐 끄기**: EC2 콘솔에서 인스턴스 **중지**. 서버 요금($9.49)은 멈추지만, 고정 IP 는 붙은 채 쉬어도 시간당 $0.005, 디스크는 그대로 나간다(월 약 $5.5).
+  다시 **시작**하면 IP 는 그대로고 컨테이너는 `restart: unless-stopped` 라 저절로 뜬다.
+- **완전히 지우기**(발표가 끝나고 더 안 쓸 때): 인스턴스 종료(디스크도 같이 지워짐 → **DB 데이터도 사라진다**) →
+  Elastic IP 해제 → 보안 그룹 `jarviseo-web` · 역할 `jarviseo-ec2-ssm`(인스턴스 프로필 포함) · `jarviseo-github-deploy` ·
+  OIDC 제공자(다른 프로젝트가 안 쓰면) · 예산 `jarviseo-monthly` 삭제 → GitHub 저장소 변수 두 개 삭제.
+  남길 기록이 있으면 먼저 `docker compose exec db pg_dump` 로 받아 둔다.
+
+### 문제 해결 (클라우드)
+
+| 증상 | 할 일 |
+|---|---|
+| `https://<도메인>` 이 안 열림, Caddy 로그에 인증서 오류 | DuckDNS 의 current ip 가 고정 IP 와 같은지, 보안 그룹에 80 · 443 이 열려 있는지 본다. 인증서는 80 번으로 확인받는다 |
+| `/health` 는 200 인데 `/health/db` 가 503 | `docker compose ... ps` 로 db 가 healthy 인지 보고, `.env` 의 `DB_PASSWORD` 를 처음 만든 뒤 바꾸지 않았는지 확인한다(바꾸면 기존 DB 와 안 맞는다) |
+| Actions 의 Deploy 가 빨간불 | 그 실행의 로그에 서버에서 돈 `update.sh` 출력이 그대로 나온다. `Not authorized to perform sts:AssumeRoleWithWebIdentity` 면 main 이 아닌 곳에서 돌렸거나 저장소 변수가 틀렸다 |
+| Deploy 가 아예 안 돎 | 바뀐 파일이 위 경로에 없으면 안 돈다. Actions 탭에서 Run workflow 로 돌린다 |
+| SSM 명령이 `Undeliverable` | 서버가 꺼져 있거나 SSM 에 아직 안 붙었다. 켠 뒤 1~2분 기다린다 |
