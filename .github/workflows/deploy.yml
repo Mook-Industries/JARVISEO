@@ -1,0 +1,83 @@
+name: Deploy
+
+# 담당: 문태현 (배포)
+#
+# main 에 머지되면 클라우드 서버(AWS EC2, 서울)에 새 버전을 띄운다.
+#   1. GitHub 이 발급하는 OIDC 토큰으로 AWS 역할(jarviseo-github-deploy)을 빌린다.
+#      AWS 키를 GitHub 에 넣지 않는다. 그 역할은 main 에서 돈 이 워크플로만 빌릴 수 있고,
+#      할 수 있는 일은 그 서버 한 대에 SSM 명령을 보내는 것뿐이다.
+#   2. SSM 으로 서버에 명령을 보낸다: 레포를 이 커밋으로 맞추고 deploy/update.sh 를 돌린다
+#      (api 이미지 빌드 → 다시 띄우기 → 스키마 맞추기 → /health/db 확인). SSH 는 열지 않는다.
+#
+# 저장소 변수(Settings → Secrets and variables → Actions → Variables)가 있어야 돈다.
+#   AWS_DEPLOY_ROLE_ARN   arn:aws:iam::<계정>:role/jarviseo-github-deploy
+#   EC2_INSTANCE_ID       i-...
+# 없으면(포크 등) 건너뛴다. 손으로 다시 배포하려면 Actions 탭에서 Run workflow.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile.api
+      - requirements-api.txt
+      - src/jarviseo/**
+      - deploy/**
+      - .github/workflows/deploy.yml
+  workflow_dispatch:
+
+permissions:
+  id-token: write # OIDC 토큰을 받는다
+  contents: read
+
+# 배포가 겹치면 뒤엣것이 앞엣것을 기다린다. 도중에 끊으면 서버가 반쯤 바뀐 채 남는다.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: vars.AWS_DEPLOY_ROLE_ARN != '' && vars.EC2_INSTANCE_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-northeast-2
+
+      - name: 서버에서 새 버전 띄우기 (SSM)
+        env:
+          INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+          SHA: ${{ github.sha }}
+        run: |
+          # SSM 은 명령을 sh 로 돌린다. bash 전용 문법은 update.sh 안에서만 쓴다.
+          commands=$(jq -cn --arg sha "$SHA" '[
+            "set -e",
+            "R=/opt/jarviseo/repo",
+            "test -d $R/.git || git clone --quiet https://github.com/Mook-Industries/JARVISEO.git $R",
+            "git -C $R fetch --quiet --depth 1 origin \($sha)",
+            "git -C $R checkout --quiet --force \($sha)",
+            "bash $R/deploy/update.sh"
+          ]')
+          cmd_id=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy ${SHA:0:7}" \
+            --parameters "{\"commands\":$commands,\"executionTimeout\":[\"1200\"]}" \
+            --query Command.CommandId --output text)
+          echo "SSM 명령 $cmd_id"
+
+          status=Pending
+          for _ in $(seq 1 240); do
+            sleep 5
+            status=$(aws ssm get-command-invocation --command-id "$cmd_id" --instance-id "$INSTANCE_ID" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            case "$status" in Pending|InProgress|Delayed) ;; *) break ;; esac
+          done
+
+          aws ssm get-command-invocation --command-id "$cmd_id" --instance-id "$INSTANCE_ID" \
+            --query StandardOutputContent --output text
+          aws ssm get-command-invocation --command-id "$cmd_id" --instance-id "$INSTANCE_ID" \
+            --query StandardErrorContent --output text >&2
+          echo "결과: $status"
+          test "$status" = Success

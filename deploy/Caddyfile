@@ -1,0 +1,10 @@
+# 자비서 클라우드 대시보드 앞단.  담당: 문태현 (배포)
+#
+# DOMAIN(예: jarviseo.duckdns.org)으로 들어온 요청을 api 로 넘긴다.
+# 도메인만 적어 두면 Caddy 가 Let's Encrypt 인증서를 받아 https 로 열고, http 는 https 로 돌린다.
+# 인증서를 받으려면 도메인이 이 서버의 IP 를 가리키고 80·443 이 열려 있어야 한다.
+
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy api:8000
+}

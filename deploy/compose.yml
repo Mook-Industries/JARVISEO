@@ -1,0 +1,65 @@
+# 클라우드 서버(AWS EC2) 운영용 compose.  담당: 문태현 (배포)
+#
+# 개발용 docker-compose.yml 과 따로 둔다. 여기서는
+#   - DB 포트를 바깥에 열지 않는다(같은 서버의 api 만 붙는다)
+#   - 비밀번호를 /opt/jarviseo/.env 에서 받는다(Git 에 없다)
+#   - Caddy 가 80·443 을 받아 https 인증서를 알아서 발급 · 갱신하고 api 로 넘긴다
+#
+# 서버에서 직접 돌릴 일은 거의 없다. main 에 머지되면 GitHub Actions 가 deploy/update.sh 를 부른다.
+#     cd /opt/jarviseo/repo/deploy
+#     docker compose --env-file /opt/jarviseo/.env up -d --build
+#     docker compose --env-file /opt/jarviseo/.env logs -f api
+
+name: jarviseo
+
+services:
+  db:
+    # 개발 · CI 와 같은 이미지. 스키마는 update.sh 가 schema.sql 로 맞춘다.
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: jarviseo
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?/opt/jarviseo/.env 에 DB_PASSWORD 가 없다}
+      POSTGRES_DB: jarviseo
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jarviseo -d jarviseo"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    # 서버에서 바로 빌드한다(1분쯤). 이미지 저장소를 두지 않아 서버에 넣을 비밀값이 없다.
+    build:
+      context: ..
+      dockerfile: Dockerfile.api
+    image: jarviseo-api:server
+    restart: unless-stopped
+    environment:
+      JARVISEO_DATABASE_URL: postgresql+psycopg://jarviseo:${DB_PASSWORD}@db:5432/jarviseo
+    depends_on:
+      db:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?/opt/jarviseo/.env 에 DOMAIN 이 없다}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # 받은 인증서를 남겨 둔다. 지우면 다시 발급받는데, 너무 자주 받으면 발급 한도에 걸린다.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
