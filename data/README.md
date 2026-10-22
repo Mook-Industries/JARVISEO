@@ -8,6 +8,7 @@
 | `datasets/` | YOLO 학습·평가용 이미지와 라벨 |
 | `datasets/wakeword/` | 웨이크워드 녹음과 평가 결과 (`scripts/wakeword/`) |
 | `datasets/pointing/` | 가리킴 평가셋 — 촬영 사진 · 정답 표시 · 채점 결과 (`tools/capture_scenes.py` · `tools/label_targets.py` · `scripts/run_ablation.py`) |
+| `datasets/detector/` | 검출기 파인튜닝 학습셋 — 안경 영상 · 뽑은 사진 · 라벨 · 회차별 묶음 (`tools/extract_frames.py` · `tools/auto_label.py`) |
 | `models/` | 학습된 가중치 (`.pt`, `.onnx`) |
 | `videos/` | 촬영한 원본 영상 |
 | `eval/` | 작은 평가셋 CSV. 이것만 커밋한다 (`recall_set.csv`: 기억 질문, `scripts/eval_recall.py`) |
@@ -49,6 +50,43 @@ datasets/pointing/
 - **valid/test 는 세션 단위로 나눈다**(세션 1·2 valid, 3 test). test 는 최종 측정 전까지 채점하지 않고, 한 번 test 로 표시한 세션은 valid 로 옮기지 않는다.
 - s99 를 연습으로 표시하면 그 줄도 `split=valid` 로 저장된다. `run_ablation.py` 는 세션을 가리지 않고 valid 줄을 전부 읽으므로, 기준선을 재기 전에 s99 줄을 지운다(`tools/README.md`).
 - 참/거짓은 `True`/`False` 가 아니라 `0`/`1` 로 쓴다. 글자 `"False"` 를 `bool()` 로 읽으면 참이 되는 함정 때문이다.
+
+## 검출기 학습셋 보관 규칙 (#167)
+
+```
+datasets/detector/
+├── videos/             안경 카메라 영상. 이름은 d01_kitchen.mov (영상 번호 d + 두 자리 · 장소 영어 소문자)
+├── frames/
+│   └── d01/            영상 하나 = 폴더 하나. d01_0001.jpg … (tools/extract_frames.py)
+├── frames.csv          file · video · t_sec — 사진이 어느 영상 몇 초에서 나왔나
+├── auto/               자동 라벨(R1) — labels/*.txt · tasks.json(Label Studio) · label_config.xml
+├── reviewed/           Label Studio 에서 검수하고 YOLO 로 내보낸 것(R2) — labels/ · classes.txt
+└── yolo_r1/            회차 하나 = 폴더 하나 — images/{train,val} · labels/{train,val} · data.yaml
+```
+
+**종류 11개** (`src/jarviseo/pointing/detector.py` 의 `FINETUNE_CLASSES`, 순서 = 라벨 번호. 바꾸지 않고 새 종류는 맨 뒤에만)
+
+| 번호 | 종류 | 경계 사례 |
+|---|---|---|
+| 0 | bottle | 병 모양이면 내용물과 상관없이(물병 · 텀블러 · 소스병) |
+| 1 | cup | 마시는 컵 · 머그. 컵라면은 product |
+| 2 | bowl | 그릇 · 접시 모양 용기 |
+| 3 | laptop | 화면과 붙은 키보드까지 하나로 |
+| 4 | mouse | 컴퓨터 마우스 |
+| 5 | keyboard | 따로 놓인 키보드만 |
+| 6 | cell phone | 휴대폰(COCO 이름 그대로 띄어쓰기) |
+| 7 | remote | 리모컨 |
+| 8 | book | 책 · 공책 |
+| 9 | tv | TV · 모니터(COCO 관례) |
+| 10 | product | COCO 에 없는 포장 식품 — 과자 봉지 · 컵라면 · 캔 · 햇반 · 병조림(잼 병) · 상자 포장 |
+
+- **학습 사진에 보이는 11종은 전부 라벨한다.** 일부 종류만 라벨하면 나머지가 "배경"으로 학습돼 사라진다. 11종 밖 물건(안경 · 시계 등)은 라벨하지 않는다 → 학습한 가중치로는 안 잡힌다.
+- 묶음(햇반 더미 · 책 여러 권)은 한 개씩. 절반 이상 보이면 라벨, 유리 · 화면에 비친 것은 안 한다. 손에 쥔 물건은 보이는 만큼.
+- **학습 / 검증은 영상 단위로 나눈다**(`build --val d05`). 같은 영상에서 1초 차이로 뽑은 사진은 거의 같아서, 사진 단위로 섞으면 검증 점수가 부풀려진다.
+  이 "검증"은 학습 중 best.pt 를 고르는 데만 쓴다. 회차 비교는 가리킴 valid(세션 1 · 2)의 후보 재현율로 한다.
+- **가리킴 test 장소(라운지)와 valid 배치(s01 책상 · s02 선반 · s04 식탁)는 영상에 넣지 않는다.** 평가에 쓰는 장면을 학습하면 회차 비교와 최종 test 숫자가 부풀려진다.
+- Colab 에는 `frames/` 와 가리킴 `raw/s01` · `raw/s02` · `labels.csv` 만 올린다. test(s03) 사진은 올리지 않는다.
+- 얼굴 · 화면 속 메시지 같은 개인 정보는 찍지 않는다(사진이 Colab · Drive 로 간다).
 
 ## 웨이크워드 녹음 보관 규칙
 
