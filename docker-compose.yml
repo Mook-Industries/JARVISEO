@@ -11,8 +11,12 @@
 #     docker compose run --rm dev pytest
 #     docker compose run --rm dev ruff check .
 #
-# 대시보드 (http://localhost:8000)
-#     docker compose up api
+# 클라우드 대시보드 이미지를 로컬에서 띄워 보기 (http://localhost:8000/health)
+#     docker compose up --build api
+#
+# 웹 자비서(api/main.py, 카메라 · 가리킴 · OCR)는 무거운 패키지가 필요해서 dev 이미지로 띄운다.
+# 평소에는 컨테이너 없이 python -m jarviseo.api 로 켠다.
+#     docker compose run --rm -p 8000:8000 dev uvicorn jarviseo.api.main:app --host 0.0.0.0
 #
 # 전부 내리기 (데이터는 남는다)
 #     docker compose down
@@ -69,23 +73,28 @@ services:
     stdin_open: true
     tty: true
 
-  # ── FastAPI · 대시보드 ────────────────────────────────────────────────
+  # ── 클라우드 대시보드 ─────────────────────────────────────────────────
+  # 클라우드에 올리는 것과 같은 작은 이미지(Dockerfile.api, api/cloud.py)다.
+  # torch · OpenCV 가 없어서 작고(디스크 315MB · 받는 크기 74MB · 메모리 55MB) 빌드도 1분이면 끝난다.
   api:
-    build: .
-    image: jarviseo-dev
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: jarviseo-api
     depends_on:
       db:
         condition: service_healthy
     environment:
       JARVISEO_DB_HOST: db
     volumes:
-      - .:/app
+      # 코드만 연결한다. 고치면 --reload 가 다시 띄운다. 이미지에 구운 src 를 덮어쓴다.
+      - ./src:/app/src
     ports:
       - "8000:8000"
     # --host 0.0.0.0 이 꼭 필요하다.
     # 기본값(127.0.0.1)으로 띄우면 컨테이너 안에서만 열려서
     # 호스트 브라우저로는 접속이 안 된다.
-    command: uvicorn jarviseo.api.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn jarviseo.api.cloud:app --host 0.0.0.0 --port 8000 --reload
 
 volumes:
   jarviseo-pgdata:
