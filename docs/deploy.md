@@ -223,6 +223,42 @@ GitHub main 머지 ─▶ Actions(deploy.yml) ─OIDC─▶ AWS 역할 ─SSM─
 GitHub 저장소 변수(Settings → Secrets and variables → Actions → **Variables**)에 `AWS_DEPLOY_ROLE_ARN` · `EC2_INSTANCE_ID` 를 넣어 두었다.
 비밀값이 아니라 위치 정보다. GitHub 에는 AWS 키도, 서버 비밀번호도 없다.
 
+### 배포 역할이 믿는 GitHub 토큰 모양
+
+Actions 가 AWS 에 내미는 OIDC 토큰의 `sub` 에 "어느 저장소의 어느 브랜치에서 돌았는지"가 들어 있고,
+역할 `jarviseo-github-deploy` 는 그 값이 정확히 맞을 때만 빌려준다. 이 저장소는 GitHub 의
+**immutable subject**(바꿀 수 없는 subject)를 쓰고 있어서 `sub` 에 이름 대신 숫자 ID 가 붙는다.
+
+| | `sub` |
+|---|---|
+| 이 저장소의 실제 값 | `repo:Mook-Industries@330743458/JARVISEO@1375536158:ref:refs/heads/main` |
+| 흔히 보는 예시(이름만) | `repo:Mook-Industries/JARVISEO:ref:refs/heads/main` — **이걸로는 거절된다** |
+
+숫자는 조직 ID(`330743458`)와 저장소 ID(`1375536158`)다. 저장소 이름이 바뀌거나 누가 같은 이름으로
+저장소를 다시 만들어도 바뀌지 않아서 이름만 쓰는 것보다 안전하다.
+10/23 첫 자동 배포가 이 차이로 `Not authorized to perform sts:AssumeRoleWithWebIdentity` 에 걸렸다.
+
+역할을 다시 만들 때는 저장소의 지금 형식을 먼저 확인하고 그 `sub_claim_prefix` 뒤에 `:ref:refs/heads/main` 을 붙인다.
+(저장소 관리자 권한이 필요하다. GitHub CLI 가 있으면 `gh api repos/Mook-Industries/JARVISEO/actions/oidc/customization/sub`)
+
+```bash
+curl -H "Authorization: Bearer <GitHub 토큰>" https://api.github.com/repos/Mook-Industries/JARVISEO/actions/oidc/customization/sub
+# {"use_default": true, "use_immutable_subject": true, "sub_claim_prefix": "repo:Mook-Industries@330743458/JARVISEO@1375536158"}
+```
+
+역할의 신뢰 정책(trust policy) 조건은 이렇게 둔다.
+
+```json
+"Condition": {"StringEquals": {
+  "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+  "token.actions.githubusercontent.com:sub": "repo:Mook-Industries@330743458/JARVISEO@1375536158:ref:refs/heads/main"
+}}
+```
+
+```bash
+aws iam update-assume-role-policy --role-name jarviseo-github-deploy --policy-document file://gh-trust.json --profile jarviseo --region ap-northeast-2
+```
+
 ### 비용 (서울, 2026-10-22 AWS 요금 API)
 
 | 항목 | 단가 | 한 달 |
@@ -299,6 +335,8 @@ aws ssm get-command-invocation --profile jarviseo --region ap-northeast-2 --inst
 |---|---|
 | `https://<도메인>` 이 안 열림, Caddy 로그에 인증서 오류 | DuckDNS 의 current ip 가 고정 IP 와 같은지, 보안 그룹에 80 · 443 이 열려 있는지 본다. 인증서는 80 번으로 확인받는다 |
 | `/health` 는 200 인데 `/health/db` 가 503 | `docker compose ... ps` 로 db 가 healthy 인지 보고, `.env` 의 `DB_PASSWORD` 를 처음 만든 뒤 바꾸지 않았는지 확인한다(바꾸면 기존 DB 와 안 맞는다) |
-| Actions 의 Deploy 가 빨간불 | 그 실행의 로그에 서버에서 돈 `update.sh` 출력이 그대로 나온다. `Not authorized to perform sts:AssumeRoleWithWebIdentity` 면 main 이 아닌 곳에서 돌렸거나 저장소 변수가 틀렸다 |
+| Actions 의 Deploy 가 빨간불 | 그 실행의 로그에 서버에서 돈 `update.sh` 출력이 그대로 나온다 |
+| Deploy 가 `configure-aws-credentials` 에서 `Not authorized to perform sts:AssumeRoleWithWebIdentity` | 역할이 믿는 `sub` 가 토큰과 다르다. 위 "배포 역할이 믿는 GitHub 토큰 모양"대로 저장소의 `sub_claim_prefix` 를 확인해 신뢰 정책을 맞춘다. main 이 아닌 브랜치에서 돌렸거나 저장소 변수 `AWS_DEPLOY_ROLE_ARN` 이 틀려도 같은 오류다 |
+| `aws` 명령이 `NoRegion` | 프로필 `jarviseo` 에 리전이 없다. IAM 명령에도 `--region ap-northeast-2` 를 붙인다 |
 | Deploy 가 아예 안 돎 | 바뀐 파일이 위 경로에 없으면 안 돈다. Actions 탭에서 Run workflow 로 돌린다 |
 | SSM 명령이 `Undeliverable` | 서버가 꺼져 있거나 SSM 에 아직 안 붙었다. 켠 뒤 1~2분 기다린다 |
