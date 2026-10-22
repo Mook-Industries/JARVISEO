@@ -6,11 +6,13 @@
 손은 여기서 보지 않는다. 손가락 방향(v2)은 MediaPipe ``HandLandmarker`` 관절로 구하고,
 손끝 YOLO 는 학습하지 않는다(10/14 결정). 손끝 박스 하나로는 방향을 구할 수 없다.
 
-파인튜닝은 측정으로 필요가 확인될 때만 한다. 진열대에서 과자 봉지가 후보에 안 잡히면
-``product`` 클래스를 학습한다. 그때 지킬 것:
+파인튜닝은 측정으로 필요가 확인될 때만 한다(10/14). 안경 시점에서 후보 재현율이 50% 라
+COCO 10종 + ``product``(포장 식품) 11종(``FINETUNE_CLASSES``)을 안경 카메라 영상으로 학습한다(#167).
+11종 밖 물건은 학습한 가중치로는 안 잡힌다. 지킬 것:
 
-1. **baseline 을 학습 전에 잰다.** 학습을 시작한 뒤에는 사전학습 상태의 성능을 되돌려
-   잴 수 없다.
+1. **회차 비교는 같은 코드로 다시 잰다.** 사전학습 가중치(yolov8n.pt)는 파일로 남겨 두고,
+   R1 · R2 가 나올 때마다 R0 까지 같은 코드로 다시 잰다. 날마다 적어 둔 숫자끼리 비교하면
+   그사이 바뀐 채점 코드와 가중치 효과가 섞인다.
 2. **test 셋은 최종 측정 전까지 열지 않는다.** 보면서 튜닝하면 나온 숫자가 실제 성능이
    아니게 된다.
 3. 배포 포맷은 ONNX 로 통일한다. CoreML 은 맥 전용이라 팀원이 못 쓴다.
@@ -24,13 +26,35 @@ import numpy as np
 
 from jarviseo.types import BBox, Detection
 
-__all__ = ["EXCLUDED_LABELS", "MIN_AREA_RATIO", "ObjectDetector", "filter_detections"]
+__all__ = [
+    "EXCLUDED_LABELS",
+    "FINETUNE_CLASSES",
+    "MIN_AREA_RATIO",
+    "ObjectDetector",
+    "filter_detections",
+]
 
 # 안경 시점에서는 사용자 손·팔이 person 으로 잡힌다. 후보에 두면 가운데 단서에서 1위가 되기 쉽다.
 EXCLUDED_LABELS = frozenset({"person"})
 # 화면 넓이의 0.2% (1080p 에서 약 64×64). 이보다 작으면 크롭해도 VLM·OCR 이 못 읽고,
 # 후보만 늘어 margin 을 깎는다. 안경 카메라 사진으로 재기 전까지는 출발점이다.
 MIN_AREA_RATIO = 0.002
+# 파인튜닝으로 학습할 종류. 순서가 곧 클래스 번호(0~10)다. YOLO 라벨 파일에는 이름이 아니라
+# 번호가 적혀서, 순서를 바꾸면 이미 만든 라벨이 전부 다른 물건이 된다. 새 종류는 맨 뒤에만 붙인다.
+# product = COCO 에 없는 포장 식품(봉지 · 컵라면 · 캔 · 햇반 · 병조림). 병 모양이면 bottle 이다.
+FINETUNE_CLASSES = (
+    "bottle",
+    "cup",
+    "bowl",
+    "laptop",
+    "mouse",
+    "keyboard",
+    "cell phone",
+    "remote",
+    "book",
+    "tv",
+    "product",
+)
 
 
 def filter_detections(detections: list[Detection], frame_size: tuple[int, int]) -> list[Detection]:

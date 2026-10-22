@@ -29,6 +29,8 @@ DB 테스트는 여기에 더해 db job 이 pgvector 컨테이너를 띄워 실�
 | `workflow/nodes/test_pointing.py` | 가리킴 길(검출 → 대상 결정 ⇄ 되묻기 → 크롭)과 재촬영 — 크롭이 VLM 에 가는지, 되묻기 상한·한 글자 대답, 가리킴 기록, 손 단서(detect 가 가리키는 손만 상태에 두는지 · 실제 `resolve_target` 이 손 쪽을 되묻지 않고 고르는지 · 되묻기 중에도 손은 한 번만 찾는지 · 손 검출기가 없을 때) |
 | `workflow/nodes/test_ingredient.py` | 성분 질문이 VLM 없이 성분 판정 문장으로 끝나는지 — 크롭·알레르기 전달, 부품·사진 없음, 재촬영 안내 |
 | `tools/test_label_targets.py` | 가리킴 정답 표시 도구: `labels.csv` 읽고 쓰기(헤더 한 번 · 한글 · `0`/`1`), 이미 표시한 사진 건너뛰기, 후보를 왼쪽부터 번호, 미리보기 좌표를 원본으로 되돌리기, 한글 경로 사진 읽기 (YOLO · 화면 없이) |
+| `tools/test_extract_frames.py` | 영상 → 학습 사진: 영상 번호 이름 규칙 · 번호 겹침, 시각으로 1초 간격(들쭉날쭉 · 끊김), dHash 중복 거르기(마지막으로 남긴 장과 비교), `frames.csv` 헤더 한 번, 합성 mp4 로 한 바퀴(못 쓰는 OS 는 건너뜀) |
+| `tools/test_auto_label.py` | 자동 라벨 · 학습 묶음(ultralytics 없이, 가짜 선생): 종류 번호 순서 고정, 글귀 표, YOLO 좌표 · 겹친 박스 합치기, Label Studio 작업 · 설정, 선생 성적(박스 · 종류 · product), `label` 덮어쓰기 거부, `build` 영상 단위 분할 · Label Studio 번호를 이름으로 다시 맞추기 · `data.yaml` 에 `path` 없음 · 적은 종류 경고 · 회차 폴더 덮어쓰기 거부 |
 | `scripts/test_run_ablation.py` | 가리킴 ablation: split · 제외 거르기, 미구현 버전 건너뛰기, 7분류 채점 순서, v1 · v2 실제 `resolve_target` 채점(가운데 · 좌우 대칭 되묻기 · 손이 가리킨 쪽 · 손 단서를 쓴 사진만 '방향 오판'), 지표(손 없는 사진이 없으면 None), `eval_run` · `eval_sample` 기록과 이전 실행 비교, 사진별 CSV |
 | `pointing/test_crop.py` | 대상 크롭이 사진 경계를 넘거나 비어도 보낼 사진이 나오는지 |
 | `pointing/test_detector.py` | 후보 검출이 사람·작은 박스를 빼고, YOLO 결과를 Detection 으로 바꾸는지 (모델은 가짜로) |
