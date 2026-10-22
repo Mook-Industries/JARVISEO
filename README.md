@@ -103,13 +103,17 @@ conda create -n JARVISEO python=3.12 -y && conda activate JARVISEO
 
 `requirements.txt` 는 하한(>=)만 적혀 있어서 깔 때마다 최신 버전이 들어온다. 발표 데모 노트북처럼
 **테스트한 버전 그대로** 깔아야 할 때는 `requirements.txt` 대신 `requirements.lock` 을 쓴다.
-(지금 잠금 파일에는 10/21 에 더한 `mediapipe`·`zxing-cpp` 가 빠져 있다. #142 에서 다시 만든다.)
 윈도우 · 맥 · 리눅스를 한 파일에 담았다(OS 별 패키지는 줄 끝 조건으로 갈린다).
 
 ```bash
 pip install -r requirements.lock
+pip install --no-deps --force-reinstall opencv-contrib-python==5.0.0.93
 pip install -e .
 ```
+
+둘째 줄은 잠금 파일에 cv2 를 까는 패키지가 셋(opencv-python · -headless · -contrib) 다 있어서다.
+headless 가 마지막에 깔리면 `cv2.imshow` 를 쓰는 `tools/` 도구가 안 뜬다. 버전은 잠금 파일의
+`opencv-contrib-python` 줄과 같게 쓴다(개발 이미지 `Dockerfile` 도 같은 일을 한다).
 
 버전을 올릴 때는 `requirements.txt`(또는 `requirements-dev.txt`)를 고친 뒤 [uv](https://docs.astral.sh/uv/) 로 다시 만든다.
 잠금 파일에는 개발 도구(pytest · ruff)도 같이 담는다. 개발 이미지(`Dockerfile`)가 이 파일 하나로 깔기 때문이다.

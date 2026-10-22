@@ -35,8 +35,9 @@ pip install -e .
 
 `pip install` 은 torch·EasyOCR·YOLO 때문에 10분 넘게 걸릴 수 있다.
 
-> `requirements.lock`(버전 고정)은 10/20 에 만든 뒤로 `mediapipe`·`zxing-cpp` 가 빠져 있어서 아직 쓰지 않는다.
-> 다시 만드는 일은 #142 에서 한다.
+> 버전을 고정해서 깔려면 `requirements.txt` 대신 `requirements.lock` 을 쓴다(명령은 README 의 "파이썬 환경" 절).
+> 개발 이미지와 CI 가 쓰는 버전이고 컨테이너 안에서 테스트가 통과했다. 다만 카메라·마이크로 직접 돌려 본
+> 노트북은 `requirements.txt` 로 깐 환경이라, 잠금 파일로 깐 노트북은 처음 켤 때 몇 턴 더 확인한다.
 
 ### 3. `.env` 채우기
 
