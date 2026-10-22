@@ -1,4 +1,4 @@
-"""자동 라벨 — 선생 모델로 학습 사진에 박스 초안을 붙인다.  담당: 최홍묵
+"""자동 라벨 — 선생 모델로 학습 사진에 박스 초안을 붙이고, 회차별 학습 묶음을 만든다.  담당: 최홍묵
 
 YOLO 파인튜닝(#167)의 둘째 단계. tools/extract_frames.py 가 뽑은 사진에 11종
 (pointing/detector.py 의 FINETUNE_CLASSES) 박스를 붙여 두 가지를 만든다.
@@ -8,23 +8,31 @@ YOLO 파인튜닝(#167)의 둘째 단계. tools/extract_frames.py 가 뽑은 사
 명령:
     compare  어느 선생이 우리 valid 사진에서 박스를 더 잘 치나 (YOLO-World 11종 vs yolo11x 10종)
     label    고른 선생으로 라벨 초안을 만든다
+    build    사진 + 라벨로 회차 폴더(yolo_r1 …)를 만든다. 학습 / 검증은 영상 단위로 나눈다
 
-Colab 에서 돌린다. ultralytics 는 YOLO-World 를 처음 쓸 때 CLIP 을 git 에서 자동으로 설치해서,
-팀 파이썬 환경에서 돌리면 승인 없이 패키지가 깔린다. 순수 함수는 CI 에서 테스트한다.
+compare · label 은 Colab 에서 돌린다. ultralytics 는 YOLO-World 를 처음 쓸 때 CLIP 을 git 에서
+자동으로 설치해서, 팀 파이썬 환경에서 돌리면 승인 없이 패키지가 깔린다.
+build 는 모델을 안 써서 어디서든 돈다.
 
 실행 (Colab, 레포 맨 위 폴더에서):
     python tools/auto_label.py compare --pointing /content/drive/MyDrive/JARVISEO/pointing
     python tools/auto_label.py label --root /content/drive/MyDrive/JARVISEO/detector
+    python tools/auto_label.py build --root /content/drive/MyDrive/JARVISEO/detector \\
+        --labels /content/drive/MyDrive/JARVISEO/detector/auto/labels --val d05 \\
+        --out /content/drive/MyDrive/JARVISEO/detector/yolo_r1
 
 저장 (--root 아래):
     auto/labels/d01_0001.txt   YOLO 라벨 (번호 중심x 중심y 너비 높이, 0~1)
     auto/tasks.json            Label Studio 로 가져올 검수 작업
     auto/label_config.xml      Label Studio 프로젝트 설정
+    yolo_r1/images/{train,val}/ · yolo_r1/labels/{train,val}/ · yolo_r1/data.yaml   회차 하나
 """
 
 import argparse
 import csv
 import json
+import re
+import shutil
 from collections import Counter
 from collections.abc import Callable
 from functools import partial
@@ -45,6 +53,10 @@ CONF = 0.25
 MERGE_IOU = 0.7
 # run_ablation.py 의 IOU_MATCH 와 같은 기준. 정답 박스와 절반 넘게 겹치면 잡은 것이다.
 MATCH_IOU = 0.5
+# 영상 번호(extract_frames.py 의 이름 규칙). --val 에 이 모양만 받는다.
+VIDEO_ID = re.compile(r"d\d{2}")
+# 가장 많은 종류의 이만큼에 못 미치는 종류를 경고한다. 그 종류의 AP 만 바닥나는 원인이다.
+RARE_RATIO = 0.1
 
 # 우리 종류 → YOLO-World 에 줄 영어 글귀. "product" 한 단어로는 무엇을 찾을지 몰라서
 # 구체적인 물건 이름으로 찾고 product 로 묶는다.
@@ -359,6 +371,135 @@ def cmd_label(args: argparse.Namespace) -> None:
         print(f"  {name}: {counts[name]}")
 
 
+def split_of(stem: str, val_videos: set[str]) -> str:
+    """사진 이름(d05_0007)의 영상 번호가 검증 영상이면 val, 아니면 train.
+
+    사진 단위로 나누지 않는다. 같은 영상에서 1초 차이로 뽑은 사진은 거의 같아서,
+    학습과 검증에 나뉘어 들어가면 검증 점수가 부풀려진다.
+    """
+    return "val" if stem.split("_", 1)[0] in val_videos else "train"
+
+
+def class_names_file(labels_dir: Path) -> Path | None:
+    """Label Studio 가 YOLO 로 내보낸 classes.txt. 라벨 폴더나 그 위 폴더에 있다.
+
+    auto_label.py label 이 만든 라벨에는 없다(이미 FINETUNE_CLASSES 번호다).
+    """
+    for path in (labels_dir / "classes.txt", labels_dir.parent / "classes.txt"):
+        if path.exists():
+            return path
+    return None
+
+
+def remap_table(names: list[str]) -> dict[int, int]:
+    """classes.txt 의 번호 → 우리 번호를 이름으로 맞춘다.
+
+    Label Studio 가 내보낸 번호 순서가 FINETUNE_CLASSES 순서와 같다는 보장이 없다.
+    맞추지 않으면 bottle 이 cup 으로 학습될 수 있다. 우리 표에 없는 이름이면 멈춘다.
+    """
+    unknown = [name for name in names if name not in FINETUNE_CLASSES]
+    if unknown:
+        raise ValueError(f"classes.txt 에 우리 종류 표에 없는 이름이 있습니다: {unknown}")
+    return {i: FINETUNE_CLASSES.index(name) for i, name in enumerate(names)}
+
+
+def remap_line(line: str, table: dict[int, int] | None) -> str:
+    """라벨 한 줄의 종류 번호를 우리 번호로. table 이 없으면 번호 그대로(범위만 확인)."""
+    cls, rest = line.split(maxsplit=1)
+    new = int(cls) if table is None else table.get(int(cls), -1)
+    if not 0 <= new < len(FINETUNE_CLASSES):
+        raise ValueError(f"종류 번호가 0~{len(FINETUNE_CLASSES) - 1} 밖입니다: {line}")
+    return f"{new} {rest}"
+
+
+def data_yaml() -> str:
+    """ultralytics 데이터 설정.
+
+    path 키는 넣지 않는다. ultralytics 8.4(data/utils.py)는 path 가 없으면 이 파일이 있는 폴더를
+    기준으로 train · val 을 푼다. path: . 같은 상대 경로는 지금 작업 폴더 기준이라 맥과 Colab 에서
+    서로 다른 곳을 가리킨다.
+    """
+    names = "\n".join(f'  {i}: "{name}"' for i, name in enumerate(FINETUNE_CLASSES))
+    return f"train: images/train\nval: images/val\nnames:\n{names}\n"
+
+
+def rare_classes(counts: Counter) -> list[str]:
+    """박스가 가장 많은 종류의 RARE_RATIO 에 못 미치는 종류(0개 포함).
+
+    "전체의 10%"로 재면 11종의 평균이 9% 라 거의 모든 종류가 걸린다. 그래서 가장 많은 종류와 견준다.
+    """
+    top = max(counts.values(), default=0)
+    return [name for name in FINETUNE_CLASSES if counts[name] < top * RARE_RATIO]
+
+
+def cmd_build(args: argparse.Namespace) -> None:
+    # 회차 폴더를 덮어쓰면 그 회차를 다시 학습할 수 없다.
+    if args.out.exists():
+        raise SystemExit(
+            f"이미 있습니다: {args.out} — 회차마다 새 폴더(yolo_r1, yolo_r2 …)를 씁니다"
+        )
+    frames = sorted((args.root / "frames").glob("*/*.jpg"))
+    if not frames:
+        raise SystemExit(
+            f"사진이 없습니다. extract_frames.py 를 먼저 돌립니다: {args.root / 'frames'}"
+        )
+    names_file = class_names_file(args.labels)
+    val_videos = set(args.val)
+
+    # 먼저 다 읽고 검사한 뒤에 쓴다. 중간에 멈추면 반쯤 만든 회차 폴더가 다음 실행을 막는다.
+    # 라벨 파일이 있는 사진만 넣는다. 검수하지 않은 사진을 "물건 없음"으로 가르치지 않으려고.
+    # 빈 라벨 파일은 물건이 없는 사진이라 넣는다.
+    items, missing = [], 0
+    try:
+        table = None
+        if names_file is not None:
+            names = names_file.read_text(encoding="utf-8").splitlines()
+            table = remap_table([name.strip() for name in names if name.strip()])
+        for path in frames:
+            label_path = args.labels / f"{path.stem}.txt"
+            if not label_path.exists():
+                missing += 1
+                continue
+            raw = label_path.read_text(encoding="utf-8").splitlines()
+            lines = [remap_line(line, table) for line in raw if line.strip()]
+            items.append((path, split_of(path.stem, val_videos), lines))
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
+    splits = {split for _, split, _ in items}
+    if "val" not in splits:
+        raise SystemExit(f"검증 영상 {sorted(val_videos)} 의 라벨 붙은 사진이 없습니다")
+    if "train" not in splits:
+        raise SystemExit("학습 사진이 없습니다. 모든 영상을 검증으로 뺐습니다")
+
+    photos, counts = Counter(), {"train": Counter(), "val": Counter()}
+    for path, split, lines in items:
+        image_dir, label_dir = args.out / "images" / split, args.out / "labels" / split
+        image_dir.mkdir(parents=True, exist_ok=True)
+        label_dir.mkdir(parents=True, exist_ok=True)
+        # 링크가 아니라 복사한다. 심볼릭 링크는 윈도우와 Drive 에서 깨진다.
+        shutil.copy2(path, image_dir / path.name)
+        (label_dir / f"{path.stem}.txt").write_text(
+            "".join(f"{line}\n" for line in lines), encoding="utf-8"
+        )
+        photos[split] += 1
+        counts[split].update(FINETUNE_CLASSES[int(line.split()[0])] for line in lines)
+    (args.out / "data.yaml").write_text(data_yaml(), encoding="utf-8")
+
+    val_names = " ".join(sorted(val_videos))
+    print(
+        f"학습 {photos['train']}장 · 검증 {photos['val']}장 (검증 영상 {val_names}) · "
+        f"라벨 없어 뺀 사진 {missing}장"
+    )
+    if names_file is not None:
+        print(f"종류 번호를 이름으로 다시 맞춤: {names_file}")
+    print("종류 | 학습 박스 | 검증 박스")
+    for name in FINETUNE_CLASSES:
+        print(f"  {name} | {counts['train'][name]} | {counts['val'][name]}")
+    rare = rare_classes(counts["train"] + counts["val"])
+    if rare:
+        print(f"경고: 박스가 가장 많은 종류의 10% 에 못 미치는 종류 — {', '.join(rare)}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="자동 라벨 — 선생 모델로 박스 초안")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -380,18 +521,33 @@ def parse_args() -> argparse.Namespace:
     label.add_argument("--teacher", choices=("world", "mix"), default="world", help="선생 모델")
     label.add_argument("--conf", type=float, default=CONF, help="신뢰도 기준")
 
+    build = sub.add_parser("build", help="회차별 학습 묶음 (영상 단위 분할 · data.yaml)")
+    build.add_argument(
+        "--root", type=Path, default=config.DATASETS_DIR / "detector", help="검출기 데이터 폴더"
+    )
+    build.add_argument(
+        "--labels",
+        type=Path,
+        required=True,
+        help="라벨 폴더. R1 은 <root>/auto/labels, R2 는 Label Studio 에서 내보낸 labels",
+    )
+    build.add_argument("--val", nargs="+", required=True, help="검증으로 뺄 영상 번호, 예: d05")
+    build.add_argument("--out", type=Path, required=True, help="회차 폴더, 예: <root>/yolo_r1")
+
     args = parser.parse_args()
-    if not 0 < args.conf < 1:
+    if args.command == "build":
+        bad = [v for v in args.val if not VIDEO_ID.fullmatch(v)]
+        if bad:
+            parser.error(f"--val 은 d05 처럼 영상 번호로 씁니다: {bad}")
+    elif not 0 < args.conf < 1:
         parser.error(f"--conf 는 0 과 1 사이입니다: {args.conf}")
     return args
 
 
 def main() -> None:
     args = parse_args()
-    if args.command == "compare":
-        cmd_compare(args)
-    else:
-        cmd_label(args)
+    commands = {"compare": cmd_compare, "label": cmd_label, "build": cmd_build}
+    commands[args.command](args)
 
 
 if __name__ == "__main__":
