@@ -172,3 +172,37 @@ def test_dashboard_is_served_with_its_script(client):
     js = c.get("/dashboard.js")
     assert js.status_code == 200 and "/api/ask" in js.text and "/api/allergens" in js.text
     assert c.get("/static/jarviseo.css").status_code == 200  # 목업 원본 CSS 를 그대로 쓴다
+
+
+# --- 손 방향 가리킴(v2) ------------------------------------------------------------
+
+
+class NoHands:
+    """손을 못 찾는 손 검출기. 그래프에 넘어가는지만 본다."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def detect(self, image):
+        self.calls += 1
+        return []
+
+
+def test_hand_detector_reaches_graph(tmp_path):
+    """손 검출기를 넣으면 그래프가 그걸로 손을 찾고, 응답에 v2 라고 알린다."""
+    store = MemoryStore(database_url=f"sqlite:///{tmp_path / 'h.db'}")
+    store.init_schema()
+    hands = NoHands()
+    web = WebAssistant(
+        store, None, store.ensure_user(), vlm=FakeVLMClient(["컵이에요."]),
+        detector=CupOnTheLeft(), hands=hands, photo_dir=None,
+    )  # fmt: skip
+    web.ask("저거 뭐야?", np.full((120, 160, 3), 200, np.uint8))
+    assert hands.calls >= 1 and web.pointing == "v2"
+    web.close()
+
+
+def test_without_hand_detector_is_v1(client):
+    c, _ = client
+    d = c.post("/api/ask", json={"question": "오늘 기분 어때?", "image": photo()}).json()
+    assert d["pointing"] == "v1"

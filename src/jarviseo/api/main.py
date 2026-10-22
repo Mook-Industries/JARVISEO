@@ -284,6 +284,7 @@ def _ask(s, question: str, image: np.ndarray | None) -> dict:
             {"text": m.text, "score": round(m.score, 3)} for m in state.get("memories") or []
         ],
         "vlm_real": s.assistant.vlm_real,
+        "pointing": getattr(s.assistant, "pointing", "v1"),  # v2 = 손끝 방향까지 본다
         "turn_id": state.get("turn_id"),
         # stt · tts · total 은 말하고 듣는 시간이라 웹(가짜 STT · TTS)에서는 뜻이 없다
         "latency_ms": {

@@ -28,6 +28,7 @@ OPENAI_API_KEY 가 없으면 VLM 은 가짜(vlm.FakeVLMClient)로 답하고 기�
 
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 
@@ -48,6 +49,9 @@ __all__ = ["NO_KEY_ANSWER", "WebAssistant", "draw_boxes"]
 NO_KEY_ANSWER = "VLM 키(OPENAI_API_KEY)가 없어서 사진을 보고 답할 수 없어요. 이건 가짜 답이에요."
 WHOLE_LABEL = "사진 전체"  # 물체를 못 찾아 사진 전체를 대상으로 줄 때의 이름
 PHOTO_DIR = Path("data/captures/web")
+
+
+log = logging.getLogger(__name__)
 
 
 class _WholeFrameIfNothing:
@@ -100,12 +104,18 @@ class WebAssistant:
         vlm=None,
         detector=None,
         resolve=None,
+        hands=None,
         photo_dir: Path | None = PHOTO_DIR,
     ) -> None:
         self.store, self.checker, self.user_id = store, checker, user_id
         self.photo_dir = photo_dir  # None 이면 사진을 남기지 않는다(테스트)
         self.vlm_real = vlm is None and bool(config.OPENAI_API_KEY)
         self._vlm, self._detector, self._resolve = vlm, detector, resolve
+        # 손 검출기(pointing.hands.HandDetector). 있어야 손끝 방향(v2)으로 가리킨 물건을 고른다.
+        # 테스트처럼 detector 를 직접 넣으면 손은 넣은 것만 쓴다(없으면 v1 = 가운데 우선).
+        self._hands = hands
+        self._load_hands = detector is None and hands is None
+        self.pointing = "v1"  # 지난 턴에 쓴 가리킴 방식(v1 가운데 우선 · v2 가운데 + 손 방향)
         self._dialog = None
         self.retried_whole = False  # 지난 턴에 크롭을 못 읽어 사진 전체로 다시 읽었나
         self.judged_image: np.ndarray | None = None  # 지난 턴 성분 판정에 쓴 사진
@@ -124,6 +134,15 @@ class WebAssistant:
                 from jarviseo.vlm.client import FakeVLMClient
 
                 self._vlm = FakeVLMClient([NO_KEY_ANSWER])
+        if self._load_hands:
+            self._load_hands = False
+            # scripts/assistant.py 와 같게: 손 모델이나 mediapipe 가 없으면 손 단서 없이 돈다
+            try:
+                from jarviseo.pointing.hands import HandDetector
+
+                self._hands = HandDetector()
+            except (FileNotFoundError, ImportError) as e:
+                log.warning("손 단서 꺼짐(가리킴 v1): %s", e)
         if self._detector is None:
             from jarviseo.pointing.detector import ObjectDetector
 
@@ -154,6 +173,7 @@ class WebAssistant:
             vlm=self._vlm,
             frames=frames,
             detector=detector if image is not None else None,
+            hands=self._hands if image is not None else None,
             resolve=self._resolve,
             checker=checker,
             store=self.store,
@@ -162,6 +182,7 @@ class WebAssistant:
             recall_enabled=config.ENABLE_RECALL and self._dialog is not None,
         )
         turn = {"session_id": self.session_id, "user_id": self.user_id, "trigger_type": "WAKEWORD"}
+        self.pointing = "v2" if image is not None and self._hands is not None else "v1"
         state = build_graph(deps).invoke(turn)
         self.retried_whole = isinstance(checker, _RetryWholeFrame) and checker.retried
         self.judged_image = checker.used if isinstance(checker, _RetryWholeFrame) else None
