@@ -19,3 +19,6 @@
 *.onnx binary
 *.db binary
 *.ipynb binary
+
+# cmd.exe 는 LF 줄바꿈 .bat 에서 줄을 잘못 읽는 일이 있다(scripts/start.bat).
+*.bat text eol=crlf

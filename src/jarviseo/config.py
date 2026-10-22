@@ -216,3 +216,8 @@ FILLER_AFTER_SEC = _get_float("JARVISEO_FILLER_AFTER_SEC", 1.5)
 # VLM 답을 이 시간(초)까지만 기다리고, 넘으면 안내 문장으로 턴을 끝낸다. 클라이언트 타임아웃이
 # 10초 × 재시도 1번이라 그대로 두면 최악 20초를 기다린다. spike 3 에서 45번 중 1번(6.5초)만 넘었다.
 VLM_DEADLINE_SEC = _get_float("JARVISEO_VLM_DEADLINE_SEC", 5.0)
+
+# --- 켜기 (scripts/start.py) ---------------------------------------------
+# 켤 때 main 의 새 버전을 받는다(git pull). 확인한 버전 그대로 쓰려면 false 로 고정한다.
+# 누가 main 에 막 머지한 코드를 모르고 받아 잘 되던 노트북이 갑자기 안 켜지는 일을 막는다.
+AUTO_UPDATE = _get_bool("JARVISEO_AUTO_UPDATE", True)
