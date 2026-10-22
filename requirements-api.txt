@@ -1,0 +1,12 @@
+# 클라우드 대시보드 이미지(Dockerfile.api)용 의존성. 담당: 문태현 (배포)
+#
+# api/cloud.py 가 쓰는 것만 넣는다. torch · opencv · ultralytics · easyocr 은 넣지 않는다.
+# pgvector 는 numpy 를 끌어와서 아직 뺀다. VECTOR 열이 있는 테이블을 이 서버가 다룰 때(#143) 더한다.
+# 버전은 requirements.lock 과 같게 박는다. 다르면 tests/api/test_cloud.py 가 실패한다.
+# requirements.lock 을 다시 만들었으면 여기 버전도 맞춘다.
+
+fastapi==0.150.0
+uvicorn[standard]==0.54.0
+sqlalchemy==2.1.5
+psycopg[binary]==3.3.6
+python-dotenv==1.2.4

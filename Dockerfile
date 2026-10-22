@@ -19,34 +19,39 @@
 
 FROM python:3.12-slim
 
-# OpenCV 는 libGL, Whisper 는 ffmpeg 바이너리, sounddevice 는 portaudio 가
-# 있어야 import 부터 된다. slim 이미지에는 없어서 직접 넣는다.
-# 팀원이 윈도우에서 겪던 설치 실패가 대부분 이 줄로 해결된다.
+# OpenCV·MediaPipe 는 libGL, sounddevice 는 portaudio 가 있어야 import 부터 된다.
+# slim 이미지에는 없어서 직접 넣는다. (ffmpeg 는 로컬 Whisper 를 뺀 뒤로 쓰는 곳이 없어 뺐다.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1 \
         libglib2.0-0 \
         libportaudio2 \
-        ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# torch 를 CPU 판으로 **먼저** 설치한다.
-# 그냥 두면 easyocr·whisper·ultralytics 가 CUDA 판을 끌어오는데,
-# 컨테이너에서는 GPU 를 쓰지도 않으면서 이미지만 2GB 넘게 커진다.
-# 학습은 Colab 에서 한다.
-RUN pip install --no-cache-dir torch torchvision \
-        --index-url https://download.pytorch.org/whl/cpu
+# 버전은 requirements.lock(requirements.txt + requirements-dev.txt 를 uv 로 푼 것) 그대로 깐다.
+# requirements.txt 는 하한(>=)만 있어서 빌드할 때마다 최신 버전이 들어와, 어제 되던 이미지가
+# 오늘 깨질 수 있다. 9/19 에 만든 뒤 requirements 가 여러 번 바뀌어도 아무도 빌드를 확인하지 않았다.
+#
+# torch 만 CPU 판으로 **먼저** 따로 깐다. 잠금 파일은 리눅스에서 PyPI 의 CUDA 판 torch 와
+# nvidia-*·cuda-* 패키지(수 GB)를 고르는데, 컨테이너는 GPU 를 쓰지 않는다. 학습은 Colab 에서 한다.
+# 그래서 같은 버전의 CPU 판을 pytorch 저장소에서 받고, 잠금 파일에서는 그 줄들을 빼고 깐다.
+COPY requirements.lock ./
+RUN set -eux; \
+    torch="$(grep -E '^torch==' requirements.lock | cut -d' ' -f1)"; \
+    vision="$(grep -E '^torchvision==' requirements.lock | cut -d' ' -f1)"; \
+    pip install --no-cache-dir "$torch" "$vision" --index-url https://download.pytorch.org/whl/cpu; \
+    grep -vE "^(torch|torchvision)==|^cuda-|^triton|^nvidia-.*sys_platform == 'linux'" requirements.lock \
+        > /tmp/requirements-cpu.lock; \
+    pip install --no-cache-dir -r /tmp/requirements-cpu.lock; \
+    rm /tmp/requirements-cpu.lock
 
-COPY requirements.txt requirements-dev.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
-
-# opencv-python 과 opencv-python-headless 는 둘 다 cv2 를 설치해서 서로 덮어쓴다.
-# requirements.txt 에는 전자가, requirements-dev.txt 에는 후자가 들어 있어
-# 그대로 두면 어느 쪽이 남는지가 설치 순서에 달린다.
-# 컨테이너에는 화면이 없으므로 headless 로 못박는다.
-RUN pip uninstall -y opencv-python opencv-python-headless \
-    && pip install --no-cache-dir opencv-python-headless
+# opencv-python · opencv-python-headless · opencv-contrib-python 은 셋 다 cv2 를 설치해서 서로 덮어쓴다.
+# 잠금 파일에 셋이 다 있다(앱 · CI · mediapipe 가 각각 끌어온다). 어느 쪽이 남는지가 설치 순서에
+# 달리지 않게, 셋 중 가장 넓은 contrib 를 마지막에 같은 버전으로 다시 깐다. 위에서 libGL 을 넣었으므로
+# 화면 없는 컨테이너에서도 import 된다.
+RUN contrib="$(grep -E '^opencv-contrib-python==' requirements.lock | cut -d' ' -f1)" \
+    && pip install --no-cache-dir --no-deps --force-reinstall "$contrib"
 
 # src 레이아웃이라 PYTHONPATH 를 잡아준다.
 # pip install -e . 를 쓰지 않는 이유는, 소스를 바인드 마운트로 덮어쓸 때
