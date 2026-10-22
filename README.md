@@ -107,12 +107,18 @@ pip install -r requirements.lock
 pip install -e .
 ```
 
-버전을 올릴 때는 `requirements.txt` 를 고친 뒤 [uv](https://docs.astral.sh/uv/) 로 다시 만든다.
+버전을 올릴 때는 `requirements.txt`(또는 `requirements-dev.txt`)를 고친 뒤 [uv](https://docs.astral.sh/uv/) 로 다시 만든다.
+잠금 파일에는 개발 도구(pytest · ruff)도 같이 담는다. 개발 이미지(`Dockerfile`)가 이 파일 하나로 깔기 때문이다.
+이미 있는 `requirements.lock` 의 버전을 되도록 그대로 두고, 새로 더한 패키지만 푼다.
 `requirements-overrides.txt` 는 리눅스 전용 `tflite-runtime`(파이썬 3.12 wheel 없음)을 빼려고 쓴다.
 
 ```bash
-uv pip compile requirements.txt --universal --python-version 3.12 --overrides requirements-overrides.txt -o requirements.lock
+pip install uv
+uv pip compile requirements.txt requirements-dev.txt --universal --python-version 3.12 --overrides requirements-overrides.txt -o requirements.lock
 ```
+
+다시 만들었으면 `requirements-api.txt`(클라우드 대시보드 이미지)의 버전도 잠금 파일과 같게 맞춘다.
+다르면 `tests/api/test_cloud.py` 가 알려 준다.
 
 ### 2. 데이터베이스 (도커)
 
@@ -153,14 +159,20 @@ JARVISEO_FRAME_PATH=data/datasets/sample
 잘 깔린 사람은 볼 필요 없다.
 
 ```bash
-docker compose build          # 처음 한 번, 5~10분
+docker compose build dev      # 처음 한 번, 20분쯤 (대부분 받는 시간. 디스크 3.8GB · 받는 크기 0.9GB)
 docker compose run --rm dev   # 컨테이너 셸
 ```
 
 ```bash
 docker compose run --rm dev pytest
-docker compose up api          # 대시보드 → http://localhost:8000
+docker compose run --rm -p 8000:8000 dev uvicorn jarviseo.api.main:app --host 0.0.0.0   # 웹 자비서
 ```
+
+버전은 `requirements.lock` 그대로 들어간다. torch 는 같은 버전의 CPU 판으로 깐다(GPU 를 안 쓰므로).
+
+`docker compose up api` 는 **클라우드에 올리는 대시보드 이미지**(`Dockerfile.api`, `api/cloud.py`)를 띄운다.
+FastAPI · DB 드라이버만 들어 있어 작다(디스크 315MB · 받는 크기 74MB, 메모리 55MB).
+지금은 `/health` · `/health/db` 만 있고, 기록 화면은 #143 · #144 에서 붙인다.
 
 **이 컨테이너 안에서는 카메라·마이크가 안 된다.** 맥과 윈도우의 Docker 는
 리눅스 VM 안에서 돌아서 USB 장치를 넘길 수 없다. 설정 문제가 아니라 구조라
