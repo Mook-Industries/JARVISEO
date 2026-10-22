@@ -24,9 +24,11 @@ done
 compose exec -T db psql -v ON_ERROR_STOP=1 -q -U jarviseo -d jarviseo < schema.sql
 
 echo "== /health"
+# 막 띄운 uvicorn 이 아직 안 받으면 연결 거부가 난다. 기다리는 동안의 오류는 숨기고, 끝내 안 되면 로그를 찍는다.
 for _ in $(seq 1 30); do
   if compose exec -T api python -c \
-      "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health/db').read().decode())"; then
+      "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health/db').read().decode())" \
+      2>/dev/null; then
     docker image prune -f >/dev/null
     exit 0
   fi
