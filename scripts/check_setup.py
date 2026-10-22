@@ -4,8 +4,9 @@
 끝 코드 1 로 끝나서, start.py 가 assistant.py 를 켜지 않는다.
 
 실행 (레포 맨 위 폴더에서, assistant.py 에 줄 값 그대로):
-    python scripts/check_setup.py                    # 기본 마이크·스피커, 0번 웹캠
+    python scripts/check_setup.py                    # .env 의 마이크·스피커·카메라 (비면 기본 장치)
     python scripts/check_setup.py 1 3 --camera 0     # 1번 마이크, 3번 스피커, 0번 웹캠
+    python scripts/check_setup.py USB Buds           # 이름에 USB 가 든 마이크, Buds 가 든 스피커
     python scripts/check_setup.py --db postgresql+psycopg://jarviseo:jarviseo@localhost:5432/jarviseo
     python scripts/check_setup.py --offline          # OpenAI 연결은 건너뜀 (인터넷 없이 확인할 때)
 
@@ -207,21 +208,23 @@ def check_models() -> list[Check]:
     return results
 
 
-def check_audio(mic: int | None, speaker: int | None) -> list[Check]:
+def check_audio(mic: str | None, speaker: str | None) -> list[Check]:
     try:
-        import sounddevice as sd
+        from jarviseo.voice.devices import device_name, find_device
     except Exception:  # noqa: BLE001
         return []  # 패키지 점검에서 이미 실패로 나온다
-    list_hint = 'python -c "import sounddevice; print(sounddevice.query_devices())"'
     results = []
-    for label, device, kind in (("마이크", mic, "input"), ("스피커", speaker, "output")):
+    for label, query, kind, key in (
+        ("마이크", mic, "input", "JARVISEO_MIC"),
+        ("스피커", speaker, "output", "JARVISEO_SPEAKER"),
+    ):
         try:
-            info = sd.query_devices(device, kind=kind)
-            results.append(Check(label, OK, f"{info['index']}번 {info['name']}"))
+            results.append(Check(label, OK, device_name(find_device(query, kind), kind)))
         except Exception as e:  # noqa: BLE001
-            # 번호가 없거나 입력/출력 방향이 틀리면 ValueError, 기본 장치가 없으면 PortAudioError
-            shown = "기본 장치" if device is None else f"{device}번"
-            results.append(Check(label, FAIL, f"{shown}: {e}", f"번호를 확인하세요: {list_hint}"))
+            # 못 찾으면 ValueError(고를 수 있는 이름이 들어 있다), 기본 장치가 없으면 PortAudioError
+            shown = f"'{query}'" if query else "기본 장치"
+            fix = f".env 의 {key} 에 번호나 위 이름 일부를 적으세요"
+            results.append(Check(label, FAIL, f"{shown}: {e}", fix))
     return results
 
 
@@ -316,24 +319,34 @@ def print_report(results: list[Check]) -> None:
         print(f"켤 준비가 됐습니다 (주의 {warns}개).")
 
 
-def main() -> None:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """assistant.py 와 같은 인자를 읽고, 빠진 장치는 .env 값으로 채운다. start.py 도 쓴다."""
     parser = argparse.ArgumentParser(description="assistant.py 를 켜기 전 점검")
-    parser.add_argument("mic", type=int, nargs="?", help="sounddevice 입력 장치 번호")
-    parser.add_argument("speaker", type=int, nargs="?", help="sounddevice 출력 장치 번호")
+    parser.add_argument(
+        "mic", nargs="?", help="마이크 번호나 이름 일부 (기본 .env 의 JARVISEO_MIC)"
+    )
+    parser.add_argument(
+        "speaker", nargs="?", help="스피커 번호나 이름 일부 (기본 .env 의 JARVISEO_SPEAKER)"
+    )
     parser.add_argument("--camera", type=int, default=None, help="웹캠 번호 (기본 .env 의 값)")
     parser.add_argument("--db", default=DEFAULT_DB, help=f"턴을 남길 DB (기본 {DEFAULT_DB})")
     parser.add_argument("--offline", action="store_true", help="OpenAI 연결 점검을 건너뜀")
-    args = parser.parse_args()
-    if args.camera is None:
-        # config 를 맨 위에서 불러오지 않는다. jarviseo 가 설치 안 된 노트북에서도 점검은 떠야 한다.
-        try:
-            from jarviseo import config
+    args = parser.parse_args(argv)
+    # config 를 맨 위에서 불러오지 않는다. jarviseo 가 설치 안 된 노트북에서도 점검은 떠야 한다.
+    try:
+        from jarviseo import config
 
-            args.camera = config.CAMERA_INDEX
-        except ImportError:
-            args.camera = 0
+        mic, speaker, camera = config.MIC_DEVICE, config.SPEAKER_DEVICE, config.CAMERA_INDEX
+    except ImportError:
+        mic, speaker, camera = None, None, 0
+    args.mic = args.mic or mic
+    args.speaker = args.speaker or speaker
+    args.camera = camera if args.camera is None else args.camera
+    return args
 
-    results = run_checks(args)
+
+def main() -> None:
+    results = run_checks(parse_args())
     print_report(results)
     sys.exit(1 if any(r.level == FAIL for r in results) else 0)
 

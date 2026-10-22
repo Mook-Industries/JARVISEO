@@ -185,6 +185,11 @@ DB_CONNECT_TIMEOUT_SEC = _get_int("JARVISEO_DB_CONNECT_TIMEOUT_SEC", 3)
 
 # --- 음성 ----------------------------------------------------------------
 WAKE_WORD = _get("JARVISEO_WAKE_WORD", "자비서")
+# 마이크·스피커. sounddevice 번호나 장치 이름 일부("USB", "Buds"). 비우면 윈도우·맥 기본 장치.
+# 번호는 노트북마다, USB 를 꽂는 순서마다 바뀌어서 이름을 적는 편이 낫다(voice/devices.py).
+# assistant.py 에 번호를 직접 주면 이 값 대신 그것을 쓴다.
+MIC_DEVICE = _get("JARVISEO_MIC")
+SPEAKER_DEVICE = _get("JARVISEO_SPEAKER")
 # TTS 재생이 끝난 뒤 이만큼 더 마이크를 막는다.
 # 스피커 소리를 마이크가 다시 듣고 자기 응답에 반응하는 되먹임 루프를 막는 장치다.
 TTS_MIC_GATE_SEC = _get_float("JARVISEO_TTS_MIC_GATE_SEC", 0.3)
