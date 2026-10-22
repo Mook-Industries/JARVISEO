@@ -81,6 +81,9 @@ cd JARVISEO
 
 세 단계다. 파이썬은 각자 깔고, **도커는 데이터베이스 하나만 띄운다.**
 
+> 아이콘 하나로 켜는 설치·실행 순서(모델 받기 · 점검 · 바탕화면 아이콘 · 버전 고정)는
+> [docs/deploy.md](docs/deploy.md) 에 따로 있다. 아래는 코드를 고치는 개발 환경(테스트·DB) 설정이다.
+
 ### 1. 파이썬 환경
 
 **팀 기본은 venv 다.** 파이썬에 기본으로 들어 있어서 따로 설치할 게 없다.
@@ -100,6 +103,7 @@ conda create -n JARVISEO python=3.12 -y && conda activate JARVISEO
 
 `requirements.txt` 는 하한(>=)만 적혀 있어서 깔 때마다 최신 버전이 들어온다. 발표 데모 노트북처럼
 **테스트한 버전 그대로** 깔아야 할 때는 `requirements.txt` 대신 `requirements.lock` 을 쓴다.
+(지금 잠금 파일에는 10/21 에 더한 `mediapipe`·`zxing-cpp` 가 빠져 있다. #142 에서 다시 만든다.)
 윈도우 · 맥 · 리눅스를 한 파일에 담았다(OS 별 패키지는 줄 끝 조건으로 갈린다).
 
 ```bash

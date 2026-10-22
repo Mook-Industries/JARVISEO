@@ -78,11 +78,11 @@ datasets/wakeword/
 
 "자비서"로 학습한 openWakeWord 분류기다. `config.WAKEWORD_MODEL` 의 기본값이라 없으면 호출어 감지기가 시작하지 않는다.
 
-- 공용 Drive 의 `jarviseo/jarviseo-r6.onnx`(학습 6회차, 205,069 바이트)를 받아 `models/jarviseo.onnx` 로 저장한다.
-- 받은 파일이 맞는지는 SHA-256 앞자리로 확인한다: `4686db10ae2febb8`
+- **`python scripts/download_models.py` 가 받는다.** 레포 GitHub 릴리스 `models-v1` 에 첨부한 파일이다.
+  openWakeWord 특징 모델(melspectrogram · embedding)도 같이 받는다. 커스텀 모델(`.onnx` 경로)을 쓰면
+  `voice/wakeword.py` 가 이 둘을 받지 않아서, 없으면 `NO_SUCHFILE ... melspectrogram.onnx` 로 멈춘다.
+- 손으로 받을 때는 공용 Drive 의 `jarviseo/jarviseo-r6.onnx`(학습 6회차, 205,069 바이트)를 `models/jarviseo.onnx` 로 저장한다.
+- 받은 파일이 맞는지는 SHA-256 앞자리로 확인한다: `4686db10ae2febb8` (`download_models.py` 는 전체 값을 확인한다)
   (`python -c "import hashlib;print(hashlib.sha256(open('data/models/jarviseo.onnx','rb').read()).hexdigest()[:16])"`)
-- **새 환경에서는 openWakeWord 기본 특징 모델(melspectrogram · embedding · VAD)도 한 번 받아야 한다.** 커스텀 모델(`.onnx` 경로)을 쓰면
-  `voice/wakeword.py` 가 `download_models` 를 부르지 않아서, 없으면 `NO_SUCHFILE ... melspectrogram.onnx` 로 멈춘다.
-  (`python -c "from openwakeword.utils import download_models; download_models()"`, 설치 폴더 `openwakeword/resources/models/` 에 몇 MB)
 - 학습 노트북은 `notebooks/wakeword_train.ipynb`, 평가 결과와 한계는 `docs/experiments.md` 학습 기록에 있다.
-- 다시 학습해서 바꾸면 이 절의 파일 이름과 SHA-256 을 같이 고친다.
+- 다시 학습해서 바꾸면 새 릴리스(`models-v2` …)에 올리고, 이 절과 `scripts/download_models.py` 의 `RELEASE_URL` · `WAKEWORD_SHA256` 을 같이 고친다.
