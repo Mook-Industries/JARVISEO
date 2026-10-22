@@ -21,6 +21,7 @@
 | `measure_latency.py` | 단계별 지연 리포트 — `assistant.py --db` 가 쌓은 세션 하나(기본은 턴이 있는 가장 최근 세션, `--session`)의 stt · route · detect · vlm · tts · total p50/p95/건수, 길별(가리킴 · 성분 · 나머지) total, "잠깐만요" 읽은 턴 비율. 끊긴 턴은 빼고, 30턴 미만이면 경고. DB 를 읽기만 함 (#98) |
 | `check_vlm.py` | 실제 VLM 확인 — 웹캠 사진(또는 `--image`) 한 장과 질문을 보내 답과 왕복 시간 출력, `--memory` 로 기억 검색 결과를 넘겨 보기 |
 | `check_setup.py` | `assistant.py` 를 켜기 전 점검 — 파이썬 3.12·실행 폴더·패키지·`.env` 키·모델 파일(호출어·openWakeWord 특징·EasyOCR·yolov8n·손 관절)·마이크·스피커·카메라·OpenAI 연결·DB 를 [통과/주의/실패] 로 찍고 실패마다 할 일 한 줄. 인자는 `assistant.py` 와 같음(`mic speaker --camera --db`), `--offline` 은 OpenAI 건너뜀. 실패가 있으면 끝 코드 1 (#141) |
+| `download_models.py` | 처음 켜기 전에 모델 파일을 미리 받음 — 호출어 `jarviseo.onnx`(GitHub 릴리스 `models-v1`, SHA256 확인)·손 관절 모델·openWakeWord 특징 모델·EasyOCR 한국어·영어·`yolov8n.pt`. 있으면 건너뜀, 다 받은 뒤 `check_setup.py` 로 확인 (#141) |
 | `assistant.py` | 호출어 → 질문 → (기억 검색) → VLM → 음성 대답을 그래프로 도는 비서 — 턴마다 질문·의도·기억·대답·단계별 지연, 끝낼 때 중앙값 출력. 턴은 `data/assistant.db`, 턴마다 고른 사진·가리킴 후보 박스·VLM 에 간 크롭은 `data/captures/session_<번호>/` (`--no-photos` 로 끔) |
 | `voice_loop.py` | Enter(또는 `--wake` 로 호출어) → STT → 에코 → TTS 음성 루프 — 턴마다 단계별 지연, 끝낼 때 구간마다 p50 · p95 · 건수 출력. `--csv` 는 턴마다 구간을 csv 에 바로 씀(#118). `--wake` 는 읽는 중 "자비서"로 끼어들기(재생 중 최고 점수·못 넘은 점수 출력), `--long` 긴 대답, `--db` 턴을 DB 에 기록, `--playback-threshold` 재생 중 임계값, `--chime` 시작음·종료음(호출 → 시작음, 말 끝 → 종료음 지연·되물음 횟수 출력, 빼면 끔), `--short` 질문 대신 되묻기 길이(약 2초) 문장을 읽어 그 사이 끼어들기가 되는지(읽는 중 끊김·끝난 뒤 늦은 감지 ms·못 잡으면 재생 중 최고 점수) (#105) |
 | `wakeword/record.py` | 웨이크워드 녹음 — 말할 때마다 잘라 16kHz wav 와 화자·거리·환경 메타데이터 저장, `--tts` 로 합성 |
