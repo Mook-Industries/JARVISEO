@@ -95,6 +95,9 @@ class GoogleVisionReader:
         self._http = httpx.Client(timeout=timeout, transport=transport)
         self._make_fallback = fallback
         self._fallback = None
+        # 마지막 readtext 결과가 Vision 의 읽는 순서 그대로인가. 대체 OCR 로 읽었으면 False 라
+        # read_panel 이 예전처럼 높이로 줄을 묶는다.
+        self.last_ordered = False
 
     def close(self) -> None:
         self._http.close()
@@ -102,8 +105,11 @@ class GoogleVisionReader:
     def readtext(self, image: np.ndarray, **_) -> list:
         """[(꼭짓점 4개, 글자, 신뢰도), ...]. Vision 이 안 되면 대체 OCR 로 읽는다."""
         try:
-            return self._vision(image)
+            lines = self._vision(image)
+            self.last_ordered = True
+            return lines
         except (httpx.HTTPError, GoogleVisionError, ValueError, KeyError) as e:
+            self.last_ordered = False
             if self._make_fallback is None:
                 raise
             log.warning("Google Vision 이 실패해 대체 OCR 로 읽는다: %s", e)

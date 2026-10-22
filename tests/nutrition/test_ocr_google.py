@@ -160,3 +160,39 @@ def test_checker_unchanged_without_google(monkeypatch):
     monkeypatch.delenv("GOOGLE_VISION_API_KEY", raising=False)
     monkeypatch.setattr(service, "make_food_qr_client", lambda: None)
     assert service.make_checker().quality_check is not None
+
+
+def test_keeps_vision_reading_order_instead_of_regrouping():
+    """나란한 두 칸이 같은 높이여도 Vision 이 준 순서(칸별)대로 둔다.
+
+    대체 OCR 로 읽었으면 예전처럼 높이로 묶는다.
+    """
+
+    def handler(request):
+        return httpx.Response(200, json={"responses": [{"fullTextAnnotation": ANNOTATION}]})
+
+    reader = vision(handler)
+    assert [line.text for line in read_panel(IMAGE, reader=reader)] == ["원재료명: 밀", "우유 함유"]
+
+    local = FakeLocal()
+    down = vision(lambda r: httpx.Response(500, json={"error": {"message": "x"}}),
+                  fallback=lambda: local)  # fmt: skip
+    read_panel(IMAGE, reader=down)
+    assert down.last_ordered is False
+
+
+def test_fixes_one_letter_typo_inside_allergen_list():
+    """'대두,일,우유' 처럼 이름 목록 사이에 낀 한 글자 오타를 바로잡는다(일 → 밀)."""
+    from jarviseo.nutrition.ocr import split_sections
+
+    s = split_sections("원재료명: 밀가루, 설탕 대두,일,우유,계란,닭고기 함유")
+    assert s.allergen_notice.replace(" ", "").startswith("대두,밀,우유")
+
+
+def test_typo_fix_leaves_normal_ingredients_alone():
+    """앞뒤가 알레르기 이름이 아니면 고치지 않는다(원재료 '일반'·'설탕' 등은 그대로)."""
+    from jarviseo.nutrition.ocr import _fix_list_typos
+
+    assert _fix_list_typos("설탕,일,소금") == "설탕,일,소금"
+    assert _fix_list_typos("우유,일,대두") == "우유,밀,대두"
+    assert _fix_list_typos("우유,잣,대두") == "우유,잣,대두"

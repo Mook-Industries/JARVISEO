@@ -109,6 +109,57 @@ class PanelSections:
     has_ingredient_header: bool = False  # "원재료명"을 찾았나. 못 찾으면 판정 불가로 본다
 
 
+_CHO = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
+
+
+def _jamo(word: str) -> list[str]:
+    """한글 낱말을 자모로 푼다. 한글이 아닌 글자는 그대로 둔다. "밀" → [ㅁ, ㅣ(21), ㄹ(8)]"""
+    out: list[str] = []
+    for ch in word:
+        code = ord(ch) - 0xAC00
+        if 0 <= code < 11172:
+            out += [_CHO[code // 588], f"v{(code % 588) // 28}", f"t{code % 28}"]
+        else:
+            out.append(ch)
+    return out
+
+
+def _jamo_distance(a: str, b: str) -> int:
+    """자모 단위 편집 거리. '일'↔'밀' 은 1, '일'↔'잣' 은 3."""
+    x, y = _jamo(a), _jamo(b)
+    prev = list(range(len(y) + 1))
+    for i, cx in enumerate(x, 1):
+        cur = [i]
+        for j, cy in enumerate(y, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (cx != cy)))
+        prev = cur
+    return prev[-1]
+
+
+def _fix_list_typos(text: str) -> str:
+    """알레르기 이름 목록 안에서 OCR 이 한 글자를 잘못 읽은 이름을 바로잡는다.
+
+    "대두,일,우유,계란" 처럼 쉼표로 늘어놓은 목록에서, 앞뒤가 모두 표시 이름인데 혼자만
+    아닌 낱말이 표시 이름 하나와 자모 하나만 다르면 그 이름으로 바꾼다(일 → 밀).
+    앞뒤가 이름일 때만 고쳐서 원재료 목록의 보통 낱말은 건드리지 않는다.
+    """
+    parts = text.split(",")
+    words = [w.strip() for w in parts]
+    for i in range(1, len(words) - 1):
+        w = words[i]
+        if not w or w in _NOTICE_WORDS or not re.fullmatch(r"[가-힣]{1,4}", w):
+            continue
+        # 쉼표가 빠져 앞 낱말과 붙어 오는 일이 많다("설탕 대두,일"). 맞닿은 낱말만 본다.
+        before = (words[i - 1].split() or [""])[-1]
+        after = (words[i + 1].split() or [""])[0]
+        if before not in _NOTICE_WORDS or after not in _NOTICE_WORDS:
+            continue
+        near = [n for n in _NOTICE_WORDS if len(n) == len(w) and _jamo_distance(w, n) == 1]
+        if len(near) == 1:
+            parts[i] = parts[i].replace(w, near[0])
+    return ",".join(parts)
+
+
 def _normalize(text: str) -> str:
     """OCR 이 섞어 내는 전각·변형 기호를 하나로 맞춘다."""
     text = unicodedata.normalize("NFC", text)
@@ -118,7 +169,8 @@ def _normalize(text: str) -> str:
     # OCR 이 쉼표를 마침표로 읽는 일이 많다("대두,땅콩.밀.복숭아"). 한글 사이에 띄어쓰기 없이
     # 낀 마침표는 문장 끝이 아니므로 쉼표로 바꾼다. 안 바꾸면 혼입 목록이 거기서 끊긴다.
     text = re.sub(r"(?<=[가-힣])\.(?=[가-힣])", ",", text)
-    return re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    return _fix_list_typos(text)
 
 
 def join_lines(lines: list[OCRLine]) -> str:
@@ -612,9 +664,15 @@ def read_panel(panel_image: np.ndarray, reader: OcrReader | None = None) -> list
         panel_image: ``crop_and_upscale`` 결과 (BGR).
         reader: 없으면 EasyOCR 한국어+영어 모델을 쓴다. 첫 호출 때 모델을 내려받는다.
     """
-    results = (reader or _get_reader()).readtext(panel_image, detail=1, paragraph=False)
+    engine = reader or _get_reader()
+    results = engine.readtext(panel_image, detail=1, paragraph=False)
     boxes = [(_to_bbox(pts), str(text).strip(), float(conf)) for pts, text, conf in results]
-    return _group_lines([b for b in boxes if b[1]])
+    boxes = [b for b in boxes if b[1]]
+    if getattr(engine, "last_ordered", False):
+        # Google Vision 은 칸(블록)을 나눠 읽는 순서대로 준다. 높이만 보고 다시 묶으면
+        # 나란히 놓인 원재료 칸과 영양정보 표가 한 줄로 섞인다("복 심경을 전하세요 숭아").
+        return [OCRLine(text=t, confidence=c, bbox=b) for b, t, c in boxes]
+    return _group_lines(boxes)
 
 
 def mean_confidence(lines: list[OCRLine]) -> float:
