@@ -51,6 +51,9 @@ class GraphDeps:
     # called_since(t): t(monotonic) 뒤에 "자비서"가 다시 들렸으면 True (BargeIn.called_since).
     # 없으면 되묻기 대답을 기다리는 동안 다시 불러도 모르고, 그 말을 대답으로 받는다.
     called_since: Callable[[float], bool] | None = None
+    # 되묻는 말(되묻기 · "네, 말씀하세요")을 다 읽고 대답을 듣기 직전에 부른다. 시작음(Chime.start).
+    # 없으면 소리 없이 듣는다. 대답이 끝났을 때 종료음은 stt 의 on_speech_end 가 낸다.
+    start_chime: Callable[[], None] | None = None
     # 꺼져 있으면 기억을 묻는 질문도 GENERAL 로 보낸다(config 의 기능 플래그)
     recall_enabled: bool = config.ENABLE_RECALL
     # 안경 카메라로 기준을 재기 전까지는 흐림을 보지 않는다(None). quality.py 의 100 은
