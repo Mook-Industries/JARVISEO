@@ -468,6 +468,19 @@
     e.target.value = "";
   });
 
+  // 시작음 · 종료음 — 안경(voice/chime.py)과 같은 소리. 환경설정 음량을 따른다.
+  // 호출을 받으면 시작음, 질문하는 말이 끝나면 종료음. 받아쓰기는 소리와 함께 바로 시작한다(안경과 같음).
+  const SOUNDS = { start: new Audio("/sounds/start.wav"), end: new Audio("/sounds/end.wav") };
+  Object.values(SOUNDS).forEach((a) => (a.preload = "auto"));
+  const chime = (which) => {
+    const a = SOUNDS[which];
+    const vol = Number($("#volume").value) / 100;
+    if (!a || vol <= 0) return;
+    a.volume = vol;
+    a.currentTime = 0;
+    a.play().catch(() => {}); // 사용자가 페이지를 한 번도 누르지 않았으면 브라우저가 막는다
+  };
+
   // 대답 읽기 — 환경설정의 음량 · 속도를 따른다
   const speak = (text) => {
     if (!window.speechSynthesis || !text) return;
@@ -589,6 +602,7 @@
     rec.onspeechstart = () => {
       frame = grabFrame(); // 말을 시작한 순간
     };
+    rec.onspeechend = () => chime("end"); // 질문하는 말이 끝났다
     rec.onresult = (e) => {
       heard = [...e.results].map((x) => x[0].transcript).join("");
       setText("#core-sub", `“${heard}”`);
@@ -607,6 +621,7 @@
       }
     };
     rec.start();
+    chime("start"); // 호출을 받았다
   };
 
   $("#call-btn").addEventListener("click", listen);
