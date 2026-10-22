@@ -119,6 +119,7 @@ class WebAssistant:
         self._dialog = None
         self.retried_whole = False  # 지난 턴에 크롭을 못 읽어 사진 전체로 다시 읽었나
         self.judged_image: np.ndarray | None = None  # 지난 턴 성분 판정에 쓴 사진
+        self.picked: np.ndarray | None = None  # 지난 턴에 여러 장 중 고른 장면
         self.session_id = store.start_session(user_id, title="web")
 
     def _parts(self) -> None:
@@ -152,20 +153,36 @@ class WebAssistant:
 
             self._resolve = resolve_target
 
-    def ask(self, question: str, image: np.ndarray | None) -> tuple[JarviseoState, list[str]]:
-        """질문 한 번을 그래프로 돌리고 (끝난 상태, 읽은 문장들)을 돌려준다."""
+    def ask(
+        self,
+        question: str,
+        image: np.ndarray | None,
+        more: list[tuple[np.ndarray, float]] | None = None,
+    ) -> tuple[JarviseoState, list[str]]:
+        """질문 한 번을 그래프로 돌리고 (끝난 상태, 읽은 문장들)을 돌려준다.
+
+        Args:
+            image: 말을 시작한 순간의 장면.
+            more: 그 뒤 잇달아 찍은 장면과 말 시작으로부터 지난 초. 그래프가 말 시작 0.5초 안에서
+                가장 선명한 장면을 고른다(capture.FrameBuffer.pick_best). 한 장만 찍으면 그 순간
+                손이 흔들리거나 초점이 안 맞았을 때 그대로 실패한다.
+        """
         self._parts()
+        now = time.monotonic()
+        frames = None
+        if image is not None:
+            shots = [(image, 0.0), *(more or [])]
+            frames = FrameBuffer(max(4, len(shots)))
+            for shot, after in shots:
+                frames.push(Frame(image=shot, timestamp=now + after, source_id="web"))
+            image = frames.pick_best(around=now).image  # 그래프가 고를 장면과 같다
+        self.picked = image
         ingredient = classify_intent(question) is Intent.INGREDIENT
         detector, checker = self._detector, self.checker
         if ingredient and image is not None:
             detector = _WholeFrameIfNothing(detector)
             if checker is not None:
                 checker = _RetryWholeFrame(checker, image)
-        now = time.monotonic()
-        frames = None
-        if image is not None:
-            frames = FrameBuffer(4)
-            frames.push(Frame(image=image, timestamp=now, source_id="web"))
         tts = FakeTextToSpeech()
         deps = GraphDeps(
             stt=FakeSpeechToText([question], starts=[now]),

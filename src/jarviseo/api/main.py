@@ -72,6 +72,7 @@ from jarviseo.types import IngredientSource
 API_DB = os.environ.get("JARVISEO_API_DB", "sqlite:///data/assistant.db")
 PAGES = Path(__file__).parent / "pages"
 STATIC = Path(__file__).parent / "static"  # 사용자 목업(디자인 원본). 읽기만 한다
+MAX_MORE_FRAMES = 5  # 말 시작 뒤 잇달아 찍는 장면 수 상한(대시보드는 3장을 보낸다)
 MAX_IMAGE_BYTES = 15 * 1024 * 1024  # 휴대폰 원본 사진도 들어가는 크기
 OCR_NOTEBOOK_URL = os.environ.get("JARVISEO_OCR_NOTEBOOK_URL", "")
 OCR_STATUS_TTL_SEC = 5.0  # 여러 탭이 동시에 물어봐도 Colab 에는 5초에 한 번만 묻는다
@@ -89,6 +90,9 @@ class Allergens(BaseModel):
 class Ask(BaseModel):
     question: str
     image: str | None = None  # data URL 또는 base64 JPEG/PNG. 없으면 사진 없이 묻는다
+    # 말을 시작한 뒤 잇달아 찍은 장면들과 찍은 시각(말 시작으로부터 ms). 가장 선명한 장면을 쓴다.
+    more: list[str] = []
+    more_ms: list[int] = []
 
 
 def create_app(
@@ -149,8 +153,17 @@ def create_app(
         if not question:
             raise HTTPException(400, "질문이 비었습니다")
         image = _decode_image(body.image) if body.image else None
+        if len(body.more) != len(body.more_ms) or len(body.more) > MAX_MORE_FRAMES:
+            raise HTTPException(
+                400, f"more 와 more_ms 의 개수가 같아야 합니다({MAX_MORE_FRAMES}장까지)"
+            )
+        more = [
+            (_decode_image(m), ms / 1000) for m, ms in zip(body.more, body.more_ms, strict=True)
+        ]
         s = request.app.state
-        return await _run_in_thread(lambda: _ask(s, question, image))
+        return await _run_in_thread(
+            lambda: _ask(s, question, image, more if image is not None else [])
+        )
 
     @app.get("/api/ocr-status")
     def ocr_status(request: Request) -> dict:
@@ -260,10 +273,10 @@ def _decode_image(data: str) -> np.ndarray:
     return image
 
 
-def _ask(s, question: str, image: np.ndarray | None) -> dict:
+def _ask(s, question: str, image: np.ndarray | None, more=None) -> dict:
     t0 = time.perf_counter()
     with s.lock:  # 성분 판정기(OCR)를 성분 페이지와 같이 쓴다
-        state, spoken = s.assistant.ask(question, image)
+        state, spoken = s.assistant.ask(question, image, more or None)
     response = state.get("response")
     target = state.get("target")
     chosen = target.chosen if target is not None else None
