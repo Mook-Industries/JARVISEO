@@ -113,6 +113,9 @@ def test_ocr_status_without_remote_server(client_and_checker, monkeypatch):
     """Colab 주소를 안 적었으면 원래부터 이 PC 로 읽는 설정이라고 알려 준다."""
     from jarviseo.api import main
 
+    monkeypatch.delenv(
+        "GOOGLE_VISION_API_KEY", raising=False
+    )  # .env 에 키가 있어도 Colab 경로를 본다
     monkeypatch.setattr(main.config, "OCR_REMOTE_URL", None)
     client, _ = client_and_checker
     assert client.get("/api/ocr-status").json()["remote"] is False
@@ -127,6 +130,8 @@ def test_ocr_status_probes_remote_server(client_and_checker, monkeypatch, health
     import httpx
 
     from jarviseo.api import main
+
+    monkeypatch.delenv("GOOGLE_VISION_API_KEY", raising=False)
 
     def fake_get(url, timeout):
         if health is None:
@@ -236,3 +241,11 @@ def test_evidence_without_notice_does_not_flag():
     r = ocr_result("소맥분", "")
     rows = evidence(r, ["밀"], {"밀": ["밀", "소맥분"]})
     assert rows[0]["status"] == "contains" and not rows[0]["ingredient_only"]
+
+
+def test_ocr_status_reports_google_vision(client_and_checker, monkeypatch):
+    """Google Vision 키가 있으면 Colab 을 묻지 않고 켜짐(google-vision)으로 알린다."""
+    monkeypatch.setenv("GOOGLE_VISION_API_KEY", "k")
+    client, _ = client_and_checker
+    body = client.get("/api/ocr-status").json()
+    assert body["up"] is True and body["device"] == "google-vision"
