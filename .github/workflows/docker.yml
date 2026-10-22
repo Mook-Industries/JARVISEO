@@ -1,0 +1,113 @@
+name: Docker
+
+# 담당: 문태현 (배포)
+#
+# 개발 이미지(Dockerfile)와 클라우드 대시보드 이미지(Dockerfile.api)가 빌드되는지 본다.
+# Dockerfile 은 9/19 에 만든 뒤 requirements 가 여러 번 바뀌는 동안 아무도 빌드를 확인하지 않았다.
+#
+# 이미지에 들어가는 파일이 바뀐 PR 에서만 돈다(아래 paths). 개발 이미지는 torch 때문에 빌드가
+# 몇 분 걸려서, 상관없는 PR 의 CI 시간을 늘리지 않으려는 것이다.
+# 그래서 이 체크는 main 의 필수 체크로 등록하지 않는다. 필수로 걸면 paths 에 안 걸린 PR 은
+# 이 체크가 아예 안 돌아 "Waiting for status" 에서 머지가 막힌다.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - Dockerfile.api
+      - .dockerignore
+      - docker-compose.yml
+      - requirements.txt
+      - requirements-dev.txt
+      - requirements-api.txt
+      - requirements.lock
+      - src/jarviseo/api/cloud.py
+      - src/jarviseo/config.py
+      - .github/workflows/docker.yml
+  push:
+    branches: [main]
+    # 위 pull_request 의 paths 와 같게 둔다.
+    paths:
+      - Dockerfile
+      - Dockerfile.api
+      - .dockerignore
+      - docker-compose.yml
+      - requirements.txt
+      - requirements-dev.txt
+      - requirements-api.txt
+      - requirements.lock
+      - src/jarviseo/api/cloud.py
+      - src/jarviseo/config.py
+      - .github/workflows/docker.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dev:
+    name: dev image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 빌드
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          tags: jarviseo-dev
+          load: true
+          # 같은 requirements.lock 이면 다음 실행에서 패키지 설치 층을 다시 쓴다.
+          cache-from: type=gha,scope=dev
+          cache-to: type=gha,mode=max,scope=dev
+
+      - name: 이미지 안에서 주요 패키지 불러오기
+        run: >
+          docker run --rm -v "$PWD:/app" jarviseo-dev
+          python -c "import torch, cv2, ultralytics, easyocr, mediapipe, jarviseo.workflow;
+          print('torch', torch.__version__, 'cv2', cv2.__version__)"
+
+      - name: 크기
+        run: docker image ls jarviseo-dev --format '{{.Repository}} {{.Size}}'
+
+  api:
+    name: api image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 빌드
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.api
+          tags: jarviseo-api
+          load: true
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: /health 가 200
+        run: |
+          docker run -d --name api -p 8000:8000 jarviseo-api
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8000/health && exit 0
+            sleep 1
+          done
+          docker logs api
+          exit 1
+
+      - name: torch · cv2 가 이미지에 없다
+        run: >
+          docker run --rm jarviseo-api python -c
+          "import importlib.util as u, sys;
+          bad = [m for m in ('torch', 'cv2', 'numpy', 'ultralytics') if u.find_spec(m)];
+          print('들어 있으면 안 되는 패키지:', bad); sys.exit(1 if bad else 0)"
+
+      - name: 크기
+        run: docker image ls jarviseo-api --format '{{.Repository}} {{.Size}}'
