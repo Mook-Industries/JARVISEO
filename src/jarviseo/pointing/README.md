@@ -5,7 +5,8 @@
 
 | 파일 | 하는 일 | 책임 지표 |
 |---|---|---|
-| `detector.py` | 물체 후보 검출 (사전학습 COCO YOLO, 필요할 때만 `product` 파인튜닝) | 후보 재현율 (식품 장면 따로) |
+| `detector.py` | 물체 후보 검출 (기본 사전학습 COCO `yolov8n.pt`, `.env` 로 학습한 11종 가중치) | 후보 재현율 (식품 장면 따로) |
+| `labels.py` | 검출 라벨의 한글 이름(COCO 80종 + `product` = "식품"). 되묻기 문장 · 대답 찾기 · VLM 맥락 문장에 쓴다 | — |
 | `hands.py` | 손 관절 21점(MediaPipe `HandLandmarker`) → 가리키는 손인지 · 검지 방향(5 → 8) | 손 검출률 · 가리킴 판정 · 방향 오차 (`scripts/check_hands.py`) |
 | `cues.py` | 후보별 단서 점수 — v1 center(가운데 · 크기), v2 point(검지 끝 선 ↔ 후보 중심 각도, 가우시안 σ 15°). v3~v5 는 아직 | — |
 | `resolver.py` | 단서 융합 → 1위 결정 · 되묻기 판단 | 대상 선택 정확도 · 되묻기 비율 |
@@ -43,3 +44,14 @@ curl.exe -fL -o data/models/hand_landmarker.task https://storage.googleapis.com/
 
 받은 파일이 7,819,105 바이트면 맞다. mediapipe 는 `requirements.txt`(`>=0.10.35,<1`)로 설치된다.
 모델은 경로가 아니라 바이트로 읽어 넘긴다. 윈도우에서 경로에 한글이 섞이면 MediaPipe 가 파일을 못 열기 때문이다.
+
+## 검출기 가중치 고르기 (#167)
+
+`ObjectDetector()` 는 가중치를 `config.DETECTOR_WEIGHTS`(`.env` 의 `JARVISEO_DETECTOR_WEIGHTS`)에서 읽는다.
+비워 두면 사전학습 COCO `yolov8n.pt` 다. 실행 루프(`scripts/assistant.py`) · 웹 · 정답 표시 도구가 모두 이 설정 하나를 따른다.
+
+- 학습한 가중치는 공용 Drive 의 `detector/runs/rN/weights/best.pt` 를 `data/models/detector_rN.pt` 로 받는다(`data/README.md`).
+- 회차 비교는 `.env` 를 바꿔 가며 재지 않고, `scripts/run_ablation.py --weights yolov8n.pt data/models/detector_r1.pt` 로 한 실행에서 잰다.
+  같은 코드 · 같은 사진 · 같은 손 결과로 재야 표의 차이가 가중치 몫이 된다.
+- 기본값(`yolov8n.pt`)을 학습한 가중치로 바꾸는 것은 회차 비교로 나아진 것을 확인한 뒤에 한다. 그 전까지는 시험할 때만 `.env` 로 바꾼다.
+- 학습한 가중치는 11종(`FINETUNE_CLASSES`)만 찾는다. COCO 의 나머지(의자 · 가방 등)는 후보에서 사라진다.
