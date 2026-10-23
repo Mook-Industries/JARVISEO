@@ -460,6 +460,24 @@ class FakeWakeCheck:
         )
 
 
+class LateWakeVerdict:
+    """질문 듣기보다 늦게 끝나는 확인. WakeVerdict 처럼 passed() 가 기다리기 전에는 글자가 없다."""
+
+    def __init__(self, text):
+        self._text, self._done = text, False
+
+    @property
+    def text(self):
+        return self._text if self._done else None
+
+    def rejected(self):
+        return self.text is not None and "자비서" not in self.text
+
+    def passed(self):
+        self._done = True  # 결과가 나올 때까지 기다렸다
+        return not self.rejected()
+
+
 @pytest.mark.parametrize("texts", [["오늘 서울은 맑겠습니다."], []])
 def test_rejected_wake_speaks_nothing_and_logs_nothing(file_store, texts):
     """2단계 확인에서 호출어가 아니면 되묻기·대답 없이 끝나고 기록도 남기지 않는다."""
@@ -518,6 +536,29 @@ def test_confirmed_wake_without_question_keeps_check_text():
 
     assert result["wake_check_text"] == "자비서."
     assert tts.spoken == [REPROMPT]
+
+
+@pytest.mark.parametrize("text, rejected", [("오늘 서울은", True), ("자비서.", False)])
+def test_late_check_still_records_check_text(text, rejected):
+    """확인 받아쓰기가 질문 듣기보다 늦게 끝나도, 기다려서 받은 글자를 남긴다.
+
+    전에는 기다리기 전에 글자를 읽어서 거른 호출이 'None'으로 찍혔다(TV 실측 session 14).
+    """
+    tts = FakeTextToSpeech()
+    graph = build_graph(
+        GraphDeps(
+            stt=FakeSpeechToText(["이거 뭐야?"]),
+            tts=tts,
+            vlm=FakeVLMClient(["컵이에요."]),
+            wake_check=SimpleNamespace(start=lambda t: LateWakeVerdict(text)),
+        )
+    )
+
+    result = graph.invoke({"wake_at": time.monotonic()})
+
+    assert result["wake_check_text"] == text
+    assert result.get("wake_rejected", False) is rejected
+    assert tts.spoken == ([] if rejected else ["컵이에요."])
 
 
 def test_wake_check_skipped_without_wake_time():

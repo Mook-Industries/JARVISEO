@@ -45,9 +45,11 @@ def listen(state: JarviseoState, deps: GraphDeps) -> dict:
     stop = verdict.rejected if verdict is not None else None
     # 호출어를 잡은 시각부터 거슬러 읽어야 "자비서, 저거 뭐야"의 "저거"가 안 잘린다.
     utterance = stt.listen(on_speech_start=pick, timeout=LISTEN_SEC, since=wake_at, stop=stop)
+    # passed() 가 확인 결과를 기다린다. 질문 듣기가 먼저 끝나면 그 전에는 글자가 아직 없다.
+    passed = verdict.passed() if verdict is not None else True
     # 확인에서 받아쓴 글자는 통과한 턴에도 남긴다. 실측에서 무엇에 깨어났는지 본다.
     checked = {"wake_check_text": verdict.text} if verdict is not None else {}
-    if verdict is not None and not verdict.passed():
+    if not passed:
         # TV 소리 같은 것에 깨어났다. 되묻지도 대답하지도 않고 호출어 대기로 돌아간다.
         return {"wake_rejected": True} | checked
     if utterance is None and wake_at is not None:
