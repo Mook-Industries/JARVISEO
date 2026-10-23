@@ -146,14 +146,14 @@ def test_get_reader_prefers_google_when_key_set(monkeypatch):
         ocr._reader = None
 
 
-def test_checker_skips_extra_ocr_calls_with_google(monkeypatch):
-    """Vision 이면 품질 검사 · 영역 찾기 · 회전 · 재처리를 끈다. 직접 넘긴 값은 그대로."""
+def test_checker_keeps_preprocessing_with_google(monkeypatch):
+    """Vision 이어도 품질 검사 · 영역 잘라 읽기(여백) · 돌려 읽기 · 대비 보정 재처리를 켠다."""
     monkeypatch.setenv("GOOGLE_VISION_API_KEY", "k")
     monkeypatch.setattr(service, "make_food_qr_client", lambda: None)
     c = service.make_checker()
-    assert c.quality_check is None and not c.auto_region and not c.try_rotation
-    assert c.max_reprocess == 0
-    assert service.make_checker(max_reprocess=1).max_reprocess == 1
+    assert c.quality_check is not None and c.auto_region and c.try_rotation
+    assert c.max_reprocess >= 1 and c.region_pad == service.REGION_PAD
+    assert service.make_checker(auto_region=False).auto_region is False
 
 
 def test_checker_unchanged_without_google(monkeypatch):

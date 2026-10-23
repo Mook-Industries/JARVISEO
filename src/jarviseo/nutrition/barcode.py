@@ -381,13 +381,40 @@ def lookup_code(
     return _lookup_reads([BarcodeRead(code=code, symbology=symbology)], store, food_qr, done)
 
 
+def cache_status(store, code: str) -> str | None:
+    """캐시 행의 상태(verified · pending · invalid). 없거나 알 수 없으면 None.
+
+    ``MemoryStore.get_product`` 는 상태를 돌려주지 않아서 product 행을 직접 본다.
+    상태를 모르는 저장소(테스트용 가짜 등)는 None 이라 예전처럼 캐시를 믿는다.
+    """
+    session = getattr(store, "session", None)
+    if session is None:
+        return None
+    from jarviseo.memory.models import Product  # 저장소가 있을 때만 쓴다
+
+    try:
+        with session() as db:
+            row = db.get(Product, code)
+            return row.status if row is not None else None
+    except Exception as e:  # noqa: BLE001 - 상태를 못 읽어도 판정은 계속한다
+        log.warning("캐시 상태를 읽지 못함 (%s): %s", code, e)
+        return None
+
+
 def _lookup_reads(reads: list[BarcodeRead], store, food_qr, done) -> BarcodeLookup:
-    """읽은 바코드들로 캐시 → 푸드QR 순서로 찾는다. 하나라도 찾으면 그것을 돌려준다."""
+    """읽은 바코드들로 캐시 → 푸드QR 순서로 찾는다. 하나라도 찾으면 그것을 돌려준다.
+
+    캐시는 푸드QR 에서 받은 정보(verified)만 쓴다. 예전에 OCR 결과를 확인 전(pending)으로
+    저장하던 행이 남아 있어도 답으로 쓰지 않는다. 잘못 읽은 글자가 그대로 굳어 다음 질문에도
+    같은 답이 나갔다(label_19: 실제 '밀 함유'인데 '표시 없음'으로 저장). 지금은 OCR 결과를
+    저장하지 않는다(service.py).
+    """
     reason = "not_found"
     for read in reads:
         if store is not None:
             cached = store.get_product(read.code)
-            if cached is not None and cached.raw_ingredients:
+            usable = cache_status(store, read.code) != "pending"
+            if cached is not None and cached.raw_ingredients and usable:
                 return done(read, cached)
 
         if food_qr is None:

@@ -179,13 +179,13 @@ def store() -> MemoryStore:
     return s
 
 
-def test_unknown_barcode_caches_ocr_as_unverified(monkeypatch, store):
-    """바코드는 읽었는데 못 찾은 제품은 OCR 결과를 확인 전으로 캐시한다."""
+def test_ocr_result_is_never_cached(monkeypatch, store):
+    """바코드는 읽었지만 어디에도 없는 제품을 성분표로 읽어도, 그 결과는 캐시에 남기지 않는다."""
     monkeypatch.setattr(service, "lookup_product", miss(CODE, "not_found"))
-    checker(FakeReader((LABEL, 0.9)), store=store).check(CROP, ["땅콩"])
-    cached = store.get_product(CODE)
-    assert cached is not None and "탈지분유" in cached.raw_ingredients
-    assert "땅콩" in cached.cross_contamination
+    for _ in range(2):  # 두 번 같게 읽어도 남기지 않는다
+        r = checker(FakeReader((LABEL, 0.9)), store=store).check(CROP, ["땅콩"])
+        assert r.judgement.verdict is V.MAY_CONTAIN
+    assert store.get_product(CODE) is None
 
 
 def test_uncertain_read_is_not_cached(monkeypatch, store):
@@ -360,22 +360,6 @@ def test_no_registered_allergen_skips_panel(monkeypatch):
     reader = FakeReader((LABEL, 0.9))
     checker(reader).check(CROP, [])
     assert reader.calls == 0
-
-
-def test_verified_product_skips_ocr_next_time(monkeypatch, store):
-    """한 번 성분표로 확인한 제품은 다음에 OCR 을 다시 돌리지 않는다."""
-    # 첫 번째: 바코드는 읽었지만 어디에도 없어서 성분표를 읽는다(알레르기 표시 없는 제품).
-    monkeypatch.setattr(service, "lookup_product", miss(CODE, "not_found"))
-    plain = ["원재료명: 정제수, 설탕, 구연산"]
-    checker(FakeReader((plain, 0.95)), store=store).check(CROP, ["밀"])
-    cached = store.get_product(CODE)
-    assert cached.allergen_notice  # 비워 두지 않는다
-
-    # 두 번째: 캐시에서 꺼내면 바로 답한다.
-    monkeypatch.setattr(service, "lookup_product", found(cached))
-    reader = FakeReader((plain, 0.95))
-    r = checker(reader, store=store).check(CROP, ["밀"])
-    assert reader.calls == 0 and r.judgement.verdict is V.NOT_DETECTED
 
 
 # --- 성분표 영역 자동 찾기 (#75) ---------------------------------------------
@@ -611,7 +595,7 @@ def test_barcode_number_in_ocr_text_finds_cached_product(monkeypatch):
     store.save_product(
         ProductInfo(barcode=code, product_name="크런키", raw_ingredients="밀가루, 전지분유",
                     allergen_notice="밀, 우유 함유", source=IngredientSource.OCR),
-        status="pending",
+        status="verified",
     )  # fmt: skip
     r = checker(BoxReader(BACK), store=store).check(CROP, ["우유"])
     assert r.message == "해당 제품에는 우유가 들어 있어요."
@@ -624,3 +608,61 @@ def test_other_side_without_ingredients_asks_for_ingredient_side(monkeypatch):
     r = checker(BoxReader(BACK)).check(CROP, ["우유"])
     assert r.retake == RETAKE_OTHER_SIDE
     assert r.barcode.barcode.code == "8801062640782"  # 번호는 남겼다(다음에 캐시로 쓰게)
+
+
+# --- 두 번 같게 읽어야 캐시 · 바코드 끝까지 찾기 (2026-10-22) -----------------------
+
+
+def test_pending_cache_is_not_used_as_answer(store):
+    """예전에 남은 확인 전(OCR) 캐시는 바코드로 찾아도 답으로 쓰지 않는다. 푸드QR 정보만 쓴다."""
+    from jarviseo.nutrition.barcode import lookup_code
+
+    info = ProductInfo(barcode=CODE, raw_ingredients="밀가루", allergen_notice="표시 없음",
+                       source=IngredientSource.OCR)  # fmt: skip
+    store.save_product(info, status="pending")
+    assert not lookup_code(CODE, store=store).hit
+    store.save_product(info, status="verified")
+    assert lookup_code(CODE, store=store).hit
+
+
+def test_finds_barcode_in_whole_photo_when_crop_misses(monkeypatch):
+    """크롭에서 바코드를 못 읽으면 사진 전체에서 한 번 더 찾는다."""
+    whole = np.zeros((300, 500, 3), np.uint8)
+    seen = []
+
+    def lookup(image, store=None, food_qr=None):
+        seen.append(image.shape)
+        if image.shape == whole.shape:
+            return BarcodeLookup(
+                BarcodeRead(code=CODE, symbology="EAN_13"), None, reason="not_found"
+            )
+        return BarcodeLookup(None, None, reason="no_barcode")
+
+    monkeypatch.setattr(service, "lookup_product", lookup)
+    r = checker(FakeReader((LABEL, 0.9))).check(CROP, ["땅콩"], barcode_image=whole)
+    assert seen == [CROP.shape, whole.shape]
+    assert r.barcode.barcode.code == CODE
+
+
+def test_binarized_read_is_last_resort(monkeypatch):
+    """원본 · 대비 보정본으로 못 읽었을 때만 이진화본을 읽고, 읽히면 그걸 쓴다."""
+    monkeypatch.setattr(service, "lookup_product", miss(CODE, "not_found"))
+    reader = FakeReader((LABEL, 0.3), (LABEL, 0.4), (LABEL, 0.9))
+    r = checker(reader, max_reprocess=2).check(CROP, ["땅콩"])
+    assert reader.calls == 3 and r.reprocessed and r.ocr_conf == 0.9
+    assert r.judgement.verdict is V.MAY_CONTAIN
+
+
+def test_binarize_skipped_when_enhanced_read_passes(monkeypatch):
+    monkeypatch.setattr(service, "lookup_product", miss(CODE, "not_found"))
+    reader = FakeReader((LABEL, 0.3), (LABEL, 0.9))
+    checker(reader, max_reprocess=2).check(CROP, ["땅콩"])
+    assert reader.calls == 2
+
+
+def test_binarize_keeps_strokes_black_on_white():
+    """이진화 결과는 흰 바탕에 검은 글자(두 값)다."""
+    img = np.full((60, 200, 3), 230, np.uint8)
+    cv2.putText(img, "MILK", (10, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (40, 40, 40), 3)
+    out = service._binarize(img)
+    assert set(np.unique(out)) <= {0, 255} and (out == 0).any() and out.mean() > 128

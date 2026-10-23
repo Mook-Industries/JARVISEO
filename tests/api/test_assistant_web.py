@@ -148,6 +148,22 @@ def test_ingredient_reads_whole_photo_when_crop_has_no_panel(tmp_path):
     assert (tmp_path / f"turn{state['turn_id']}_crop.jpg").exists()  # 사진을 남겼다
 
 
+class SeesBarcodeImage(PanelOnlyInWholePhoto):
+    """바코드를 찾을 사진(barcode_image)을 받는 판정기."""
+
+    def check(self, image, allergens, barcode_image=None):
+        self.barcode_images = [*getattr(self, "barcode_images", []), barcode_image]
+        return super().check(image, allergens)
+
+
+def test_crop_check_gets_whole_photo_for_barcode(tmp_path):
+    """크롭을 읽을 때 사진 전체를 바코드용으로 같이 넘긴다. 전체를 다시 읽을 때는 안 넘긴다."""
+    checker = SeesBarcodeImage(IMAGE.shape)
+    web = web_with(tmp_path, CupOnTheLeft(), checker)
+    web.ask("이거 먹어도 돼?", IMAGE)
+    assert checker.barcode_images[0] is IMAGE and checker.barcode_images[1] is None
+
+
 def test_ingredient_uses_whole_photo_when_nothing_detected(tmp_path):
     """손에 든 과자처럼 물체를 못 찾으면 '모르겠어요' 대신 사진 전체를 대상으로 판정한다."""
     checker = PanelOnlyInWholePhoto(IMAGE.shape)

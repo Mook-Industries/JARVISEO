@@ -239,11 +239,15 @@ def _check(s, image: np.ndarray, allergens: list[str]) -> dict:
         source = "barcode"
     else:
         source = "ocr"
+    source_name = SOURCE_NAMES[source]
+    if source == "barcode" and lookup.product.source is IngredientSource.CACHE:
+        # 푸드QR 을 다시 부르지 않고 저장해 둔 바코드 정보를 썼다
+        source_name = "바코드 · 저장된 정보"
     return {
         "sentence": r.retake or r.message,
         "verdict": r.judgement.verdict.value,
         "source": source,
-        "source_name": SOURCE_NAMES[source],
+        "source_name": source_name,
         "retake": bool(r.retake),
         "occlusion": r.occlusion,
         "barcode": lookup.barcode.code if lookup and lookup.barcode else None,
