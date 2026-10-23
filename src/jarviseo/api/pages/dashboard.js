@@ -162,7 +162,6 @@
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
-      setPop(false);
       app.classList.remove("is-drawer-open");
     }
   });
@@ -183,7 +182,6 @@
       if (on) el.setAttribute("aria-current", "page");
       else el.removeAttribute("aria-current");
     });
-    setPop(false);
     app.classList.remove("is-drawer-open");
     if (view !== "monitor") stopDemo();
     if (view === "admin") drawChart();
