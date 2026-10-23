@@ -119,9 +119,15 @@ def test_different_kind_tie_asks_by_name_with_particle():
 
 
 def test_unknown_label_question_falls_back_to_english():
-    """한글 이름이 없는 라벨(학습한 product 등)도 문장이 빈칸 없이 나온다."""
+    """한글 이름이 없는 라벨도 문장이 빈칸 없이 나온다."""
+    result = _resolve([_det("glasses", LEFT), _det("cup", RIGHT)])
+    assert result.clarify_question == "glasses요, 컵이요?"
+
+
+def test_product_question_reads_food():
+    """학습한 가중치의 product 는 영어가 아니라 "식품"으로 되묻는다."""
     result = _resolve([_det("product", LEFT), _det("cup", RIGHT)])
-    assert result.clarify_question == "product요, 컵이요?"
+    assert result.clarify_question == "식품이요, 컵이요?"
 
 
 # --- 되묻기 대답으로 좁히기 ---------------------------------------------------------

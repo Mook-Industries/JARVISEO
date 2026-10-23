@@ -1,4 +1,4 @@
-"""COCO 라벨의 한글 이름.  담당: 최홍묵
+"""검출 라벨의 한글 이름 (COCO 80종 + 학습한 product).  담당: 최홍묵
 
 되묻기 문장("왼쪽 컵이요, 오른쪽 컵이요?")과 대답을 받아쓸 때 주는 STT 힌트에 같이 쓴다.
 TTS 로 읽고 사용자가 그대로 대답할 말이라 짧은 일상어로 골랐다.
@@ -91,9 +91,11 @@ KOREAN_NAMES: dict[str, str] = {
     "teddy bear": "곰 인형",
     "hair drier": "드라이기",
     "toothbrush": "칫솔",
+    # COCO 에는 없고 학습한 가중치에만 있는 종류(FINETUNE_CLASSES, #167). 포장 식품 전체를 부른다.
+    "product": "식품",
 }
 
 
 def korean_name(label: str) -> str:
-    """한글 이름을 돌려준다. 표에 없으면(새로 학습한 클래스 등) 라벨을 그대로 돌려준다."""
+    """한글 이름을 돌려준다. 표에 없으면 라벨을 그대로 돌려준다."""
     return KOREAN_NAMES.get(label, label)

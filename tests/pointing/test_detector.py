@@ -1,10 +1,16 @@
-"""물체 후보 검출 — 사람·작은 박스를 빼고, YOLO 결과를 Detection 으로 바꾸는지.
+"""물체 후보 검출 — 사람·작은 박스를 빼고, YOLO 결과를 Detection 으로 바꾸는지,
+가중치를 설정에서 고르는지.
 
 CI 에는 ultralytics 가 없어서 실제 모델 대신 결과 모양만 같은 가짜를 끼운다.
 """
 
+import sys
+import types
+from pathlib import Path
+
 import numpy as np
 
+from jarviseo import config
 from jarviseo.pointing.detector import MIN_AREA_RATIO, ObjectDetector, filter_detections
 from jarviseo.pointing.labels import korean_name
 from jarviseo.types import BBox, Detection
@@ -127,6 +133,70 @@ def test_detect_uses_image_size_for_tiny_filter():
     assert len(detector.detect(np.zeros((200, 200, 3), np.uint8))) == 1
 
 
+# --- 가중치 고르기 -------------------------------------------------------------------
+
+
+class _FakeYOLO:
+    """ultralytics.YOLO 흉내. 받은 이름을 기억하고, 찾은 파일 위치를 ckpt_path 에 둔다."""
+
+    def __init__(self, weights: str) -> None:
+        self.weights = weights
+        self.ckpt_path = f"/cache/{Path(weights).name}"
+
+
+def _fake_ultralytics(monkeypatch, yolo=_FakeYOLO) -> None:
+    # CI 에는 ultralytics 가 없다. __init__ 이 import 하는 모듈 자리에 가짜를 넣는다.
+    module = types.ModuleType("ultralytics")
+    module.YOLO = yolo
+    monkeypatch.setitem(sys.modules, "ultralytics", module)
+
+
+def test_detector_default_weights_follow_config(monkeypatch):
+    """가중치를 안 주면 설정(JARVISEO_DETECTOR_WEIGHTS)을 따른다.
+
+    실행 루프(assistant.py) · 웹을 안 고쳐도 같이 바뀐다.
+    """
+    _fake_ultralytics(monkeypatch)
+    monkeypatch.setattr(config, "DETECTOR_WEIGHTS", "data/models/detector_r1.pt")
+
+    detector = ObjectDetector()
+
+    assert detector.model.weights == "data/models/detector_r1.pt"
+
+
+def test_detector_explicit_weights_win_over_config(monkeypatch):
+    """평가 도구가 넘긴 가중치는 설정보다 앞선다(run_ablation --weights)."""
+    _fake_ultralytics(monkeypatch)
+    monkeypatch.setattr(config, "DETECTOR_WEIGHTS", "data/models/detector_r1.pt")
+
+    detector = ObjectDetector("yolov8n.pt")
+
+    assert detector.model.weights == "yolov8n.pt"
+
+
+def test_detector_records_file_it_actually_loaded(monkeypatch):
+    """이름만 줘도 ultralytics 가 찾은 실제 파일 위치를 남긴다.
+
+    평가 기록의 내용 지문은 이 파일로 잰다.
+    """
+    _fake_ultralytics(monkeypatch)
+
+    assert ObjectDetector("yolov8n.pt").weights_path == Path("/cache/yolov8n.pt")
+
+
+def test_detector_without_ckpt_path_keeps_given_weights(monkeypatch):
+    """ultralytics 가 파일 위치를 못 남기면(ckpt_path 없음) 넘긴 가중치를 그대로 쓴다."""
+
+    class _NoPath(_FakeYOLO):
+        def __init__(self, weights: str) -> None:
+            super().__init__(weights)
+            self.ckpt_path = None
+
+    _fake_ultralytics(monkeypatch, _NoPath)
+
+    assert ObjectDetector("data/models/x.pt").weights_path == Path("data/models/x.pt")
+
+
 # --- labels --------------------------------------------------------------------
 
 
@@ -136,5 +206,10 @@ def test_korean_name_known_label():
 
 
 def test_korean_name_falls_back_to_label():
-    """표에 없는 라벨(새로 학습한 클래스 등)은 그대로 돌려준다."""
-    assert korean_name("product") == "product"
+    """표에 없는 라벨은 그대로 돌려준다."""
+    assert korean_name("glasses") == "glasses"
+
+
+def test_korean_name_product_is_food():
+    """학습한 가중치의 product 는 되묻기 문장에서 "식품"으로 읽힌다. 영어 그대로 읽히면 안 된다."""
+    assert korean_name("product") == "식품"

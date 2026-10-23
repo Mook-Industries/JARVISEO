@@ -1,12 +1,17 @@
-"""가리킴 ablation — 정답 표시 읽기, 7분류 채점, v1 · v2 채점, 지표, DB 기록, 이전 실행과 비교.
+"""가리킴 ablation — 정답 표시 읽기(세션 고르기), 7분류 채점, v1 · v2 채점, 지표, DB 기록,
+실행 조건(커밋 · 가중치 지문 · 세션) 기록과 같은 조건끼리만 비교, 가중치끼리 후보 적중 변화.
 
 YOLO · MediaPipe 없이 정해 둔 후보와 손으로 채점한다. DB 기록은 store fixture 로 SQLite 와
 실제 Postgres 에서 돈다.
 """
 
 import csv
+import hashlib
 import importlib.util
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from jarviseo.memory import EvalRun, EvalSample
 from jarviseo.pointing.hands import HandPose
@@ -79,22 +84,27 @@ def _row(**overrides) -> dict:
 # --- 정답 표시 읽기 -----------------------------------------------------------------
 
 
-def test_load_samples_keeps_split_and_drops_excluded(tmp_path):
-    """그 split 의 쓸 수 있는 사진만 읽고, 0/1 표시와 빈 앞 대상을 풀어 둔다."""
+def _labels_csv(tmp_path) -> Path:
+    """세션 1 · 3 · 4 가 섞인 정답표. 세션 4 는 말 · 맥락 세션처럼 나중에 valid 로 붙은 것."""
     path = tmp_path / "labels.csv"
-    columns = ["file", "split", "utterance", "gt_x1", "gt_y1", "gt_x2", "gt_y2"]
+    columns = ["file", "session", "split", "utterance", "gt_x1", "gt_y1", "gt_x2", "gt_y2"]
     columns += ["gt_label", "has_hand", "ambiguous", "prev_label", "excluded"]
     rows = [
-        ["s01/a.jpg", "valid", "저거 뭐야?", "1", "2", "3", "4", "cup", "1", "0", "", "0"],
-        ["s01/b.jpg", "valid", "흐림", "", "", "", "", "", "0", "0", "", "1"],
-        ["s03/c.jpg", "test", "이거 뭐야?", "1", "2", "3", "4", "cup", "0", "0", "", "0"],
+        ["s01/a.jpg", "1", "valid", "저거 뭐야?", "1", "2", "3", "4", "cup", "1", "0", "", "0"],
+        ["s01/b.jpg", "1", "valid", "흐림", "", "", "", "", "", "0", "0", "", "1"],
+        ["s03/c.jpg", "3", "test", "이거 뭐야?", "1", "2", "3", "4", "cup", "0", "0", "", "0"],
+        ["s04/d.jpg", "4", "valid", "빨간 거 뭐야?", "1", "2", "3", "4", "cup", "0", "0", "", "0"],
     ]
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(columns)
         writer.writerows(rows)
+    return path
 
-    samples = run_ablation.load_samples(path, "valid")
+
+def test_load_samples_keeps_split_and_drops_excluded(tmp_path):
+    """그 split · 세션의 쓸 수 있는 사진만 읽고, 0/1 표시와 빈 앞 대상을 풀어 둔다."""
+    samples = run_ablation.load_samples(_labels_csv(tmp_path), "valid", [1, 2])
 
     assert [s["file"] for s in samples] == ["s01/a.jpg"]
     assert samples[0]["gt"] == BBox(1, 2, 3, 4)
@@ -102,9 +112,18 @@ def test_load_samples_keeps_split_and_drops_excluded(tmp_path):
     assert samples[0]["prev_label"] is None
 
 
+def test_load_samples_default_sessions_keep_62_photo_set(tmp_path):
+    """기본 세션(valid 1 · 2)이면 나중에 붙은 세션 4 가 안 섞인다. 세션 4 는 따로 골라야 읽힌다."""
+    path = _labels_csv(tmp_path)
+    default = run_ablation.DEFAULT_SESSIONS["valid"]
+
+    assert [s["file"] for s in run_ablation.load_samples(path, "valid", default)] == ["s01/a.jpg"]
+    assert [s["file"] for s in run_ablation.load_samples(path, "valid", [4])] == ["s04/d.jpg"]
+
+
 def test_load_samples_without_file_is_empty(tmp_path):
     """표시 파일이 없으면 빈 목록이다."""
-    assert run_ablation.load_samples(tmp_path / "none.csv", "valid") == []
+    assert run_ablation.load_samples(tmp_path / "none.csv", "valid", [1, 2]) == []
 
 
 def test_unimplemented_variants_are_skipped():
@@ -271,24 +290,178 @@ def test_save_run_writes_run_and_samples(store):
         assert sorted(s.is_correct for s in samples) == [False, True]
 
 
-def test_previous_accuracy_is_same_variant_before(store):
-    """같은 버전의 바로 이전 실행 정답률을 찾는다. 다른 버전 · 첫 실행이면 None."""
-    first = run_ablation.save_run(store, "v1", [_row()], {"accuracy": 0.6}, "")
-    run_ablation.save_run(store, "v2", [_row()], {"accuracy": 0.9}, "")
-    second = run_ablation.save_run(store, "v1", [_row()], {"accuracy": 0.7}, "")
+def _conditions(sha: str = "aaaaaaaaaaaa", sessions=(1, 2), commit: str = "c1") -> dict:
+    return {
+        "commit": commit,
+        "weights": {"name": "yolov8n.pt", "sha256": sha},
+        "sessions": list(sessions),
+        "conf": 0.25,
+    }
 
-    assert run_ablation.previous_accuracy(store, "v1", second) == 0.6
-    assert run_ablation.previous_accuracy(store, "v1", first) is None
+
+def _save(store, variant: str, accuracy: float, conditions: dict | None) -> int:
+    metrics = {"accuracy": accuracy}
+    if conditions is not None:
+        metrics["conditions"] = conditions
+    return run_ablation.save_run(store, variant, [_row()], metrics, "")
+
+
+def test_previous_accuracy_is_same_variant_before(store):
+    """같은 버전 · 같은 조건의 바로 이전 실행 정답률을 찾는다. 다른 버전 · 첫 실행이면 None."""
+    first = _save(store, "v1", 0.6, _conditions())
+    _save(store, "v2", 0.9, _conditions())
+    second = _save(store, "v1", 0.7, _conditions())
+
+    assert run_ablation.previous_accuracy(store, "v1", second, _conditions()) == 0.6
+    assert run_ablation.previous_accuracy(store, "v1", first, _conditions()) is None
+
+
+def test_previous_accuracy_skips_other_weights(store):
+    """가중치가 다른 실행과는 비교하지 않는다. 그 차이는 코드 몫인지 가중치 몫인지 모른다."""
+    _save(store, "v1", 0.6, _conditions(sha="r0r0r0r0r0r0"))
+    _save(store, "v1", 0.8, _conditions(sha="r1r1r1r1r1r1"))
+    latest = _save(store, "v1", 0.65, _conditions(sha="r0r0r0r0r0r0"))
+
+    previous = run_ablation.previous_accuracy(store, "v1", latest, _conditions(sha="r0r0r0r0r0r0"))
+
+    assert previous == 0.6  # 바로 앞(R1, 0.8)을 건너뛰고 같은 R0 실행
+
+
+def test_previous_accuracy_skips_other_sessions_and_old_runs(store):
+    """세션이 다르거나, 조건 기록이 없는 옛 실행(run 1~3)과는 비교하지 않는다."""
+    _save(store, "v1", 0.5, None)  # 옛 실행
+    _save(store, "v1", 0.9, _conditions(sessions=(4,)))  # 말 · 맥락 세션
+    latest = _save(store, "v1", 0.6, _conditions())
+
+    assert run_ablation.previous_accuracy(store, "v1", latest, _conditions()) is None
+
+
+def test_previous_accuracy_ignores_commit(store):
+    """커밋이 달라도 같은 가중치 · 세션이면 비교한다. 코드를 고친 효과를 보려는 비교다."""
+    _save(store, "v1", 0.6, _conditions(commit="old"))
+    latest = _save(store, "v1", 0.7, _conditions(commit="new+dirty"))
+
+    assert run_ablation.previous_accuracy(store, "v1", latest, _conditions(commit="new")) == 0.6
 
 
 def test_format_row_shows_delta_from_previous():
-    """이전 실행이 있으면 정답률 옆에 차이(%p)를 붙이고, 끝에 대상 결정 p50/p95 를 둔다."""
+    """맨 앞에 가중치, 이전 실행이 있으면 정답률 옆에 차이(%p), 끝에 대상 결정 p50/p95 를 둔다."""
     m = run_ablation.summarize([_row(), _row(correct=False, outcome="다른 후보 1위")])
 
-    line = run_ablation.format_row("v1", m, 2, previous=0.4)
+    line = run_ablation.format_row("yolov8n.pt(abc123)", "v1", m, 2, previous=0.4)
 
-    assert line.startswith("v1 | 2 | 50.0 (+10.0) |")
+    assert line.startswith("yolov8n.pt(abc123) | v1 | 2 | 50.0 (+10.0) |")
     assert line.endswith("| 0.20/0.20")  # 대상 결정 p50/p95
+
+
+# --- 실행 조건 · 가중치 ----------------------------------------------------------------
+
+
+def test_weights_fingerprint_is_name_and_content_hash(tmp_path):
+    """이름과 내용 sha256 앞 12자리. 이름이 같아도(best.pt) 내용이 다르면 지문이 다르다."""
+    r1, r2 = tmp_path / "r1" / "best.pt", tmp_path / "r2" / "best.pt"
+    for path, content in ((r1, b"round one"), (r2, b"round two")):
+        path.parent.mkdir()
+        path.write_bytes(content)
+
+    fp1, fp2 = run_ablation.weights_fingerprint(r1), run_ablation.weights_fingerprint(r2)
+
+    assert fp1 == {"name": "best.pt", "sha256": hashlib.sha256(b"round one").hexdigest()[:12]}
+    assert fp1["sha256"] != fp2["sha256"]
+
+
+def test_weights_label_shows_name_and_short_hash():
+    """표에는 이름 + 지문 앞 6자리를 찍는다."""
+    label = run_ablation.weights_label({"name": "detector_r1.pt", "sha256": "3fa2c1d4e5f6"})
+    assert label == "detector_r1.pt(3fa2c1)"
+
+
+def test_missing_weights_only_checks_paths(tmp_path):
+    """폴더까지 적었는데 없는 파일만 잡는다. 이름만 적은 yolov8n.pt 는 ultralytics 가 받아 온다."""
+    there = tmp_path / "detector_r1.pt"
+    there.write_bytes(b"x")
+    absent = str(tmp_path / "detector_r2.pt")
+
+    assert run_ablation.missing_weights(["yolov8n.pt", str(there), absent]) == [absent]
+
+
+def test_run_conditions_records_what_was_measured(monkeypatch):
+    """커밋 · 가중치 · 정렬한 세션 · conf · 장비 · ultralytics 버전을 남긴다."""
+    monkeypatch.setattr(run_ablation, "git_commit", lambda: "abc1234")
+    weights = {"name": "yolov8n.pt", "sha256": "aaaaaaaaaaaa"}
+
+    c = run_ablation.run_conditions(weights, [2, 1], 0.25)
+
+    assert (c["commit"], c["weights"], c["conf"]) == ("abc1234", weights, 0.25)
+    assert c["sessions"] == [1, 2]
+    assert c["device"].strip()
+    assert c["ultralytics"]
+
+
+def _fake_git(monkeypatch, *, head: str = "abc1234\n", status: str = "", code: int = 0) -> None:
+    def run(args, **kwargs):
+        out = head if "rev-parse" in args else status
+        return subprocess.CompletedProcess(args, code, stdout=out, stderr="")
+
+    monkeypatch.setattr(run_ablation.subprocess, "run", run)
+
+
+def test_git_commit_marks_uncommitted_changes(monkeypatch):
+    """커밋 안 한 수정이 있으면 +dirty. 같은 번호라도 코드가 달랐다는 표시다."""
+    _fake_git(monkeypatch, status=" M scripts/run_ablation.py\n")
+    assert run_ablation.git_commit() == "abc1234+dirty"
+
+
+def test_git_commit_clean(monkeypatch):
+    """수정이 없으면 커밋 번호만."""
+    _fake_git(monkeypatch)
+    assert run_ablation.git_commit() == "abc1234"
+
+
+def test_git_commit_unknown_without_git(monkeypatch):
+    """git 이 없거나(PATH) 저장소가 아니면 멈추지 않고 unknown 으로 남긴다."""
+
+    def no_git(args, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(run_ablation.subprocess, "run", no_git)
+    assert run_ablation.git_commit() == "unknown"
+
+    _fake_git(monkeypatch, code=128)
+    assert run_ablation.git_commit() == "unknown"
+
+
+def test_package_version_missing_is_none():
+    """설치 안 된 패키지는 멈추지 않고 none. CI 에는 ultralytics 가 없다."""
+    assert run_ablation.package_version("jarviseo-no-such-package") == "none"
+
+
+@pytest.mark.parametrize(
+    ("old", "expected"),
+    [
+        (_conditions(), True),
+        (_conditions(commit="other"), True),
+        (_conditions(sha="bbbbbbbbbbbb"), False),
+        (_conditions(sessions=(4,)), False),
+        (None, False),
+    ],
+)
+def test_same_conditions_is_weights_and_sessions(old, expected):
+    """같은 조건 = 가중치 지문 · 세션이 같음. 커밋은 안 보고, 조건 기록이 없으면 다른 조건."""
+    assert run_ablation.same_conditions(old, _conditions()) is expected
+
+
+def test_hit_changes_lists_gained_and_lost_photos():
+    """기준 대비 새로 잡힌 사진과 새로 놓친 사진을 따로 센다.
+
+    재현율 숫자만으론 둘이 상쇄돼 안 보인다.
+    """
+    base = {"s01/a.jpg": True, "s01/b.jpg": False, "s01/c.jpg": True, "s02/d.jpg": False}
+    other = {"s01/a.jpg": True, "s01/b.jpg": True, "s01/c.jpg": False, "s02/d.jpg": True}
+
+    gained, lost = run_ablation.hit_changes(base, other)
+
+    assert (gained, lost) == (["s01/b.jpg", "s02/d.jpg"], ["s01/c.jpg"])
 
 
 def test_write_csv_names_file_by_run(tmp_path):

@@ -69,6 +69,10 @@ SHARPNESS_THRESHOLD = _get_float("JARVISEO_SHARPNESS_THRESHOLD", 100.0)
 CLARIFY_MARGIN_THRESHOLD = _get_float("JARVISEO_CLARIFY_MARGIN", 0.15)
 # 손 관절 모델(MediaPipe HandLandmarker). git 에 안 올라가서 각자 받는다(pointing/README.md).
 HAND_LANDMARKER_PATH = MODELS_DIR / "hand_landmarker.task"
+# 물체 후보 검출기 가중치. 파일 경로나 ultralytics 모델 이름. 기본은 사전학습 COCO yolov8n 이다.
+# 학습한 가중치(data/models/detector_rN.pt, #167)는 시험할 때만 .env 로 바꾼다.
+# 기본값 교체는 회차 비교로 나아진 것을 확인한 뒤에 한다.
+DETECTOR_WEIGHTS = _get("JARVISEO_DETECTOR_WEIGHTS") or "yolov8n.pt"
 
 # --- 기능 플래그 ----------------------------------------------------------
 # 아직 안 끝난 기능은 브랜치에 들고 있지 말고, **꺼둔 채로 main 에 머지한다.**

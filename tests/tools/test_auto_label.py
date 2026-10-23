@@ -145,6 +145,15 @@ def test_label_config_lists_classes_in_order():
     assert [x.get("value") for x in labels.findall("Label")] == list(FINETUNE_CLASSES)
 
 
+def test_label_config_turns_on_brightness_and_contrast():
+    """검수 화면에서 밝기 · 대비를 조절할 수 있다.
+
+    어두운 d04 사진의 물건을 못 보고 지나치지 않게.
+    """
+    image = ET.fromstring(auto_label.label_config()).find("Image")
+    assert (image.get("brightnessControl"), image.get("contrastControl")) == ("true", "true")
+
+
 # --- 선생 비교 ---------------------------------------------------------------------
 
 

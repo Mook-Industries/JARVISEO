@@ -180,11 +180,15 @@ def to_label_studio(
 
 
 def label_config() -> str:
-    """Label Studio 프로젝트 설정. 종류는 FINETUNE_CLASSES 순서 그대로."""
+    """Label Studio 프로젝트 설정. 종류는 FINETUNE_CLASSES 순서 그대로.
+
+    밝기 · 대비 조절을 켠다. 밤 공원 영상(d04)은 밝기 중앙값이 9.9/255 라 그대로는 물건이 안 보이고,
+    못 보고 지나친 물건은 라벨 없는 "배경"으로 학습된다. 화면에서만 바뀌고 사진 원본은 그대로다.
+    """
     labels = "\n".join(f'    <Label value="{name}"/>' for name in FINETUNE_CLASSES)
     return (
         "<View>\n"
-        '  <Image name="image" value="$image"/>\n'
+        '  <Image name="image" value="$image" brightnessControl="true" contrastControl="true"/>\n'
         '  <RectangleLabels name="label" toName="image">\n'
         f"{labels}\n"
         "  </RectangleLabels>\n"

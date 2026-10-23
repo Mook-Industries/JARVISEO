@@ -6,7 +6,7 @@
    원본: api/static/jarviseo.js (사용자 목업). 이 파일은 그 복사본에 실제 API 를 붙였다.
    - 모니터: 호출 → 받아쓰기(브라우저) · 말 시작 순간의 장면 → POST /api/ask(팀 그래프)
    - 환경설정 알러지 → GET · PUT /api/allergens
-   - 관리자(성능 리포트)는 아직 예시 데이터다
+   - 성능 리포트는 아직 예시 데이터다
    ========================================================================== */
 
 (() => {
@@ -152,19 +152,9 @@
     app.classList.toggle("is-drawer-open");
   });
 
-  const profileBtn = $("#profile-btn");
-  const profilePop = $("#profile-pop");
-  const setPop = (open) => {
-    profilePop.hidden = !open;
-    profileBtn.setAttribute("aria-expanded", String(open));
-  };
-  profileBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    setPop(profilePop.hidden);
-  });
+  // 로그인은 쓰지 않는다. 아래 칸(#profile-btn)은 환경설정으로 가는 링크다.
 
   document.addEventListener("click", (e) => {
-    if (!profilePop.hidden && !profilePop.contains(e.target)) setPop(false);
     if (app.classList.contains("is-drawer-open") && !$("#sidebar").contains(e.target)) {
       app.classList.remove("is-drawer-open");
     }
@@ -172,7 +162,6 @@
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
-      setPop(false);
       app.classList.remove("is-drawer-open");
     }
   });
@@ -193,7 +182,6 @@
       if (on) el.setAttribute("aria-current", "page");
       else el.removeAttribute("aria-current");
     });
-    setPop(false);
     app.classList.remove("is-drawer-open");
     if (view !== "monitor") stopDemo();
     if (view === "admin") drawChart();
@@ -248,13 +236,58 @@
      ------------------------------------------------------------------------ */
 
   const wave = $("#wave");
+  const waveBars = [];
   for (let i = 0; i < 64; i++) {
     const bar = document.createElement("i");
     const h = i % 7 === 3 ? 6 : i % 4 === 1 ? 4 : 2;
     bar.style.height = `${h}px`;
     bar.style.animationDelay = `${((i * 37) % 90) / 100}s`;
     wave.append(bar);
+    waveBars.push(bar);
   }
+
+  // 듣는 동안 마이크 소리 크기로 파형을 그린다. 목소리가 없으면(문턱 아래) 납작하게 둔다.
+  // 받아쓰기(브라우저)와 같은 마이크를 따로 한 번 더 연다. 권한은 받아쓰기와 같이 묻는다.
+  const VOICE_FLOOR = 0.02; // RMS 문턱. 방 소음은 이 아래, 말소리는 0.05~0.3
+  const meter = { ctx: null, stream: null, raf: 0 };
+  const flatWave = () => waveBars.forEach((b) => (b.style.height = "2px"));
+  const startMeter = async () => {
+    stopMeter();
+    flatWave();
+    if (!navigator.mediaDevices?.getUserMedia) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const an = ctx.createAnalyser();
+      an.fftSize = 1024;
+      ctx.createMediaStreamSource(stream).connect(an);
+      Object.assign(meter, { ctx, stream });
+      const buf = new Float32Array(an.fftSize);
+      const tick = () => {
+        an.getFloatTimeDomainData(buf);
+        let sum = 0;
+        for (const v of buf) sum += v * v;
+        const rms = Math.sqrt(sum / buf.length);
+        const level = rms < VOICE_FLOOR ? 0 : Math.min(1, (rms - VOICE_FLOOR) / 0.2);
+        const t = performance.now() / 120;
+        waveBars.forEach((b, i) => {
+          const shape = 0.55 + 0.45 * Math.abs(Math.sin(i * 0.7 + t)); // 막대마다 조금씩 다르게
+          b.style.height = `${(2 + level * 22 * shape).toFixed(1)}px`;
+        });
+        meter.raf = requestAnimationFrame(tick);
+      };
+      tick();
+    } catch {
+      flatWave(); // 마이크를 못 열면 파형 없이 받아쓰기만 한다
+    }
+  };
+  const stopMeter = () => {
+    cancelAnimationFrame(meter.raf);
+    meter.stream?.getTracks().forEach((t) => t.stop());
+    meter.ctx?.close().catch(() => {});
+    Object.assign(meter, { ctx: null, stream: null, raf: 0 });
+    flatWave();
+  };
 
   const stagesEl = $("#stages");
   STAGES.forEach((st) => {
@@ -419,6 +452,7 @@
   function stopDemo() {
     if (window.speechSynthesis) speechSynthesis.cancel();
     if (listening) listening.abort();
+    stopMeter();
   }
 
   const showShot = (url) => {
@@ -467,6 +501,19 @@
     r.readAsDataURL(file);
     e.target.value = "";
   });
+
+  // 시작음 · 종료음 — 안경(voice/chime.py)과 같은 소리. 환경설정 음량을 따른다.
+  // 호출을 받으면 시작음, 질문하는 말이 끝나면 종료음. 받아쓰기는 소리와 함께 바로 시작한다(안경과 같음).
+  const SOUNDS = { start: new Audio("/sounds/start.wav"), end: new Audio("/sounds/end.wav") };
+  Object.values(SOUNDS).forEach((a) => (a.preload = "auto"));
+  const chime = (which) => {
+    const a = SOUNDS[which];
+    const vol = Number($("#volume").value) / 100;
+    if (!a || vol <= 0) return;
+    a.volume = vol;
+    a.currentTime = 0;
+    a.play().catch(() => {}); // 사용자가 페이지를 한 번도 누르지 않았으면 브라우저가 막는다
+  };
 
   // 대답 읽기 — 환경설정의 음량 · 속도를 따른다
   const speak = (text) => {
@@ -541,7 +588,7 @@
     speak((d.spoken && d.spoken.length ? d.spoken : [answer]).join(" "));
   }
 
-  async function ask(question, frame, sttSec) {
+  async function ask(question, frame, sttSec, more = []) {
     busy = true;
     STAGES.forEach((st) => (st.sec = 0));
     STAGES[0].sec = sttSec || 0;
@@ -552,7 +599,12 @@
       const r = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, image: frame || null }),
+        body: JSON.stringify({
+          question,
+          image: frame || null,
+          more: frame ? more.map((m) => m.shot) : [],
+          more_ms: frame ? more.map((m) => m.ms) : [],
+        }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || r.statusText);
@@ -584,11 +636,24 @@
     rec.lang = "ko-KR";
     rec.interimResults = true;
     let frame = null;
+    let more = [];
     let heard = "";
     const t0 = performance.now();
     rec.onspeechstart = () => {
       frame = grabFrame(); // 말을 시작한 순간
+      // 0.15초 간격으로 2장 더 찍어 모두 3장. 서버가 흔들림 · 반사가 가장 적은 장면을 고른다.
+      // 그 순간 손이 흔들리거나 빛이 반사돼도 다른 장면으로 읽을 수 있다. 카메라가 켜졌을 때만.
+      more = [];
+      if (feed.dataset.cam !== "on") return;
+      const start = performance.now();
+      [150, 300].forEach((ms) =>
+        setTimeout(() => {
+          const shot = grabFrame();
+          if (shot) more.push({ shot, ms: Math.round(performance.now() - start) });
+        }, ms)
+      );
     };
+    rec.onspeechend = () => chime("end"); // 질문하는 말이 끝났다
     rec.onresult = (e) => {
       heard = [...e.results].map((x) => x[0].transcript).join("");
       setText("#core-sub", `“${heard}”`);
@@ -599,14 +664,17 @@
     };
     rec.onend = () => {
       listening = null;
+      stopMeter();
       const q = heard.trim();
-      if (q) ask(q, frame || grabFrame(), (performance.now() - t0) / 1000);
+      if (q) ask(q, frame || grabFrame(), (performance.now() - t0) / 1000, frame ? more : []);
       else if (!busy) {
         setState("idle");
         setText("#core-sub", "말씀을 듣지 못했어요. 다시 부르거나 아래에 입력해 주세요.");
       }
     };
     rec.start();
+    startMeter();
+    chime("start"); // 호출을 받았다
   };
 
   $("#call-btn").addEventListener("click", listen);

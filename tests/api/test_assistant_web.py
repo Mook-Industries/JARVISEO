@@ -89,6 +89,16 @@ def test_ask_rejects_bad_input(client, body):
     assert c.post("/api/ask", json=body).status_code == 400
 
 
+def test_chime_sounds_are_served(client):
+    """대시보드가 안경과 같은 시작음 · 종료음을 받는다. 다른 이름은 404."""
+    c, _ = client
+    for name in ("start.wav", "end.wav"):
+        r = c.get(f"/sounds/{name}")
+        assert r.status_code == 200 and r.content[:4] == b"RIFF"
+    assert c.get("/sounds/../main.py").status_code == 404
+    assert c.get("/sounds/none.wav").status_code == 404
+
+
 def test_assistant_page_is_served(client):
     c, _ = client
     r = c.get("/assistant")
@@ -188,3 +198,84 @@ def test_dashboard_is_served_with_its_script(client):
     js = c.get("/dashboard.js")
     assert js.status_code == 200 and "/api/ask" in js.text and "/api/allergens" in js.text
     assert c.get("/static/jarviseo.css").status_code == 200  # 목업 원본 CSS 를 그대로 쓴다
+
+
+# --- 손 방향 가리킴(v2) ------------------------------------------------------------
+
+
+class NoHands:
+    """손을 못 찾는 손 검출기. 그래프에 넘어가는지만 본다."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def detect(self, image):
+        self.calls += 1
+        return []
+
+
+def test_hand_detector_reaches_graph(tmp_path):
+    """손 검출기를 넣으면 그래프가 그걸로 손을 찾고, 응답에 v2 라고 알린다."""
+    store = MemoryStore(database_url=f"sqlite:///{tmp_path / 'h.db'}")
+    store.init_schema()
+    hands = NoHands()
+    web = WebAssistant(
+        store, None, store.ensure_user(), vlm=FakeVLMClient(["컵이에요."]),
+        detector=CupOnTheLeft(), hands=hands, photo_dir=None,
+    )  # fmt: skip
+    web.ask("저거 뭐야?", np.full((120, 160, 3), 200, np.uint8))
+    assert hands.calls >= 1 and web.pointing == "v2"
+    web.close()
+
+
+def test_without_hand_detector_is_v1(client):
+    c, _ = client
+    d = c.post("/api/ask", json={"question": "오늘 기분 어때?", "image": photo()}).json()
+    assert d["pointing"] == "v1"
+
+
+# --- 여러 장 중 가장 선명한 장면 ------------------------------------------------
+
+
+def _jpeg(img) -> str:
+    ok, buf = cv2.imencode(".jpg", img)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
+
+
+def _sharp():
+    img = np.full((120, 160, 3), 200, np.uint8)
+    img[::4] = 0  # 줄무늬 = 경계가 많아 선명도(라플라시안 분산)가 크다
+    return img
+
+
+def test_picks_sharpest_of_burst(tmp_path):
+    """말 시작 뒤 잇달아 찍은 장면 중 흔들림 · 반사가 가장 적은 것을 쓴다."""
+    store = MemoryStore(database_url=f"sqlite:///{tmp_path / 'b.db'}")
+    store.init_schema()
+    vlm = FakeVLMClient(["네."])
+    web = WebAssistant(
+        store, None, store.ensure_user(), vlm=vlm, detector=NoObjects(), photo_dir=None
+    )
+    blurry = np.full((120, 160, 3), 200, np.uint8)
+    state, _ = web.ask("오늘 기분 어때?", blurry, [(blurry, 0.15), (_sharp(), 0.3)])
+    assert state["frame"].image.std() > 50 and web.picked.std() > 50
+    assert web.picked_index == 2
+    web.close()
+
+
+def test_ask_accepts_burst(client):
+    c, vlm = client
+    body = {
+        "question": "오늘 기분 어때?",
+        "image": photo(),
+        "more": [_jpeg(_sharp())],
+        "more_ms": [150],
+    }
+    assert c.post("/api/ask", json=body).status_code == 200
+    assert vlm.asked[-1][0] is not None
+
+
+def test_ask_rejects_mismatched_burst(client):
+    c, _ = client
+    body = {"question": "뭐야?", "image": photo(), "more": [photo(), photo()], "more_ms": [150]}
+    assert c.post("/api/ask", json=body).status_code == 400
