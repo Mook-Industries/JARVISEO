@@ -259,6 +259,17 @@ python scripts/put_cloud_secrets.py --new-password  # 접속 비밀번호 바꾸
 | 성분 확인(Google Vision) | 580MiB | 4.3~4.6초 |
 | 성분 확인(EasyOCR 로 떨어지면) | 3,108MiB | 10분 넘어도 안 끝남 |
 
+10/24 서버(t3.small)에 올린 뒤 같은 사진으로 로컬(이 노트북, `python -m jarviseo.api`)과 5번씩 비교했다
+(`scripts/compare_web_latency.py`). 서버가 노트북 CPU 보다 빨라 오히려 짧았다.
+
+| | 질문 중앙값 | 성분 확인(Vision) 중앙값 |
+|---|---|---|
+| 로컬(노트북) | 4.0초 (첫 질문 23.5초) | 6.8초 |
+| 클라우드(t3.small, https · 접속 비밀번호 포함) | **1.9초** (첫 질문 12.1초) | **3.1초** |
+
+그때 서버 메모리: 팀 웹 663MiB(상한 1.37GiB) · db 31MiB · caddy 13MiB, 서버 전체 1.9GB 중 1.1GB 사용,
+스왑 9MB. 디스크 20GB 중 8.4GB.
+
 EasyOCR 은 서버를 키워도 쓸 수 없을 만큼 느려서, 서버에서는 **꺼 둔다**(`JARVISEO_OCR_LOCAL_FALLBACK=false`,
 `deploy/compose.yml`). Vision 이 실패하면 "지금은 성분표를 읽을 수 없어요" 라고 답한다. 그래도 메모리가 튀면
 api 컨테이너만 1400MB 에서 죽고 다시 뜬다(db · caddy 는 그대로).
@@ -278,6 +289,7 @@ PowerShell 에서 `--instance-type '{"Value":"t3.small"}'` 처럼 JSON 으로 �
 
 질문 · 성분 확인 때 받은 사진은 팀 웹이 `data/captures/web/` 에 남긴다. 서버에서는 이 폴더를 **tmpfs(메모리, 200MB)**로
 두어 디스크에 쌓이지 않고 컨테이너를 다시 띄우면(배포 · 재시작마다) 사라진다. 얼굴 · 집 안이 찍힐 수 있어서다.
+10/24 확인: 질문 · 성분 확인 10번 뒤 tmpfs 에 사진 15장(1.3MB), 디스크에는 없다. 대화 기록(턴)은 서버 Postgres 에 남는다.
 
 ### 배포 역할이 믿는 GitHub 토큰 모양
 
