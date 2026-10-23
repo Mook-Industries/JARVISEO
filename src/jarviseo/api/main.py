@@ -72,7 +72,7 @@ from jarviseo.types import IngredientSource
 API_DB = os.environ.get("JARVISEO_API_DB", "sqlite:///data/assistant.db")
 PAGES = Path(__file__).parent / "pages"
 STATIC = Path(__file__).parent / "static"  # 사용자 목업(디자인 원본). 읽기만 한다
-MAX_MORE_FRAMES = 5  # 말 시작 뒤 잇달아 찍는 장면 수 상한(대시보드는 3장을 보낸다)
+MAX_MORE_FRAMES = 4  # 말 시작 뒤 잇달아 찍는 장면 수 상한(대시보드는 2장을 더 보낸다)
 MAX_IMAGE_BYTES = 15 * 1024 * 1024  # 휴대폰 원본 사진도 들어가는 크기
 OCR_NOTEBOOK_URL = os.environ.get("JARVISEO_OCR_NOTEBOOK_URL", "")
 OCR_STATUS_TTL_SEC = 5.0  # 여러 탭이 동시에 물어봐도 Colab 에는 5초에 한 번만 묻는다
@@ -308,6 +308,7 @@ def _ask(s, question: str, image: np.ndarray | None, more=None) -> dict:
         "elapsed_ms": round((time.perf_counter() - t0) * 1000),
         "ingredient": None,
         "retried_whole": s.assistant.retried_whole,
+        "picked_frame": getattr(s.assistant, "picked_index", 0),  # 0 = 말 시작 순간
     }
     check = state.get("ingredient")
     if check is not None:

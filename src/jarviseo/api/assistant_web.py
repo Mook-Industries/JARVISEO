@@ -38,6 +38,7 @@ import numpy as np
 from jarviseo import config
 from jarviseo.capture import FrameBuffer
 from jarviseo.memory import MemoryStore
+from jarviseo.nutrition.quality import best_frame
 from jarviseo.nutrition.service import IngredientChecker
 from jarviseo.types import BBox, Detection, Frame, Intent
 from jarviseo.voice import FakeSpeechToText, FakeTextToSpeech
@@ -120,6 +121,7 @@ class WebAssistant:
         self.retried_whole = False  # 지난 턴에 크롭을 못 읽어 사진 전체로 다시 읽었나
         self.judged_image: np.ndarray | None = None  # 지난 턴 성분 판정에 쓴 사진
         self.picked: np.ndarray | None = None  # 지난 턴에 여러 장 중 고른 장면
+        self.picked_index = 0  # 몇 번째 장면을 골랐나(0 = 말 시작 순간)
         self.session_id = store.start_session(user_id, title="web")
 
     def _parts(self) -> None:
@@ -163,19 +165,22 @@ class WebAssistant:
 
         Args:
             image: 말을 시작한 순간의 장면.
-            more: 그 뒤 잇달아 찍은 장면과 말 시작으로부터 지난 초. 그래프가 말 시작 0.5초 안에서
-                가장 선명한 장면을 고른다(capture.FrameBuffer.pick_best). 한 장만 찍으면 그 순간
-                손이 흔들리거나 초점이 안 맞았을 때 그대로 실패한다.
+            more: 그 뒤 잇달아 찍은 장면과 말 시작으로부터 지난 초. 흔들림 · 반사가 가장 적은
+                장면을 고른다(nutrition.quality.best_frame). 한 장만 찍으면 그 순간 손이 흔들리거나
+                빛이 반사됐을 때 그대로 실패한다(멘토 피드백 2026-10-22).
         """
         self._parts()
         now = time.monotonic()
         frames = None
         if image is not None:
-            shots = [(image, 0.0), *(more or [])]
-            frames = FrameBuffer(max(4, len(shots)))
-            for shot, after in shots:
-                frames.push(Frame(image=shot, timestamp=now + after, source_id="web"))
-            image = frames.pick_best(around=now).image  # 그래프가 고를 장면과 같다
+            # 말 시작 뒤 잇달아 찍은 장면 중 품질(선명도 × (1 - 반사))이 가장 좋은 한 장을 쓴다.
+            # 그래프의 pick_best 는 선명도만 보므로, 반사까지 보는 성분 쪽 기준으로 먼저 고른다.
+            shots = [image, *(shot for shot, _ in more or [])]
+            index = best_frame(shots)[0] if len(shots) > 1 else 0
+            image = shots[index]
+            frames = FrameBuffer(4)
+            frames.push(Frame(image=image, timestamp=now, source_id="web"))
+            self.picked_index = index
         self.picked = image
         ingredient = classify_intent(question) is Intent.INGREDIENT
         detector, checker = self._detector, self.checker

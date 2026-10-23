@@ -594,12 +594,12 @@
     const t0 = performance.now();
     rec.onspeechstart = () => {
       frame = grabFrame(); // 말을 시작한 순간
-      // 0.15초 간격으로 3장 더 찍는다. 서버(그래프)가 말 시작 0.5초 안에서 가장 선명한 장면을 고른다.
-      // 그 순간 손이 흔들리거나 초점이 안 맞아도 다른 장면으로 읽을 수 있다. 카메라가 켜졌을 때만.
+      // 0.15초 간격으로 2장 더 찍어 모두 3장. 서버가 흔들림 · 반사가 가장 적은 장면을 고른다.
+      // 그 순간 손이 흔들리거나 빛이 반사돼도 다른 장면으로 읽을 수 있다. 카메라가 켜졌을 때만.
       more = [];
       if (feed.dataset.cam !== "on") return;
       const start = performance.now();
-      [150, 300, 450].forEach((ms) =>
+      [150, 300].forEach((ms) =>
         setTimeout(() => {
           const shot = grabFrame();
           if (shot) more.push({ shot, ms: Math.round(performance.now() - start) });

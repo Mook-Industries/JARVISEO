@@ -223,7 +223,7 @@ def _sharp():
 
 
 def test_picks_sharpest_of_burst(tmp_path):
-    """말 시작 뒤 잇달아 찍은 장면 중 가장 선명한 것을 그래프가 쓴다."""
+    """말 시작 뒤 잇달아 찍은 장면 중 흔들림 · 반사가 가장 적은 것을 쓴다."""
     store = MemoryStore(database_url=f"sqlite:///{tmp_path / 'b.db'}")
     store.init_schema()
     vlm = FakeVLMClient(["네."])
@@ -233,6 +233,7 @@ def test_picks_sharpest_of_burst(tmp_path):
     blurry = np.full((120, 160, 3), 200, np.uint8)
     state, _ = web.ask("오늘 기분 어때?", blurry, [(blurry, 0.15), (_sharp(), 0.3)])
     assert state["frame"].image.std() > 50 and web.picked.std() > 50
+    assert web.picked_index == 2
     web.close()
 
 
