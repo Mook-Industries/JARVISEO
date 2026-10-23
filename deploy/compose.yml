@@ -36,8 +36,15 @@ services:
       dockerfile: Dockerfile.api
     image: jarviseo-api:server
     restart: unless-stopped
+    # 이 컨테이너가 쓸 수 있는 메모리 상한. 넘으면 이 컨테이너만 죽고 restart 로 다시 뜬다.
+    # db · caddy 와 서버 전체가 같이 멈추는 것을 막는 안전망이다. 팀 웹(Dockerfile.web)은 10/24 로컬에서
+    # Vision 으로 읽을 때 최고 580MiB 였다(#179). EasyOCR 로 떨어지면 3.1GiB 라 아래 설정으로 막는다.
+    mem_limit: 1400m
     environment:
       JARVISEO_DATABASE_URL: postgresql+psycopg://jarviseo:${DB_PASSWORD}@db:5432/jarviseo
+      # Google Vision 이 실패해도 이 서버의 EasyOCR 로 대신 읽지 않는다(config.OCR_LOCAL_FALLBACK).
+      # 대신 "지금은 성분표를 읽을 수 없어요" 라고 답한다. 비밀값이 아니라 여기 둔다.
+      JARVISEO_OCR_LOCAL_FALLBACK: "false"
     depends_on:
       db:
         condition: service_healthy
