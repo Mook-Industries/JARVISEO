@@ -2,12 +2,14 @@ name: Deploy
 
 # 담당: 문태현 (배포)
 #
-# main 에 머지되면 클라우드 서버(AWS EC2, 서울)에 새 버전을 띄운다.
+# main 에 머지되면 클라우드 서버(AWS EC2, 서울)에 팀 웹 새 버전을 띄운다(#179).
 #   1. GitHub 이 발급하는 OIDC 토큰으로 AWS 역할(jarviseo-github-deploy)을 빌린다.
-#      AWS 키를 GitHub 에 넣지 않는다. 그 역할은 main 에서 돈 이 워크플로만 빌릴 수 있고,
-#      할 수 있는 일은 그 서버 한 대에 SSM 명령을 보내는 것뿐이다.
-#   2. SSM 으로 서버에 명령을 보낸다: 레포를 이 커밋으로 맞추고 deploy/update.sh 를 돌린다
-#      (api 이미지 빌드 → 다시 띄우기 → 스키마 맞추기 → /health/db 확인). SSH 는 열지 않는다.
+#      AWS 키를 GitHub 에 넣지 않는다. 그 역할은 main 에서 돈 이 워크플로만 빌릴 수 있고, 할 수 있는
+#      일은 ECR 저장소 jarviseo-web 에 이미지를 올리는 것과 그 서버 한 대에 SSM 명령을 보내는 것뿐이다.
+#   2. Dockerfile.web 으로 팀 웹 이미지를 빌드해 ECR 에 올린다. 서버(t3.small)에서 빌드하면 torch 를
+#      받느라 수십 분 걸리고 메모리가 모자란다. 빌드 캐시는 Docker 워크플로의 web image 와 같이 쓴다.
+#   3. SSM 으로 서버에 명령을 보낸다: 레포를 이 커밋으로 맞추고 deploy/update.sh 를 돌린다
+#      (키 받기 → 이미지 받기 → 다시 띄우기 → 스키마 맞추기 → /health 확인). SSH 는 열지 않는다.
 #
 # 저장소 변수(Settings → Secrets and variables → Actions → Variables)가 있어야 돈다.
 #   AWS_DEPLOY_ROLE_ARN   arn:aws:iam::<계정>:role/jarviseo-github-deploy
@@ -18,8 +20,9 @@ on:
   push:
     branches: [main]
     paths:
-      - Dockerfile.api
-      - requirements-api.txt
+      - Dockerfile.web
+      - requirements.lock
+      - data/datasets/allergen_synonyms.json
       - src/jarviseo/**
       - deploy/**
       - .github/workflows/deploy.yml
@@ -38,26 +41,46 @@ jobs:
   deploy:
     if: vars.AWS_DEPLOY_ROLE_ARN != '' && vars.EC2_INSTANCE_ID != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
+      - uses: actions/checkout@v4
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ap-northeast-2
 
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 팀 웹 이미지 빌드 · ECR 에 올리기
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.web
+          push: true
+          tags: |
+            ${{ steps.ecr.outputs.registry }}/jarviseo-web:${{ github.sha }}
+            ${{ steps.ecr.outputs.registry }}/jarviseo-web:latest
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
       - name: 서버에서 새 버전 띄우기 (SSM)
         env:
           INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
           SHA: ${{ github.sha }}
+          IMAGE: ${{ steps.ecr.outputs.registry }}/jarviseo-web:${{ github.sha }}
         run: |
           # SSM 은 명령을 sh 로 돌린다. bash 전용 문법은 update.sh 안에서만 쓴다.
-          commands=$(jq -cn --arg sha "$SHA" '[
+          commands=$(jq -cn --arg sha "$SHA" --arg image "$IMAGE" '[
             "set -e",
             "R=/opt/jarviseo/repo",
             "test -d $R/.git || git clone --quiet https://github.com/Mook-Industries/JARVISEO.git $R",
             "git -C $R fetch --quiet --depth 1 origin \($sha)",
             "git -C $R checkout --quiet --force \($sha)",
-            "bash $R/deploy/update.sh"
+            "WEB_IMAGE=\($image) bash $R/deploy/update.sh"
           ]')
           cmd_id=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
