@@ -57,8 +57,10 @@ datasets/pointing/
 datasets/detector/
 ├── videos/             안경 카메라 영상. 이름은 d01_kitchen.mov (영상 번호 d + 두 자리 · 장소 영어 소문자)
 ├── frames/
-│   └── d01/            영상 하나 = 폴더 하나. d01_0001.jpg … (tools/extract_frames.py)
+│   └── d01/            영상 하나 = 폴더 하나. d01_0001.jpg … (tools/extract_frames.py --every 3)
 ├── frames.csv          file · video · t_sec — 사진이 어느 영상 몇 초에서 나왔나
+├── excluded/
+│   └── d04/            frames/ 에서 뺀 사진(알아볼 수 없음 · 얼굴). label · build 는 frames/ 만 읽는다
 ├── auto/               자동 라벨(R1) — labels/*.txt · tasks.json(Label Studio) · label_config.xml
 ├── reviewed/           Label Studio 에서 검수하고 YOLO 로 내보낸 것(R2) — labels/ · classes.txt
 └── yolo_r1/            회차 하나 = 폴더 하나 — images/{train,val} · labels/{train,val} · data.yaml
@@ -82,11 +84,18 @@ datasets/detector/
 
 - **학습 사진에 보이는 11종은 전부 라벨한다.** 일부 종류만 라벨하면 나머지가 "배경"으로 학습돼 사라진다. 11종 밖 물건(안경 · 시계 등)은 라벨하지 않는다 → 학습한 가중치로는 안 잡힌다.
 - 묶음(햇반 더미 · 책 여러 권)은 한 개씩. 절반 이상 보이면 라벨, 유리 · 화면에 비친 것은 안 한다. 손에 쥔 물건은 보이는 만큼.
-- **학습 / 검증은 영상 단위로 나눈다**(`build --val d05`). 같은 영상에서 1초 차이로 뽑은 사진은 거의 같아서, 사진 단위로 섞으면 검증 점수가 부풀려진다.
+- **학습 / 검증은 영상 단위로 나눈다**(`build --val d05`). 같은 영상에서 몇 초 차이로 뽑은 사진은 배경이 같아서, 사진 단위로 섞으면 검증 점수가 부풀려진다.
   이 "검증"은 학습 중 best.pt 를 고르는 데만 쓴다. 회차 비교는 가리킴 valid(세션 1 · 2)의 후보 재현율로 한다.
-- **가리킴 test 장소(라운지)와 valid 배치(s01 책상 · s02 선반 · s04 식탁)는 영상에 넣지 않는다.** 평가에 쓰는 장면을 학습하면 회차 비교와 최종 test 숫자가 부풀려진다.
+- **가리킴 test 장소(라운지)와 valid 배치(s01 책상 · s02 선반 · s04 강의실 의자)는 영상에 넣지 않는다.** 평가에 쓰는 장면을 학습하면 회차 비교와 최종 test 숫자가 부풀려진다.
+  가리킴 train(s05) 사진도 학습에 넣지 않는다. s05 집 부분이 검증 영상(d05)과 같은 방이라 검증에 배경이 샌다.
+- **사람이 봐도(밝게 키워도) 무엇인지 알아볼 수 없는 사진과 얼굴이 또렷한 사진은 `excluded/dNN/` 로 옮긴다.** 지우지 않는 이유: 다시 뽑으면 되살아나므로 무엇을 뺐는지 남겨 둔다.
+  어둡거나 보랏빛이라는 것만으로는 빼지 않는다. 실제로 쓸 때도 그런 사진이 들어오고, 평가셋도 색 때문에 빼지 않았다.
+  물건이 있는데 안 보여 라벨이 빠진 사진은 그 물건을 "배경"으로 가르치므로, 남긴 어두운 사진은 검수 때 Label Studio 밝기 조절로 보고 라벨한다.
 - Colab 에는 `frames/` 와 가리킴 `raw/s01` · `raw/s02` · `labels.csv` 만 올린다. test(s03) 사진은 올리지 않는다.
-- 얼굴 · 화면 속 메시지 같은 개인 정보는 찍지 않는다(사진이 Colab · Drive 로 간다).
+- 얼굴 · 화면 속 메시지 같은 개인 정보는 찍지 않는다(사진이 Colab · Drive 로 간다). 찍혔으면 그 사진은 `excluded/` 로 옮긴다.
+- **학습한 가중치는 `models/detector_rN.pt` 로 둔다.** Colab 결과(Drive `detector/runs/rN/weights/best.pt`)를 이 이름으로 받는다.
+  회차마다 파일 이름이 다 `best.pt` 라 이름으로 회차를 구별하고, 평가 기록(`run_ablation.py`)에는 내용 지문(sha256 앞 12자리)이 남는다.
+  실제 비서에서 시험하려면 `.env` 에 `JARVISEO_DETECTOR_WEIGHTS=data/models/detector_rN.pt`. 비워 두면 사전학습 `yolov8n.pt` 다.
 
 ## 웨이크워드 녹음 보관 규칙
 

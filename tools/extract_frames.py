@@ -1,10 +1,10 @@
-"""영상 → 학습용 사진 — 1초에 1장 뽑고, 거의 같은 장면은 버린다.  담당: 최홍묵
+"""영상 → 학습용 사진 — 3초에 1장 뽑고, 거의 같은 장면은 버린다.  담당: 최홍묵
 
 YOLO 파인튜닝(#167)의 첫 단계. 안경 카메라로 찍은 영상(QuickTime .mov)을 사진으로 바꿔
 tools/auto_label.py 가 라벨 초안을 붙일 수 있게 한다.
 
 파일 이름에 영상 번호(d01)를 남긴다. 학습 / 검증을 영상 단위로 나눌 때 이 번호만 본다.
-같은 영상에서 1초 차이로 뽑은 사진은 거의 같아서, 사진 단위로 섞으면 검증 점수가 부풀려진다.
+같은 영상에서 몇 초 차이로 뽑은 사진도 배경이 같아서, 사진 단위로 섞으면 검증 점수가 부풀려진다.
 
 실행 (레포 맨 위 폴더에서):
     python tools/extract_frames.py                    # data/datasets/detector/videos/ 의 영상 전부
@@ -32,9 +32,12 @@ VIDEO_SUFFIXES = (".mov", ".mp4")
 VIDEO_NAME = re.compile(r"(d\d{2})_[a-z]+")
 FRAMES_COLUMNS = ["file", "video", "t_sec"]
 JPEG_QUALITY = 95
-# dHash 64비트 중 이만큼 이하로 다르면 같은 장면으로 본다. 출발점이다.
-# 3분 영상 하나에서 60~100장이 남는지 보고 조정한다.
+# dHash 64비트 중 이만큼 이하로 다르면 같은 장면으로 본다. 고개를 거의 안 돌린 구간을 거르는 몫이다.
+# 사진 양은 간격(--every)으로 정한다. 안경 카메라는 고개를 따라 계속 움직여서 1초 간격 사진끼리도
+# 19~26비트가 달라 거의 안 걸러졌다(10/23, 영상 6개 1133장). 3초 간격이 406장이다.
 MAX_DISTANCE = 6
+# 몇 초에 한 장. R1 · R2 와 R3 보강 영상이 같은 간격이어야 회차 비교가 맞는다.
+EVERY_SEC = 3.0
 
 
 def video_id(path: Path) -> str:
@@ -190,14 +193,14 @@ def find_videos(videos_dir: Path) -> list[Path]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="영상 → 학습용 사진 (1초에 1장, 중복 거르기)")
+    parser = argparse.ArgumentParser(description="영상 → 학습용 사진 (3초에 1장, 중복 거르기)")
     parser.add_argument(
         "--root",
         type=Path,
         default=config.DATASETS_DIR / "detector",
         help="검출기 데이터 폴더 (videos/ 를 읽고 frames/ 에 쓴다)",
     )
-    parser.add_argument("--every", type=float, default=1.0, help="몇 초에 한 장")
+    parser.add_argument("--every", type=float, default=EVERY_SEC, help="몇 초에 한 장")
     parser.add_argument(
         "--max-distance", type=int, default=MAX_DISTANCE, help="이 이하로 다르면 같은 장면(0~64)"
     )

@@ -136,6 +136,16 @@ def create_app(
     def dashboard_js() -> FileResponse:
         return FileResponse(PAGES / "dashboard.js", media_type="text/javascript")
 
+    @app.get("/sounds/{name}", include_in_schema=False)
+    def sound(name: str) -> FileResponse:
+        """호출을 받은 시작음 · 질문이 끝난 종료음. 안경(voice/chime.py)과 같은 파일을 쓴다."""
+        from jarviseo.voice.chime import END_WAV, START_WAV
+
+        path = {"start.wav": START_WAV, "end.wav": END_WAV}.get(name)
+        if path is None or not path.is_file():
+            raise HTTPException(404, "없는 소리입니다")
+        return FileResponse(path, media_type="audio/wav")
+
     @app.get("/ingredient", include_in_schema=False)
     def ingredient_page() -> FileResponse:
         """사진을 올려 성분을 확인하는 페이지."""

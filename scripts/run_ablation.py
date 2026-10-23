@@ -2,23 +2,33 @@
 
 tools/label_targets.py 가 만든 labels.csv 의 사진마다 한 번 검출하고, 버전마다 켤 단서만 켜서
 resolve_target 으로 고른 박스를 정답 박스와 비교한다(IoU 0.5 이상이면 맞음).
-결과는 DB eval_run(버전마다 한 줄, 지표 묶음) · eval_sample(사진마다 맞음/틀림)과
-사진별 CSV(실패 분류 · margin · 지연)에 남기고, 이전 실행과 비교표를 찍는다.
+결과는 DB eval_run(가중치 × 버전마다 한 줄, 지표 묶음) · eval_sample(사진마다 맞음/틀림)과
+사진별 CSV(실패 분류 · margin · 지연)에 남기고, 같은 조건의 이전 실행과 비교표를 찍는다.
 
 버전은 단서를 하나씩 쌓아 켠다(types.CueKind 순서). 아직 구현 안 된 단서가 든 버전은 건너뛴다.
-검출은 사진마다 한 번만 해서, 버전 차이가 단서에서만 나오게 한다.
+검출은 가중치마다 사진마다 한 번만 해서, 버전 차이가 단서에서만 나오게 한다.
 STT · VLM 없이 촬영 때 적은 발화로 채점해서, 가리킴 모델 실력만 따로 잰다.
+
+검출기 회차(R0 · R1 · R2 …)는 --weights 에 같이 적어 한 실행에서 나란히 잰다(#167).
+같은 코드 · 같은 사진 · 같은 손으로 재야 표의 차이가 가중치 몫이 된다. 첫 가중치가 비교 기준이다.
+무엇으로 쟀는지(커밋 · 가중치 지문 · 세션 · 장비)는 eval_run.metrics["conditions"] 에 남는다.
 
 실행 (레포 맨 위 폴더에서):
     python scripts/run_ablation.py --note "v1 기준선"
     python scripts/run_ablation.py --variants v1 v2 --note "v2 손 방향 추가"
+    python scripts/run_ablation.py --weights yolov8n.pt data/models/detector_r1.pt --note "R0 vs R1"
+    python scripts/run_ablation.py --sessions 4 --note "말 · 맥락 세션"
     python scripts/run_ablation.py --split test --note "최종"     # 10/24 최종 측정 때만
 """
 
 import argparse
 import csv
+import hashlib
+import platform
+import subprocess
 import time
 from collections import Counter
+from importlib import metadata
 from pathlib import Path
 
 import cv2
@@ -32,6 +42,9 @@ from jarviseo.pointing.resolver import IMPLEMENTED_CUES, resolve_target
 from jarviseo.types import BBox, CueKind, Detection, TargetResolution
 
 POINTING_DIR = config.DATASETS_DIR / "pointing"
+# --sessions 를 안 주면 재는 세션. valid 62장 = 세션 1 · 2. 말 · 맥락 세션(s04)을 표시해도
+# 명령을 안 바꾸면 62장 숫자가 그대로라서, 회차 비교 기준이 흔들리지 않는다.
+DEFAULT_SESSIONS: dict[str, tuple[int, ...]] = {"valid": (1, 2), "test": (3,)}
 # 단서를 하나씩 쌓아 켠다. ablation 표의 한 줄이 한 버전이다.
 VARIANTS: dict[str, frozenset[CueKind]] = {
     "v1": frozenset({CueKind.CENTER}),
@@ -70,15 +83,16 @@ CSV_COLUMNS = [
 ]
 
 
-def load_samples(path: Path, split: str) -> list[dict]:
-    """labels.csv 에서 그 split 의 쓸 수 있는 사진만 읽어, 정답 박스 · 표시를 풀어 둔다."""
+def load_samples(path: Path, split: str, sessions: list[int]) -> list[dict]:
+    """labels.csv 에서 그 split · 세션의 쓸 수 있는 사진만 읽어, 정답 박스 · 표시를 풀어 둔다."""
     if not path.exists():
         return []
     with path.open(encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f))
     samples = []
     for row in rows:
-        if row["split"] != split or row["excluded"] == "1":
+        # session 은 CSV 라 글자다. 정수로 바꿔야 [1, 2] 와 비교된다.
+        if row["split"] != split or row["excluded"] == "1" or int(row["session"]) not in sessions:
             continue
         samples.append(
             {
@@ -177,6 +191,98 @@ def evaluate(
     return rows
 
 
+def missing_weights(weights: list[str]) -> list[str]:
+    """폴더까지 적었는데 파일이 없는 가중치.
+
+    이름만 적은 것(yolov8n.pt)은 처음 쓰는 PC 에서 ultralytics 가 받아 오게 둔다.
+    """
+    return [w for w in weights if Path(w).name != w and not Path(w).exists()]
+
+
+def weights_fingerprint(path: Path) -> dict:
+    """가중치 파일 이름과 내용 지문(sha256 앞 12자리).
+
+    Colab 은 회차마다 같은 이름(best.pt)을 줘서, 이름만으로는 R1 과 R2 를 가를 수 없다.
+    """
+    with Path(path).open("rb") as f:
+        digest = hashlib.file_digest(f, "sha256").hexdigest()
+    return {"name": Path(path).name, "sha256": digest[:12]}
+
+
+def weights_label(fingerprint: dict) -> str:
+    """표에 찍는 가중치 이름. 예: detector_r1.pt(3fa2c1)"""
+    return f"{fingerprint['name']}({fingerprint['sha256'][:6]})"
+
+
+def git_commit() -> str:
+    """지금 코드의 짧은 커밋 번호. 커밋 안 한 수정이 있으면 +dirty. git 을 못 부르면 unknown.
+
+    고친 채로 재면 같은 커밋 번호라도 코드가 다르다. 기록만 보고 "같은 코드였나"를 가르려고 붙인다.
+    """
+    git = {
+        "cwd": config.PROJECT_ROOT,
+        "capture_output": True,
+        "encoding": "utf-8",
+        "errors": "replace",  # 윈도우 git 이 cp949 로 오류 문장을 내도 여기서 멈추지 않게
+        "check": False,
+    }
+    try:
+        head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], **git)
+        status = subprocess.run(["git", "status", "--porcelain"], **git)
+    except FileNotFoundError:  # git 이 PATH 에 없다(윈도우에서 흔함)
+        return "unknown"
+    if head.returncode != 0:
+        return "unknown"
+    return head.stdout.strip() + ("+dirty" if status.stdout.strip() else "")
+
+
+def package_version(name: str) -> str:
+    """설치된 패키지 버전. import 하지 않고 읽어서 CI(ultralytics 없음)에서도 돈다."""
+    try:
+        return metadata.version(name)
+    except metadata.PackageNotFoundError:
+        return "none"
+
+
+def run_conditions(weights: dict, sessions: list[int], conf: float) -> dict:
+    """이번 실행을 무엇으로 쟀나. eval_run.metrics["conditions"] 에 들어간다.
+
+    ERD 가 원본이라 열을 늘리지 않고 metrics(JSON)에 둔다.
+    컴퓨터 이름은 비교에 필요 없어 넣지 않는다.
+    """
+    return {
+        "commit": git_commit(),
+        "weights": weights,
+        "sessions": sorted(sessions),
+        "conf": conf,
+        "device": f"{platform.system()} {platform.machine()}",
+        "ultralytics": package_version("ultralytics"),
+    }
+
+
+def same_conditions(old: dict | None, new: dict) -> bool:
+    """같은 가중치(지문) · 같은 세션이면 같은 조건이다.
+
+    커밋은 안 본다. 같은 가중치에서 코드를 고친 효과를 보려는 비교다.
+    조건 기록이 없는 옛 실행(run 1~3)은 무엇으로 쟀는지 몰라서 비교하지 않는다.
+    """
+    if not old:
+        return False
+    same_weights = old.get("weights", {}).get("sha256") == new["weights"]["sha256"]
+    return same_weights and old.get("sessions") == new["sessions"]
+
+
+def hit_changes(base: dict[str, bool], other: dict[str, bool]) -> tuple[list[str], list[str]]:
+    """기준 가중치 대비 (새로 잡힌 사진, 새로 놓친 사진). 값은 사진마다 "정답이 후보에 있나".
+
+    재현율 숫자만 보면 "+3장"이 사실은 7장 얻고 4장 잃은 것일 수 있다. 잃은 사진을 열어 봐야
+    R3 에서 보강할 장면이 보인다.
+    """
+    gained = sorted(f for f, hit in other.items() if hit and not base.get(f))
+    lost = sorted(f for f, hit in base.items() if hit and not other.get(f))
+    return gained, lost
+
+
 def percentiles(values: list[float]) -> tuple[float, float]:
     """p50 · p95. measure_latency.py · store.latency_percentiles 와 같은 nearest-rank."""
     ordered = sorted(values)
@@ -232,17 +338,26 @@ def save_run(store: MemoryStore, variant: str, rows: list[dict], metrics: dict, 
         return run.run_id
 
 
-def previous_accuracy(store: MemoryStore, variant: str, before: int) -> float | None:
-    """같은 버전의 바로 이전 실행의 정답률. 없으면 None."""
+def previous_accuracy(
+    store: MemoryStore, variant: str, before: int, conditions: dict
+) -> float | None:
+    """같은 버전 · 같은 조건의 바로 이전 실행의 정답률. 없으면 None.
+
+    가중치가 다른 실행과 비교하면 그 차이가 코드 몫인지 가중치 몫인지 표만 보고 모른다.
+    JSON 안의 값으로 거르는 SQL 은 SQLite 와 Postgres 문법이 달라서,
+    같은 버전을 다 가져와 여기서 거른다.
+    """
     with store.session() as db:
         stmt = (
             select(EvalRun.metrics)
             .where(EvalRun.variant == variant, EvalRun.run_id < before)
             .order_by(EvalRun.run_id.desc())
-            .limit(1)
         )
-        metrics = db.scalar(stmt)
-    return metrics.get("accuracy") if metrics else None
+        history = list(db.scalars(stmt))
+    for metrics in history:
+        if same_conditions((metrics or {}).get("conditions"), conditions):
+            return metrics.get("accuracy")
+    return None
 
 
 def write_csv(out_dir: Path, run_id: int, variant: str, rows: list[dict]) -> Path:
@@ -260,14 +375,14 @@ def _pct(value: float | None) -> str:
     return "-" if value is None else f"{value * 100:.1f}"
 
 
-def format_row(variant: str, metrics: dict, n: int, previous: float | None) -> str:
-    """비교표 한 줄. 이전 실행이 있으면 정답률 옆에 차이(%p)를 붙인다."""
+def format_row(weights: str, variant: str, metrics: dict, n: int, previous: float | None) -> str:
+    """비교표 한 줄. 같은 조건의 이전 실행이 있으면 정답률 옆에 차이(%p)를 붙인다."""
     accuracy = _pct(metrics["accuracy"])
     if previous is not None:
         accuracy += f" ({(metrics['accuracy'] - previous) * 100:+.1f})"
     hand = f"{_pct(metrics['accuracy_with_hand'])}/{_pct(metrics['accuracy_without_hand'])}"
     return (
-        f"{variant} | {n} | {accuracy} | {_pct(metrics['answered_accuracy'])} | "
+        f"{weights} | {variant} | {n} | {accuracy} | {_pct(metrics['answered_accuracy'])} | "
         f"{_pct(metrics['reask_rate'])} | {hand} | {_pct(metrics['candidate_recall'])} | "
         f"{metrics['resolve_p50_ms']:.2f}/{metrics['resolve_p95_ms']:.2f}"
     )
@@ -284,7 +399,16 @@ def main() -> None:
     parser.add_argument("--labels", type=Path, default=POINTING_DIR / "labels.csv")
     parser.add_argument("--raw", type=Path, default=POINTING_DIR / "raw")
     parser.add_argument("--split", choices=("valid", "test"), default="valid")
+    parser.add_argument(
+        "--sessions", type=int, nargs="+", help="잴 세션. 안 주면 valid 는 1 2, test 는 3"
+    )
     parser.add_argument("--variants", nargs="+", choices=list(VARIANTS), default=list(VARIANTS))
+    parser.add_argument(
+        "--weights",
+        nargs="+",
+        default=[config.DETECTOR_WEIGHTS],
+        help="검출기 가중치. 여러 개면 한 실행에서 나란히 재고 첫 번째와 비교한다",
+    )
     parser.add_argument("--db", default=config.DATABASE_URL, help="결과를 남길 DB")
     parser.add_argument("--note", default="", help="이번 실행 메모, 예: v2 손 방향 추가")
     parser.add_argument("--out", type=Path, default=POINTING_DIR / "runs", help="사진별 CSV 폴더")
@@ -292,67 +416,112 @@ def main() -> None:
 
     if args.split == "test":
         print("주의: test 를 연다 — 최종 측정 때만. 보면서 고치면 test 숫자가 실력이 아니게 된다.")
-    samples = load_samples(args.labels, args.split)
+    sessions = sorted(args.sessions or DEFAULT_SESSIONS[args.split])
+    samples = load_samples(args.labels, args.split, sessions)
     if not samples:
-        raise SystemExit(f"{args.split} 로 표시된 사진이 없다: {args.labels}")
+        raise SystemExit(f"{args.split} 세션 {sessions} 로 표시된 사진이 없다: {args.labels}")
     ready, skipped = implemented_variants(args.variants)
     if skipped:
         print(f"미구현이라 건너뜀: {', '.join(skipped)}")
     if not ready:
         raise SystemExit("돌릴 수 있는 버전이 없다")
+    missing = missing_weights(args.weights)
+    if missing:
+        raise SystemExit(
+            f"가중치 파일이 없다: {', '.join(missing)} — "
+            "Drive 의 runs/rN/weights/best.pt 를 data/models/detector_rN.pt 로 받는다"
+        )
 
-    # 사진마다 한 번만 검출한다. ultralytics 는 CI 에 없어서 여기서 불러온다.
+    # ultralytics 는 CI 에 없어서 여기서 불러온다.
     from jarviseo.pointing.detector import ObjectDetector
 
-    detector = ObjectDetector()
-    # 첫 호출은 모델을 올리느라 느리다(실측 861ms, 그다음 30ms 안팎). 재기 전에 한 번 버린다.
-    detector.detect(np.zeros((640, 640, 3), np.uint8))
     # 손 단서를 켠 버전이 있을 때만 손을 찾는다. 모델 파일이 없어도 v1 은 돌아야 한다.
     hand_detector = None
     if any(CueKind.POINT in VARIANTS[v] for v in ready):
         hand_detector = HandDetector()
-    candidates, detect_ms, frame_size, hands, hand_ms = {}, {}, {}, {}, []
-    for i, s in enumerate(samples):
-        image = read_image(args.raw / s["file"])
-        if image is None:
-            raise SystemExit(f"사진을 못 읽었다: {args.raw / s['file']}")
-        started = time.perf_counter()
-        candidates[s["file"]] = detector.detect(image)
-        detect_ms[s["file"]] = (time.perf_counter() - started) * 1000
-        height, width = image.shape[:2]
-        frame_size[s["file"]] = (width, height)
-        hands[s["file"]] = None
-        if hand_detector is not None:
-            if i == 0:
-                hand_detector.detect(image)  # 첫 호출은 모델을 올리느라 느려서 버린다
-            started = time.perf_counter()
-            hands[s["file"]] = pick_pointing_hand(hand_detector.detect(image))
-            hand_ms.append((time.perf_counter() - started) * 1000)
-
     # 쓰는 쪽이라 테이블이 없으면 만든다(이미 있으면 아무것도 안 한다).
     store = MemoryStore(database_url=args.db)
     store.init_schema()
-    # 검출은 모든 버전이 같은 결과를 쓰므로 버전 줄마다가 아니라 한 번만 찍는다.
-    detect_p50, detect_p95 = percentiles(list(detect_ms.values()))
-    print(f"\n{args.split} {len(samples)}장 · 검출 p50 {detect_p50:.1f}ms · p95 {detect_p95:.1f}ms")
-    if hand_ms:
-        hand_p50, hand_p95 = percentiles(hand_ms)
-        found = sum(h is not None for h in hands.values())
-        print(f"가리키는 손 {found}장 · 손 p50 {hand_p50:.1f}ms · p95 {hand_p95:.1f}ms")
-    print()
-    print(
-        "버전 | 장수 | 정답률 | 답한 것 정답률 | 되묻기율 | "
-        "손있음/손없음 | 후보재현율 | resolve p50/p95 ms"
-    )
-    for variant in ready:
-        rows = evaluate(samples, candidates, detect_ms, variant, frame_size, hands)
-        metrics = summarize(rows)
-        run_id = save_run(store, variant, rows, metrics, args.note)
-        previous = previous_accuracy(store, variant, run_id)
-        print(format_row(variant, metrics, len(rows), previous))
-        path = write_csv(args.out, run_id, variant, rows)
-        failed = {k: v for k, v in metrics["outcomes"].items() if v and k not in OUTCOMES[:2]}
-        print(f"    run {run_id} · 실패 {failed or '없음'} · {path}")
+
+    frame_size, hands, hand_ms = {}, {}, []
+    seen: dict[str, str] = {}  # 지문 → 명령에 적은 가중치
+    base = None  # 첫 가중치의 (이름, 후보 재현율, 사진별 후보 적중)
+    for index, weights in enumerate(args.weights):
+        detector = ObjectDetector(weights)
+        # 첫 호출은 모델을 올리느라 느리다(실측 861ms, 그다음 30ms 안팎). 재기 전에 한 번 버린다.
+        detector.detect(np.zeros((640, 640, 3), np.uint8))
+        fingerprint = weights_fingerprint(detector.weights_path)
+        same = seen.get(fingerprint["sha256"])
+        if same is not None:
+            raise SystemExit(f"같은 가중치를 두 번 적었다: {weights} = {same}")
+        seen[fingerprint["sha256"]] = weights
+        label = weights_label(fingerprint)
+        conditions = run_conditions(fingerprint, sessions, detector.conf_threshold)
+
+        # 사진은 가중치마다 다시 읽는다. 1080p 62장을 다 들고 있으면 약 370MB 라
+        # 저사양 PC 에 무겁다.
+        candidates, detect_ms = {}, {}
+        for i, s in enumerate(samples):
+            image = read_image(args.raw / s["file"])
+            if image is None:
+                raise SystemExit(f"사진을 못 읽었다: {args.raw / s['file']}")
+            started = time.perf_counter()
+            candidates[s["file"]] = detector.detect(image)
+            detect_ms[s["file"]] = (time.perf_counter() - started) * 1000
+            # 손은 YOLO 가중치와 상관없다. 첫 가중치 때 한 번만 찾고 모든 가중치가 같은 손을 쓴다.
+            if index > 0:
+                continue
+            height, width = image.shape[:2]
+            frame_size[s["file"]] = (width, height)
+            hands[s["file"]] = None
+            if hand_detector is not None:
+                if i == 0:
+                    hand_detector.detect(image)  # 첫 호출은 모델을 올리느라 느려서 버린다
+                started = time.perf_counter()
+                hands[s["file"]] = pick_pointing_hand(hand_detector.detect(image))
+                hand_ms.append((time.perf_counter() - started) * 1000)
+
+        # 검출은 모든 버전이 같은 결과를 쓰므로 버전 줄마다가 아니라 가중치마다 한 번만 찍는다.
+        detect_p50, detect_p95 = percentiles(list(detect_ms.values()))
+        print(
+            f"\n{label} · {args.split} {len(samples)}장 (세션 {' '.join(map(str, sessions))}) · "
+            f"검출 p50 {detect_p50:.1f}ms · p95 {detect_p95:.1f}ms"
+        )
+        if index == 0 and hand_ms:
+            hand_p50, hand_p95 = percentiles(hand_ms)
+            found = sum(h is not None for h in hands.values())
+            print(f"가리키는 손 {found}장 · 손 p50 {hand_p50:.1f}ms · p95 {hand_p95:.1f}ms")
+        print(
+            "가중치 | 버전 | 장수 | 정답률 | 답한 것 정답률 | 되묻기율 | "
+            "손있음/손없음 | 후보재현율 | resolve p50/p95 ms"
+        )
+        for variant in ready:
+            rows = evaluate(samples, candidates, detect_ms, variant, frame_size, hands)
+            metrics = summarize(rows)
+            metrics["conditions"] = conditions
+            run_id = save_run(store, variant, rows, metrics, args.note)
+            previous = previous_accuracy(store, variant, run_id, conditions)
+            print(format_row(label, variant, metrics, len(rows), previous))
+            path = write_csv(args.out, run_id, variant, rows)
+            failed = {k: v for k, v in metrics["outcomes"].items() if v and k not in OUTCOMES[:2]}
+            print(f"    run {run_id} · 실패 {failed or '없음'} · {path}")
+
+        # 정답이 후보에 있나는 단서와 상관없는 검출기 숫자라, 어느 버전의 결과로 봐도 같다.
+        hits = {r["file"]: r["candidate_hit"] for r in rows}
+        if base is None:
+            base = (label, metrics["candidate_recall"], hits)
+            continue
+        base_label, base_recall, base_hits = base
+        gained, lost = hit_changes(base_hits, hits)
+        change = (metrics["candidate_recall"] - base_recall) * 100
+        print(
+            f"\n{label} vs 기준 {base_label}: 후보 재현율 {_pct(base_recall)} → "
+            f"{_pct(metrics['candidate_recall'])} ({change:+.1f}%p) · "
+            f"새로 잡힌 {len(gained)}장 · 새로 놓친 {len(lost)}장"
+        )
+        for mark, files in (("+", gained), ("-", lost)):
+            for file in files:
+                print(f"    {mark} {file}")
 
 
 if __name__ == "__main__":
