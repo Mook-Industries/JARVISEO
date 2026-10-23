@@ -187,25 +187,30 @@ python scripts/start.py --db postgresql+psycopg://jarviseo:jarviseo@localhost:54
 
 ## 클라우드 서버 (AWS)
 
-휴대폰에서 `https://<도메인>` 으로 여는 대시보드다. 지금은 `/health` · `/health/db` 만 있고,
-기록 화면과 노트북이 턴을 보내는 길은 #144 에서 붙인다. 카메라 · 마이크를 쓰는 본체는 여전히 노트북에서 돈다.
+휴대폰에서 `https://<도메인>` 으로 여는 **팀 웹**(`api/main.py`: 대시보드 `/` · 물어보기 `/assistant` ·
+성분 확인 `/ingredient`)이다(#179). 서버가 OpenAI · Google Vision · 푸드QR 키로 질문과 성분 확인을 처리하므로
+**접속 비밀번호**를 건다. 호출어로 부르는 본체(`assistant.py`)는 여전히 노트북에서 돈다.
 
 ```
-휴대폰 ──https──▶ <이름>.duckdns.org ──▶ EC2 (서울 ap-northeast-2, t3.micro, 고정 IP)
-                                          ├─ caddy   80·443, https 인증서 자동 발급 · 갱신
-                                          ├─ api     Dockerfile.api (api/cloud.py)
+휴대폰 ──https──▶ <이름>.duckdns.org ──▶ EC2 (서울 ap-northeast-2, t3.small 2GB, 고정 IP)
+                                          ├─ caddy   80·443, https 인증서 자동, 접속 비밀번호(/health 만 열림)
+                                          ├─ api     팀 웹(Dockerfile.web) — ECR 에서 받아 온다
                                           └─ db      pgvector/pgvector:pg16, 바깥에 안 열림
-GitHub main 머지 ─▶ Actions(deploy.yml) ─OIDC─▶ AWS 역할 ─SSM─▶ 서버에서 deploy/update.sh
+GitHub main 머지 ─▶ Actions(deploy.yml) ─OIDC─▶ AWS 역할 ─▶ 이미지 빌드 → ECR ─SSM─▶ 서버에서 deploy/update.sh
+                                                         키 · 비밀번호: Parameter Store /jarviseo/
 ```
 
 | 파일 | 무엇 |
 |---|---|
-| `deploy/compose.yml` | 서버에서 띄우는 세 컨테이너. DB 포트는 열지 않는다 |
-| `deploy/Caddyfile` | 도메인으로 온 요청을 api 로. 인증서는 Caddy 가 알아서 받는다 |
-| `deploy/update.sh` | 서버에서 돈다: api 빌드 → 다시 띄우기 → 스키마 맞추기 → `/health/db` 확인 |
+| `deploy/compose.yml` | 서버에서 띄우는 세 컨테이너. DB 포트는 열지 않는다. api 는 메모리 상한 1400MB · 사진은 tmpfs |
+| `deploy/Caddyfile` | 도메인으로 온 요청에 접속 비밀번호를 확인하고 api 로. 인증서는 Caddy 가 알아서 받는다 |
+| `deploy/update.sh` | 서버에서 돈다: 키 받기 → ECR 에서 이미지 받기 → 다시 띄우기 → 스키마 맞추기 → `/health` 확인 |
+| `deploy/bootstrap.sh` | 서버에 AWS CLI 가 없으면 `update.sh` 가 처음 한 번 깐다 |
 | `deploy/schema.sql` | `scripts/schema_sql.py` 가 모델에서 뽑은 스키마. 모델을 바꾸면 다시 뽑는다 |
 | `deploy/env.example` | 서버의 `/opt/jarviseo/.env` 모양(도메인 · DB 비밀번호). 실제 값은 서버에만 |
-| `.github/workflows/deploy.yml` | main 머지 때 서버에 새 버전을 띄운다 |
+| `Dockerfile.web` | 팀 웹 이미지(3.85GB, 받는 크기 917MB). YOLO · 손 관절 모델을 미리 넣는다 |
+| `scripts/put_cloud_secrets.py` | 키 · 접속 비밀번호를 Parameter Store 에 넣는다 |
+| `.github/workflows/deploy.yml` | main 머지 때 이미지를 빌드해 ECR 에 올리고 서버에 새 버전을 띄운다 |
 
 ### AWS 에 만든 것
 
@@ -213,15 +218,66 @@ GitHub main 머지 ─▶ Actions(deploy.yml) ─OIDC─▶ AWS 역할 ─SSM─
 
 | 자원 | 이름 | 내용 |
 |---|---|---|
-| EC2 | `jarviseo` | t3.micro, Ubuntu 24.04, 디스크 20GB gp3(암호화), 첫 부팅에 Docker · compose · 스왑 1GB |
+| EC2 | `jarviseo` | **t3.small(2GB)**, Ubuntu 24.04, 디스크 20GB gp3(암호화), 첫 부팅에 Docker · compose · 스왑 1GB |
 | Elastic IP | `jarviseo` | 서버에 붙은 고정 IP. DuckDNS 도메인이 이 IP 를 가리킨다 |
 | 보안 그룹 | `jarviseo-web` | 80 · 443 만 연다. **SSH(22)는 열지 않는다** — 서버 명령은 SSM 으로 보낸다 |
-| IAM 역할 | `jarviseo-ec2-ssm` | 서버가 SSM 명령을 받는 권한(`AmazonSSMManagedInstanceCore`) |
-| OIDC 제공자 + IAM 역할 | `jarviseo-github-deploy` | GitHub Actions 가 키 없이 빌리는 역할. `Mook-Industries/JARVISEO` 의 main 에서만, 그 서버 한 대에 SSM 명령만 |
-| 예산 | `jarviseo-monthly` | `Project=jarviseo` 비용 월 $10, 실제 80% · 예상 100% 에서 메일 |
+| IAM 역할 | `jarviseo-ec2-ssm` | 서버 권한: SSM 명령 받기 · Parameter Store 읽기(`AmazonSSMManagedInstanceCore`), ECR 에서 이미지 받기(`AmazonEC2ContainerRegistryReadOnly`) |
+| ECR 저장소 | `jarviseo-web` | 팀 웹 이미지. 커밋마다 태그 + `latest`, 최근 5개만 남긴다 |
+| Parameter Store | `/jarviseo/*` | SecureString: `OPENAI_API_KEY` · `GOOGLE_VISION_API_KEY` · `JARVISEO_FOOD_QR_API_KEY` · `BASIC_AUTH_PASSWORD` |
+| OIDC 제공자 + IAM 역할 | `jarviseo-github-deploy` | GitHub Actions 가 키 없이 빌리는 역할. `Mook-Industries/JARVISEO` 의 main 에서만, ECR `jarviseo-web` 에 올리기와 그 서버 한 대에 SSM 명령만 |
+| 예산 | `jarviseo-monthly` | `Project=jarviseo` 비용 월 $10, 실제 80% · 예상 100% 에서 메일(크레딧 포함 금액) |
 
 GitHub 저장소 변수(Settings → Secrets and variables → Actions → **Variables**)에 `AWS_DEPLOY_ROLE_ARN` · `EC2_INSTANCE_ID` 를 넣어 두었다.
-비밀값이 아니라 위치 정보다. GitHub 에는 AWS 키도, 서버 비밀번호도 없다.
+비밀값이 아니라 위치 정보다. GitHub 에는 AWS 키도, API 키도, 서버 비밀번호도 없다.
+
+### 키 · 접속 비밀번호
+
+서버가 쓰는 API 키와 접속 비밀번호는 AWS **Parameter Store**(`/jarviseo/`)에 암호화해 둔다.
+`update.sh` 가 배포할 때마다 서버의 IAM 역할로 받아 `/opt/jarviseo/secrets.env`(root 만 읽음)에 쓴다.
+Git · GitHub · SSM 명령 기록 어디에도 값이 남지 않는다.
+
+```bash
+python scripts/put_cloud_secrets.py                 # 이 노트북 .env 의 키를 넣고, 접속 비밀번호가 없으면 만든다
+python scripts/put_cloud_secrets.py --new-password  # 접속 비밀번호 바꾸기 — 새 값을 이 화면에만 보여 준다
+```
+
+넣거나 바꾼 값은 **다음 배포부터** 서버에 반영된다(Actions → Deploy → Run workflow).
+접속 비밀번호를 다시 보려면 AWS 콘솔 → Systems Manager → Parameter Store → `/jarviseo/BASIC_AUTH_PASSWORD` → Show decrypted value.
+아이디는 `jarviseo` 다.
+
+접속 비밀번호는 **임시**다(Caddy 의 브라우저 기본 로그인 창). 웹 담당과 정한 로그인이 팀 웹에 들어오면 바꾼다.
+`/health` 만 비밀번호 없이 열린다(배포 확인용).
+
+### 서버 크기
+
+10/24 로컬 Docker 에서 팀 웹을 재 보고(`scripts/measure_web_memory.py`) t3.small(2GB)로 정했다.
+
+| 상황 | 메모리 최고 | 응답 |
+|---|---|---|
+| 켠 직후 대기 | 128MiB | — |
+| 질문(`/api/ask`) | 546MiB | 1.8~1.9초(첫 질문 7.9초 — YOLO · 손 관절을 이때 불러온다) |
+| 성분 확인(Google Vision) | 580MiB | 4.3~4.6초 |
+| 성분 확인(EasyOCR 로 떨어지면) | 3,108MiB | 10분 넘어도 안 끝남 |
+
+EasyOCR 은 서버를 키워도 쓸 수 없을 만큼 느려서, 서버에서는 **꺼 둔다**(`JARVISEO_OCR_LOCAL_FALLBACK=false`,
+`deploy/compose.yml`). Vision 이 실패하면 "지금은 성분표를 읽을 수 없어요" 라고 답한다. 그래도 메모리가 튀면
+api 컨테이너만 1400MB 에서 죽고 다시 뜬다(db · caddy 는 그대로).
+
+크기를 바꿀 때는 인스턴스를 **중지 → 인스턴스 유형 변경 → 시작**한다(1~2분 멈춘다). 고정 IP · 도메인 · DB · 인증서는 그대로다.
+
+```bash
+aws ec2 stop-instances --instance-ids <EC2_INSTANCE_ID> --profile jarviseo --region ap-northeast-2
+aws ec2 wait instance-stopped --instance-ids <EC2_INSTANCE_ID> --profile jarviseo --region ap-northeast-2
+aws ec2 modify-instance-attribute --instance-id <EC2_INSTANCE_ID> --instance-type Value=t3.small --profile jarviseo --region ap-northeast-2
+aws ec2 start-instances --instance-ids <EC2_INSTANCE_ID> --profile jarviseo --region ap-northeast-2
+```
+
+PowerShell 에서 `--instance-type '{"Value":"t3.small"}'` 처럼 JSON 으로 쓰면 따옴표가 빠져 실패한다. 위처럼 `Value=` 로 쓴다.
+
+### 받은 사진
+
+질문 · 성분 확인 때 받은 사진은 팀 웹이 `data/captures/web/` 에 남긴다. 서버에서는 이 폴더를 **tmpfs(메모리, 200MB)**로
+두어 디스크에 쌓이지 않고 컨테이너를 다시 띄우면(배포 · 재시작마다) 사라진다. 얼굴 · 집 안이 찍힐 수 있어서다.
 
 ### 배포 역할이 믿는 GitHub 토큰 모양
 
@@ -259,14 +315,18 @@ curl -H "Authorization: Bearer <GitHub 토큰>" https://api.github.com/repos/Moo
 aws iam update-assume-role-policy --role-name jarviseo-github-deploy --policy-document file://gh-trust.json --profile jarviseo --region ap-northeast-2
 ```
 
-### 비용 (서울, 2026-10-22 AWS 요금 API)
+### 비용 (서울, AWS 요금 API)
 
 | 항목 | 단가 | 한 달 |
 |---|---|---|
-| EC2 t3.micro | $0.013/시간 | $9.49 |
+| EC2 t3.small | $0.026/시간 | $18.98 |
 | 공인 IPv4(고정 IP) | $0.005/시간 | $3.65 |
 | 디스크 gp3 20GB | $0.0912/GB-월 | $1.82 |
-| **합계** | | **약 $15** (데이터 전송은 이 규모면 무료 범위) |
+| ECR 이미지 보관(약 1GB × 최근 5개) | $0.10/GB-월 | 약 $0.5 |
+| **합계(서버)** | | **약 $25** (데이터 전송은 이 규모면 무료 범위) |
+
+여기에 질문 · 성분 확인 수만큼 **OpenAI**(VLM · 임베딩) 사용료와 **Google Vision**(월 1,000건까지 무료, 넘으면
+1,000건당 약 $1.5)이 따로 나간다. 10/23 기준 이 계정 사용액은 크레딧으로 상쇄되고 있다(결제 콘솔 → Credits).
 
 예산은 태그로 걸러서 본다. 태그는 **결제 콘솔에서 비용 분류 태그로 켜야** 예산에 잡히는데, 자원에 태그를 단 뒤
 청구 데이터에 나타나기까지 최대 24시간이 걸린다. 그 전에는 켜기가 `Tag keys not found` 로 실패한다.
@@ -308,25 +368,29 @@ aws ssm send-command --profile jarviseo --region ap-northeast-2 --instance-ids <
 
 이미 `.env` 가 있으면 건드리지 않는다. DB 를 만든 뒤 비밀번호를 바꾸면 기존 DB 와 맞지 않으니 바꾸지 않는다.
 
+키 · 접속 비밀번호를 Parameter Store 에 넣는다(위 "키 · 접속 비밀번호").
+
 그다음 GitHub **Actions → Deploy → Run workflow**(main)로 첫 배포를 한다. 이후로는 main 에 머지될 때마다
-(`src/jarviseo/**` · `deploy/**` · `Dockerfile.api` · `requirements-api.txt` 가 바뀌었으면) 저절로 돈다.
+(`src/jarviseo/**` · `deploy/**` · `Dockerfile.web` · `requirements.lock` · 동의어 사전이 바뀌었으면) 저절로 돈다.
+이미지를 빌드해 올리느라 처음에는 10분쯤, 캐시가 있으면 몇 분 걸린다.
 
 ### 상태 보기 · 로그
 
 SSH 대신 SSM 으로 명령을 보낸다. 결과는 `get-command-invocation` 으로 읽는다.
 
 ```bash
-aws ssm send-command --profile jarviseo --region ap-northeast-2 --instance-ids <EC2_INSTANCE_ID> --document-name AWS-RunShellScript --parameters 'commands=["cd /opt/jarviseo/repo/deploy && docker compose --env-file /opt/jarviseo/.env ps && docker compose --env-file /opt/jarviseo/.env logs --tail 30 api caddy"]' --query Command.CommandId --output text
+aws ssm send-command --profile jarviseo --region ap-northeast-2 --instance-ids <EC2_INSTANCE_ID> --document-name AWS-RunShellScript --parameters 'commands=["cd /opt/jarviseo/repo/deploy && docker compose --env-file /opt/jarviseo/.env --env-file /opt/jarviseo/secrets.env ps && docker compose --env-file /opt/jarviseo/.env --env-file /opt/jarviseo/secrets.env logs --tail 30 api caddy"]' --query Command.CommandId --output text
 aws ssm get-command-invocation --profile jarviseo --region ap-northeast-2 --instance-id <EC2_INSTANCE_ID> --command-id <위에서 나온 ID> --query StandardOutputContent --output text
 ```
 
 ### 끄기 · 지우기
 
-- **잠깐 끄기**: EC2 콘솔에서 인스턴스 **중지**. 서버 요금($9.49)은 멈추지만, 고정 IP 는 붙은 채 쉬어도 시간당 $0.005, 디스크는 그대로 나간다(월 약 $5.5).
+- **잠깐 끄기**: EC2 콘솔에서 인스턴스 **중지**. 서버 요금($18.98)은 멈추지만, 고정 IP 는 붙은 채 쉬어도 시간당 $0.005, 디스크는 그대로 나간다(월 약 $5.5).
   다시 **시작**하면 IP 는 그대로고 컨테이너는 `restart: unless-stopped` 라 저절로 뜬다.
 - **완전히 지우기**(발표가 끝나고 더 안 쓸 때): 인스턴스 종료(디스크도 같이 지워짐 → **DB 데이터도 사라진다**) →
   Elastic IP 해제 → 보안 그룹 `jarviseo-web` · 역할 `jarviseo-ec2-ssm`(인스턴스 프로필 포함) · `jarviseo-github-deploy` ·
-  OIDC 제공자(다른 프로젝트가 안 쓰면) · 예산 `jarviseo-monthly` 삭제 → GitHub 저장소 변수 두 개 삭제.
+  OIDC 제공자(다른 프로젝트가 안 쓰면) · ECR 저장소 `jarviseo-web` · Parameter Store `/jarviseo/*` ·
+  예산 `jarviseo-monthly` 삭제 → GitHub 저장소 변수 두 개 삭제.
   남길 기록이 있으면 먼저 `docker compose exec db pg_dump` 로 받아 둔다.
 
 ### 문제 해결 (클라우드)
@@ -334,9 +398,15 @@ aws ssm get-command-invocation --profile jarviseo --region ap-northeast-2 --inst
 | 증상 | 할 일 |
 |---|---|
 | `https://<도메인>` 이 안 열림, Caddy 로그에 인증서 오류 | DuckDNS 의 current ip 가 고정 IP 와 같은지, 보안 그룹에 80 · 443 이 열려 있는지 본다. 인증서는 80 번으로 확인받는다 |
-| `/health` 는 200 인데 `/health/db` 가 503 | `docker compose ... ps` 로 db 가 healthy 인지 보고, `.env` 의 `DB_PASSWORD` 를 처음 만든 뒤 바꾸지 않았는지 확인한다(바꾸면 기존 DB 와 안 맞는다) |
+| `/health` 는 200 인데 화면이 안 뜨거나 500 | `logs api` 를 본다. DB 연결 오류면 db 가 healthy 인지, `.env` 의 `DB_PASSWORD` 를 처음 만든 뒤 바꾸지 않았는지 확인한다(바꾸면 기존 DB 와 안 맞는다) |
+| 로그인 창이 계속 뜸 | 아이디 `jarviseo`, 비밀번호는 Parameter Store `/jarviseo/BASIC_AUTH_PASSWORD`. 바꿨으면 Deploy 를 한 번 돌려야 반영된다 |
+| Deploy 가 `Parameter Store 에 /jarviseo/BASIC_AUTH_PASSWORD 가 없다` 로 멈춤 | `python scripts/put_cloud_secrets.py` 를 돌린다 |
+| 질문이 "키가 없다"고 답함 | Parameter Store 에 `OPENAI_API_KEY` 가 없다. 넣고 Deploy 를 다시 돌린다 |
+| 성분 확인이 "지금은 성분표를 읽을 수 없어요" | Google Vision 이 실패했다(무료 한도 초과 · 키 오류 · 네트워크). `logs api` 에 Vision 실패 이유가 찍힌다 |
 | Actions 의 Deploy 가 빨간불 | 그 실행의 로그에 서버에서 돈 `update.sh` 출력이 그대로 나온다 |
 | Deploy 가 `configure-aws-credentials` 에서 `Not authorized to perform sts:AssumeRoleWithWebIdentity` | 역할이 믿는 `sub` 가 토큰과 다르다. 위 "배포 역할이 믿는 GitHub 토큰 모양"대로 저장소의 `sub_claim_prefix` 를 확인해 신뢰 정책을 맞춘다. main 이 아닌 브랜치에서 돌렸거나 저장소 변수 `AWS_DEPLOY_ROLE_ARN` 이 틀려도 같은 오류다 |
 | `aws` 명령이 `NoRegion` | 프로필 `jarviseo` 에 리전이 없다. IAM 명령에도 `--region ap-northeast-2` 를 붙인다 |
+| 윈도우 Git Bash 에서 `/jarviseo/` 경로가 이상하게 바뀜 | Git Bash 가 `/` 로 시작하는 인자를 윈도우 경로로 바꾼다. 앞에 `MSYS_NO_PATHCONV=1` 을 붙이거나 PowerShell 에서 돌린다 |
+| 이 노트북에서 ECR 로 `docker login` 이 `error storing credentials` | 윈도우 자격 증명 관리자가 긴 ECR 토큰을 못 저장한다. 이미지는 Deploy 워크플로가 올리므로 보통은 손으로 올릴 일이 없다 |
 | Deploy 가 아예 안 돎 | 바뀐 파일이 위 경로에 없으면 안 돈다. Actions 탭에서 Run workflow 로 돌린다 |
 | SSM 명령이 `Undeliverable` | 서버가 꺼져 있거나 SSM 에 아직 안 붙었다. 켠 뒤 1~2분 기다린다 |
