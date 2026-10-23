@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from collections.abc import Callable
@@ -53,6 +54,7 @@ from jarviseo.nutrition.barcode import (
 from jarviseo.nutrition.occlusion import Borders, find_occlusion
 from jarviseo.nutrition.ocr import (
     OcrReader,
+    OcrUnavailableError,
     PanelSections,
     crop_and_upscale,
     google_vision_key,
@@ -66,6 +68,7 @@ from jarviseo.nutrition.quality import ImageQuality, assess_quality, best_frame
 from jarviseo.nutrition.region import locate_panel
 from jarviseo.nutrition.response import (
     OCCLUDED_NOTE,
+    OCR_UNAVAILABLE,
     RETAKE_CLOSER,
     RETAKE_GLARE,
     RETAKE_OTHER_SIDE,
@@ -85,6 +88,8 @@ from jarviseo.types import (
 )
 
 __all__ = ["IngredientCheck", "IngredientChecker"]
+
+log = logging.getLogger(__name__)
 
 # 성분표를 읽었지만 알레르기 표시가 없던 제품을 캐시에 남길 때 쓴다. 판정 쪽은 비었는지만 본다.
 
@@ -311,7 +316,33 @@ class IngredientChecker:
                 return result
             # 조회 정보에 알레르기 표시가 없어서 '못 찾음'을 믿을 수 없다. 성분표를 직접 읽는다.
             product_name = product_name or lookup.product.product_name
-        return self._from_ocr(crop, lookup, user_allergens, retake_count, product_name, timings)
+        try:
+            return self._from_ocr(crop, lookup, user_allergens, retake_count, product_name, timings)
+        except OcrUnavailableError as e:
+            # Vision · Colab 이 실패했고 이 컴퓨터 OCR 은 꺼 두었다(클라우드 서버). 500 대신 안내.
+            log.warning("성분표 OCR 을 쓸 수 없어 판정하지 않는다: %s", e)
+            return self._ocr_unavailable(lookup, user_allergens, retake_count, timings)
+
+    def _ocr_unavailable(
+        self,
+        lookup: BarcodeLookup,
+        user_allergens: list[str],
+        retake_count: int,
+        timings: dict[str, int],
+    ) -> IngredientCheck:
+        """읽을 OCR 엔진이 없다. 다시 찍어도 같으므로 재촬영을 청하지 않고 판정 없이 끝낸다."""
+        judgement = judge_allergens(
+            user_allergens, self.synonyms, readable=False, reason="ocr_unavailable"
+        )
+        judgement.source = IngredientSource.OCR
+        judgement.response_text = OCR_UNAVAILABLE
+        return IngredientCheck(
+            judgement=judgement,
+            message=OCR_UNAVAILABLE,
+            barcode=lookup,
+            retake_count=retake_count,
+            timings_ms=timings,
+        )
 
     @staticmethod
     def _needs_label(result: IngredientCheck, info: ProductInfo, user_allergens: list[str]) -> bool:

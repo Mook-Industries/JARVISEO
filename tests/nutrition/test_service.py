@@ -666,3 +666,26 @@ def test_binarize_keeps_strokes_black_on_white():
     cv2.putText(img, "MILK", (10, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (40, 40, 40), 3)
     out = service._binarize(img)
     assert set(np.unique(out)) <= {0, 255} and (out == 0).any() and out.mean() > 128
+
+
+# --- 읽을 OCR 엔진이 없을 때 (클라우드 서버 #179) ----------------------------------------
+
+
+class NoOcr:
+    """Vision 이 실패했고 이 컴퓨터 OCR 은 꺼 둔 상태."""
+
+    calls = 0
+
+    def readtext(self, image, **kwargs):
+        NoOcr.calls += 1
+        raise service.OcrUnavailableError("꺼 둠")
+
+
+def test_ocr_unavailable_answers_without_retake(monkeypatch):
+    """OCR 엔진이 없으면 500 대신 '지금은 읽을 수 없다'고 판정 없이 답한다(재촬영 안 청함)."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+    r = checker(NoOcr()).check(CROP, ["땅콩"])
+    assert r.message == service.OCR_UNAVAILABLE and r.retake is None
+    assert r.judgement.verdict is V.UNDETERMINED
+    assert r.judgement.source is IngredientSource.OCR
+    assert NoOcr.calls == 1  # 같은 사진을 다시 읽으려 하지 않는다

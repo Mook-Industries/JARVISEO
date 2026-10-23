@@ -142,6 +142,11 @@ OCR_REMOTE_URL = _get("JARVISEO_OCR_REMOTE_URL")
 OCR_REMOTE_TOKEN = _get("JARVISEO_OCR_REMOTE_TOKEN")
 # 첫 요청은 모델을 데우느라 느릴 수 있어 넉넉히 둔다. 넘기면 이 PC 에서 대신 읽는다.
 OCR_REMOTE_TIMEOUT_SEC = _get_float("JARVISEO_OCR_REMOTE_TIMEOUT_SEC", 15.0)
+# Google Vision · Colab 이 실패했을 때 이 컴퓨터의 EasyOCR(CPU)로 대신 읽을지. 노트북은 켜 둔다
+# (느려도 끝까지 읽는 편이 낫다). 클라우드 서버(t3.small, 2GB)는 끈다(deploy/compose.yml):
+# 10/24 로컬 Docker 에서 EasyOCR 로 읽으면 메모리가 3.1GB 까지 오르고 한 장에 10분을 넘겼다(#179).
+# 끄면 읽을 엔진이 없을 때 "지금은 성분표를 읽을 수 없다"고 안내한다(nutrition/service.py).
+OCR_LOCAL_FALLBACK = _get_bool("JARVISEO_OCR_LOCAL_FALLBACK", True)
 # 성분표 영역 자동 찾기 (nutrition/region.py, #75). 사진 전체를 한 번 더 OCR 해서 '함유'·원재료명
 # 같은 단서로 성분표만 잘라 크게 읽는다. 평가 세트 21장 재현율 사람 영역 81% / 자동 76%.
 # OCR 이 한 번 늘어서 CPU 에서는 느리다. GPU 서버에서 확인한 뒤 켠다.

@@ -496,20 +496,44 @@ def _local_reader() -> OcrReader:
     return easyocr.Reader(["ko", "en"], gpu=False, verbose=False)
 
 
+class OcrUnavailableError(RuntimeError):
+    """성분표를 읽을 OCR 엔진이 없다. Vision · Colab 이 실패했고 이 컴퓨터 OCR 은 꺼 두었다."""
+
+
+class _NoLocalReader:
+    """``JARVISEO_OCR_LOCAL_FALLBACK=false`` 일 때 EasyOCR 자리에 둔다. 읽으려 하면 예외를 낸다.
+
+    EasyOCR 을 불러오지도 않는다. 불러오기만 해도 메모리를 크게 잡는다(클라우드 서버, #179).
+    """
+
+    def readtext(self, image: np.ndarray, **kwargs) -> list:
+        raise OcrUnavailableError(
+            "이 컴퓨터 OCR(EasyOCR)을 꺼 두었다 (JARVISEO_OCR_LOCAL_FALLBACK)"
+        )
+
+
+def _local_or_none() -> OcrReader:
+    """이 컴퓨터의 EasyOCR. 설정으로 꺼 두었으면 읽을 때 OcrUnavailableError 를 내는 자리표시."""
+    return _local_reader() if config.OCR_LOCAL_FALLBACK else _NoLocalReader()
+
+
 def google_vision_key() -> str:
     """.env 의 GOOGLE_VISION_API_KEY. 있으면 성분표 OCR 을 Google Vision 으로 읽는다."""
     return os.environ.get("GOOGLE_VISION_API_KEY", "").strip()
 
 
 def _colab_or_local() -> OcrReader:
-    """Colab 서버 주소가 설정돼 있으면 그쪽(GPU), 아니면 이 PC 의 EasyOCR(CPU)."""
+    """Colab 서버 주소가 설정돼 있으면 그쪽(GPU), 아니면 이 PC 의 EasyOCR(CPU).
+
+    ``JARVISEO_OCR_LOCAL_FALLBACK=false`` 면 EasyOCR 대신 읽을 때 OcrUnavailableError 를 낸다.
+    """
     if config.OCR_REMOTE_URL:
         from jarviseo.nutrition.ocr_remote import RemoteOcrReader
 
         return RemoteOcrReader(
-            config.OCR_REMOTE_URL, config.OCR_REMOTE_TOKEN, fallback=_local_reader
+            config.OCR_REMOTE_URL, config.OCR_REMOTE_TOKEN, fallback=_local_or_none
         )
-    return _local_reader()
+    return _local_or_none()
 
 
 def _get_reader() -> OcrReader:
