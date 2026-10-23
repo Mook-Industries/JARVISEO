@@ -22,7 +22,8 @@ HTTP/WebSocket 으로 잇는다. 이 파일은 후자에 해당한다.
     uvicorn jarviseo.api.main:app --port 8000      # 레포 맨 위 폴더에서
     http://localhost:8000/ingredient                # 사진을 올리면 성분을 분석한다
 
-    GET  /api/ocr-status     Colab OCR 서버가 켜져 있는지 (꺼져 있으면 페이지에 "Colab 열기" 버튼)
+    GET  /api/ocr-status     OCR 이 켜져 있는지. Google Vision 이면 늘 켜짐,
+                             Colab 이 꺼져 있으면 페이지에 "Colab 열기" 버튼
     GET  /api/allergens      등록된 알레르기
     PUT  /api/allergens      알레르기 목록 바꾸기   {"allergens": ["계란", "땅콩"]}
     POST /api/ingredient     본문 = 사진 바이트(JPEG/PNG). ?allergens=계란,땅콩 이 없으면 등록된 것
@@ -63,6 +64,7 @@ from jarviseo.api.assistant_web import WebAssistant, draw_boxes
 from jarviseo.api.marks import jpeg_data_url, mark_findings
 from jarviseo.memory import MemoryStore
 from jarviseo.nutrition.allergen import KNOWN_ALLERGENS, find_allergens, normalize_term
+from jarviseo.nutrition.ocr import google_vision_key
 from jarviseo.nutrition.service import IngredientChecker, make_checker
 from jarviseo.types import IngredientSource
 
@@ -191,7 +193,12 @@ def create_app(
 
 
 def _probe_ocr(url: str | None) -> dict:
-    """OCR 서버의 /health 를 짧게 물어본다. 꺼져 있으면 ngrok 이 안내 페이지(HTML)를 준다."""
+    """OCR 서버의 /health 를 짧게 물어본다. 꺼져 있으면 ngrok 이 안내 페이지(HTML)를 준다.
+
+    Google Vision 키가 있으면 Colab 을 쓰지 않으므로 묻지 않고 켜짐으로 알린다.
+    """
+    if google_vision_key():
+        return {"remote": True, "up": True, "device": "google-vision"}
     if not url:
         return {"remote": False, "up": False, "device": None}
     try:
@@ -219,11 +226,15 @@ def _check(s, image: np.ndarray, allergens: list[str]) -> dict:
         source = "barcode"
     else:
         source = "ocr"
+    source_name = SOURCE_NAMES[source]
+    if source == "barcode" and lookup.product.source is IngredientSource.CACHE:
+        # 푸드QR 을 다시 부르지 않고 저장해 둔 바코드 정보를 썼다
+        source_name = "바코드 · 저장된 정보"
     return {
         "sentence": r.retake or r.message,
         "verdict": r.judgement.verdict.value,
         "source": source,
-        "source_name": SOURCE_NAMES[source],
+        "source_name": source_name,
         "retake": bool(r.retake),
         "occlusion": r.occlusion,
         "barcode": lookup.barcode.code if lookup and lookup.barcode else None,

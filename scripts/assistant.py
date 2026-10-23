@@ -9,8 +9,9 @@
 OpenAI 키와 호출어 모델(data/models/jarviseo.onnx, data/README.md)이 필요하다.
 
 실행 (레포 맨 위 폴더에서):
-    python scripts/assistant.py                  # 기본 마이크·스피커, 0번 웹캠
+    python scripts/assistant.py                  # .env 의 마이크·스피커 (비면 기본 장치)
     python scripts/assistant.py 1 4 --camera 1   # 1번 마이크, 4번 스피커, 1번 웹캠
+    python scripts/assistant.py USB Buds         # 이름에 USB 가 든 마이크, Buds 가 든 스피커
     python scripts/assistant.py --db postgresql+psycopg://jarviseo:jarviseo@localhost:5432/jarviseo
 
 턴은 data/assistant.db(SQLite)에 남는다. --db 로 Postgres 를 줄 수 있다.
@@ -63,6 +64,7 @@ from jarviseo.voice import (
     WakeCheck,
     WakeWordDetector,
 )
+from jarviseo.voice.devices import device_name, find_device
 from jarviseo.voice.mic import MicStream
 from jarviseo.workflow import GraphDeps, JarviseoState, build_graph
 
@@ -269,20 +271,36 @@ def open_store(url: str) -> MemoryStore:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="호출어 → 질문 → VLM → 음성 대답")
-    parser.add_argument("mic", type=int, nargs="?", help="sounddevice 입력 장치 번호")
-    parser.add_argument("speaker", type=int, nargs="?", help="sounddevice 출력 장치 번호")
+    parser.add_argument(
+        "mic",
+        nargs="?",
+        default=config.MIC_DEVICE,
+        help="마이크 번호나 이름 일부 (기본 JARVISEO_MIC)",
+    )
+    parser.add_argument(
+        "speaker",
+        nargs="?",
+        default=config.SPEAKER_DEVICE,
+        help="스피커 번호나 이름 일부 (기본 JARVISEO_SPEAKER)",
+    )
     parser.add_argument("--camera", type=int, default=config.CAMERA_INDEX, help="웹캠 번호")
     parser.add_argument("--db", default=DEFAULT_DB, help=f"턴을 남길 DB (기본 {DEFAULT_DB})")
     parser.add_argument("--no-photos", action="store_true", help=f"{PHOTO_DIR}/ 에 사진 안 남김")
     args = parser.parse_args()
+    # 번호는 USB 를 꽂는 순서마다 바뀌어 이름 일부로도 고른다. 못 찾으면 고를 이름을 알려 준다.
+    try:
+        mic_device = find_device(args.mic, "input")
+        speaker_device = find_device(args.speaker, "output")
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
 
     store = open_store(args.db)
     user_id = store.ensure_user()
     session_id = store.start_session(user_id, title="assistant")
     vlm = VLMClient()
     dialog = DialogMemory(VectorMemory(store))
-    tts = TextToSpeech(device=args.speaker)
-    chime = Chime(device=args.speaker)
+    tts = TextToSpeech(device=speaker_device)
+    chime = Chime(device=speaker_device)
     barge = BargeIn(tts)
     collector = ResponseCollector(tts, called_since=barge.called_since)  # "잠깐만요"를 미리 합성
     frames = FrameBuffer(config.FRAME_BUFFER_SIZE)
@@ -303,7 +321,7 @@ def main() -> None:
     qr = make_food_qr_client()
     checker = IngredientChecker(store=store, food_qr=qr)
 
-    with MicStream(args.mic) as mic, Camera(WebcamSource(args.camera), frames):
+    with MicStream(mic_device) as mic, Camera(WebcamSource(args.camera), frames):
         deps = GraphDeps(
             stt=SpeechToText(mic=mic, on_speech_end=chime.end),  # 질문 말이 끝나면 종료음
             tts=tts,
@@ -326,6 +344,9 @@ def main() -> None:
         detector.start()
         photo_dir = None if args.no_photos else PHOTO_DIR / f"session_{session_id}"
         print(f"기록 {args.db} (session_id {session_id}), VLM {vlm.model}")
+        mic_name = device_name(mic_device, "input")
+        speaker_name = device_name(speaker_device, "output")
+        print(f"마이크 {mic_name} · 스피커 {speaker_name} · 카메라 {args.camera}번")
         if photo_dir is not None:
             print(f"사진 {photo_dir}/")
         print(f"기억 검색 {'켜짐' if deps.recall_enabled else '꺼짐 (JARVISEO_ENABLE_RECALL)'}")

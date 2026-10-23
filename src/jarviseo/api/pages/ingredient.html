@@ -255,7 +255,7 @@ async function checkOcr() {
     $("ocr-text").textContent = "성분표 OCR: 이 PC (CPU) — 성분표 사진은 오래 걸릴 수 있어요";
   } else if (s.up) {
     box.className = "up";
-    $("ocr-text").textContent = `성분표 OCR 서버 켜짐 (${s.device === "cpu" ? "CPU" : "GPU"})`;
+    $("ocr-text").textContent = s.device === "google-vision" ? "성분표 OCR: Google Vision" : `성분표 OCR 서버 켜짐 (${s.device === "cpu" ? "CPU" : "GPU"})`;
   } else {
     box.className = "down";
     $("ocr-text").textContent = "성분표 OCR 서버 꺼짐 — Colab 에서 '모두 실행'을 눌러 주세요";

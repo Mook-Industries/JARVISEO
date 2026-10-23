@@ -26,9 +26,10 @@
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
@@ -54,6 +55,7 @@ from jarviseo.nutrition.ocr import (
     OcrReader,
     PanelSections,
     crop_and_upscale,
+    google_vision_key,
     join_lines,
     mean_confidence,
     parse_ingredient_text,
@@ -85,7 +87,6 @@ from jarviseo.types import (
 __all__ = ["IngredientCheck", "IngredientChecker"]
 
 # 성분표를 읽었지만 알레르기 표시가 없던 제품을 캐시에 남길 때 쓴다. 판정 쪽은 비었는지만 본다.
-OCR_NO_NOTICE = "알레르기 유발물질 표시 없음 (성분표 판독)"
 
 # 원재료명 없이 이만큼(공백 뺀 글자 수) 읽었으면 성분표가 아닌 다른 면을 보여 준 것으로 본다.
 _OTHER_SIDE_CHARS = 60
@@ -93,6 +94,9 @@ _OTHER_SIDE_CHARS = 60
 # 키워 읽어도 없는 정보는 생기지 않아서 '밀'을 '일'로 읽는 식의 오독이 남는다.
 # 실측(평가 세트 21장, PaddleOCR): 22px 미만 4장(label_05·09·14·19)이 모두 알레르기를 하나씩 놓쳤다.
 MIN_TEXT_PX = 22.0
+# 성분표 영역 여백(글줄 높이 배수). 3 · 5 로 넓히면 옆의 누운 글자까지 들어가 오히려 놓쳤다
+# (평가 세트 21장 치명적 미검출: 0.8 → 3, 3 → 8, 5 → 5). .env 로 바꿔 시험할 수 있다.
+REGION_PAD = float(os.environ.get("JARVISEO_OCR_REGION_PAD", "0.8"))
 # 글줄 높이를 잴 때 쓰는 줄의 최소 글자 수. 짧은 조각(숫자·기호)은 높이가 들쭉날쭉하다.
 _TEXT_PX_MIN_CHARS = 8
 
@@ -180,6 +184,25 @@ def _enhance(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
 
+def _binarize(image: np.ndarray) -> np.ndarray:
+    """마지막 재처리용. 대비 보정본을 흑백 두 값으로 바꾼다(적응형 문턱).
+
+    이진화는 가는 획을 지울 수 있어서(멘토 피드백 2026-10-22) 원본 · 대비 보정본으로 모두
+    못 읽었을 때만 쓴다. 조명이 고르지 않은 포장을 생각해 사진 전체 문턱(Otsu) 대신
+    주변 31px 의 평균으로 문턱을 정하고, 잡티가 획이 되지 않게 살짝 흐린 뒤 자른다.
+    """
+    gray = cv2.cvtColor(_enhance(image), cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 10
+    )
+    return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+
+
+# 재처리 순서: 대비 보정(CLAHE) → 이진화. max_reprocess 만큼 앞에서부터 쓴다.
+_REPROCESS = (_enhance, _binarize)
+
+
 class IngredientChecker:
     """성분 판정 흐름. 앱에서 하나만 만들어 돌려 쓴다(동의어 사전·OCR 모델을 한 번만 읽으려고).
 
@@ -208,7 +231,10 @@ class IngredientChecker:
         food_qr: FoodQrClient | None = None,
         auto_region: bool = config.OCR_AUTO_REGION,
         min_text_px: float = MIN_TEXT_PX,
+        region_pad: float | None = None,
     ) -> None:
+        # 성분표 영역 여백(글줄 높이 배수). None 이면 region.PARAMS 기본값.
+        self.region_pad = region_pad
         self.min_text_px = min_text_px
         self.try_rotation = try_rotation
         self.auto_region = auto_region
@@ -253,6 +279,7 @@ class IngredientChecker:
         user_allergens: list[str],
         retake_count: int = 0,
         product_name: str = "",
+        barcode_image: np.ndarray | None = None,
     ) -> IngredientCheck:
         """크롭 이미지 한 장을 확인한다.
 
@@ -261,6 +288,8 @@ class IngredientChecker:
             user_allergens: ``MemoryStore.get_user_allergens`` 결과.
             retake_count: 이 요청에서 재촬영한 횟수. 첫 사진은 0.
             product_name: 제품명을 알면 문장에 넣는다. 바코드로 찾으면 그 이름을 쓴다.
+            barcode_image: 크롭에서 바코드를 못 읽으면 이 사진(보통 사진 전체)에서 한 번 더 찾는다.
+                손에 든 제품은 크롭이 성분표만 잡아 바코드가 잘리는 일이 많다.
         """
         timings: dict[str, int] = {}
 
@@ -270,6 +299,10 @@ class IngredientChecker:
             store=self.store,
             food_qr=self.food_qr,
         )
+        if lookup.barcode is None and barcode_image is not None:
+            whole = lookup_product(barcode_image, store=self.store, food_qr=self.food_qr)
+            if whole.barcode is not None:
+                lookup = whole
         timings["barcode"] = _ms(t0)
 
         if lookup.hit:
@@ -368,7 +401,8 @@ class IngredientChecker:
         if self.auto_region:
             # 성분표 영역을 먼저 찾는다. 못 찾으면(단서 없음) 지금처럼 사진 전체를 읽는다.
             t0 = time.perf_counter()
-            found, anchors = locate_panel(crop, self.reader)
+            pad = {} if self.region_pad is None else {"pad": self.region_pad}
+            found, anchors = locate_panel(crop, self.reader, **pad)
             timings["region"] = _ms(t0)
             if anchors:
                 region = found
@@ -381,10 +415,12 @@ class IngredientChecker:
         else:
             best = self._read(crop, scale=2.0)
         reprocessed = False
-        if not self._passes(best) and self.max_reprocess > 0:
+        for step in _REPROCESS[: self.max_reprocess]:
+            if self._passes(best):
+                break
             # 같은 사진을 다시 읽는다. 단순 반복은 같은 결과라 보정·배율을 바꾼다.
             # 영역을 잘못 잡았을 수도 있어서 재처리는 사진 전체로 한다.
-            again = self._read(_enhance(crop), scale=3.0)
+            again = self._read(step(crop), scale=3.0)
             reprocessed = True
             if self._passes(again) or again.conf > best.conf:
                 best = again
@@ -492,15 +528,8 @@ class IngredientChecker:
             # 찾은 경고는 바로 전하고, 글씨가 작아 빠진 게 있을 수 있다는 것도 함께 말한다.
             judgement.response_text += " " + SMALL_TEXT_NOTE
         result.message = judgement.response_text
-        # 가려진 사진에서 읽은 성분은 캐시에 남기지 않는다. 일부만 읽은 정보가 굳으면 안 된다.
-        if readable and not occlusion and not small and self.store is not None and barcode:
-            # OCR 로 처음 읽은 제품은 확인 전(pending)으로 캐시한다. 틀린 판독이 굳지 않게.
-            # 성분표를 직접 읽었는데 알레르기 표시가 없었다는 것도 정보다. 칸을 비워 두면
-            # 다음에 캐시에서 꺼냈을 때 '표시를 못 받은 정보'로 보고 또 OCR 을 돌린다.
-            saved = judgement.product
-            if not saved.allergen_notice:
-                saved = replace(saved, allergen_notice=OCR_NO_NOTICE)
-            self.store.save_product(saved, status="pending", ingredients=result.ingredients)
+        # OCR 로 읽은 성분은 캐시에 남기지 않는다(2026-10-23 결정). 캐시는 바코드로 푸드QR 에서
+        # 받은 정보만 쓴다. 한 글자만 잘못 읽어도 그 결과가 굳어 같은 제품에 계속 틀린 답을 했다.
         return result
 
     def _poor_photo(
@@ -542,4 +571,13 @@ def make_checker(store=None, **kwargs) -> IngredientChecker:
 
     OCR 모델과 동의어 사전을 한 번만 읽도록 앱 시작 때 하나만 만들어 돌려 쓴다.
     """
+    # 못 읽으면 대비 보정본 → 이진화본 순으로 두 번까지 다시 읽는다(직접 넘긴 값이 먼저)
+    kwargs.setdefault("max_reprocess", max(2, config.OCR_REPROCESS_PER_PHOTO))
+    if google_vision_key():
+        # Vision 이어도 전처리를 켠다(멘토 피드백 2026-10-22: 엔진보다 입력 품질 · 전처리 먼저).
+        # - 품질 검사(흔들림 · 반사) → OCR 전에 재촬영 안내 (기본값 그대로)
+        # - 성분표 영역만 잘라 키워 읽기. 영역이 원재료를 잘라 먹지 않게 여백을 넉넉히 준다.
+        # - 못 읽으면 대비 보정본(CLAHE)으로 한 번 더 (기본값 그대로)
+        kwargs.setdefault("auto_region", True)
+        kwargs.setdefault("region_pad", REGION_PAD)
     return IngredientChecker(store=store, food_qr=make_food_qr_client(), **kwargs)

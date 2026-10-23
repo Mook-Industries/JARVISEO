@@ -700,9 +700,24 @@
     video.srcObject = camStream;
     feed.dataset.cam = "on";
 
+    // 'ideal 1920×1080' 만 주면 1080p 를 지원하는 웹캠도 720p 로 열리는 일이 있다.
+    // 카메라가 낼 수 있는 최대 해상도를 읽어 다시 요청한다(성분표 글자가 그만큼 커진다). 4K 까지만.
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    const maxW = Math.min(caps.width?.max || 0, 3840);
+    const maxH = Math.min(caps.height?.max || 0, 2160);
+    if (maxW && maxH && maxW * maxH > (track.getSettings().width || 0) * (track.getSettings().height || 0)) {
+      try {
+        await track.applyConstraints({ width: { ideal: maxW }, height: { ideal: maxH } });
+      } catch (err) {
+        console.warn("최대 해상도로 바꾸지 못함", err);
+      }
+    }
+
     const s = track.getSettings();
+    const maxNote = maxW && maxH && maxW * maxH > s.width * s.height ? ` <small>(최대 ${maxW} × ${maxH})</small>` : "";
     $("#feed-spec").innerHTML =
-      `<span>${s.width || "—"} × ${s.height || "—"}</span><span>${s.frameRate ? Math.round(s.frameRate) : "—"} FPS</span>`;
+      `<span>${s.width || "—"} × ${s.height || "—"}${maxNote}</span><span>${s.frameRate ? Math.round(s.frameRate) : "—"} FPS</span>`;
+    console.info("카메라", track.label, "설정", s, "최대", caps.width, caps.height);
     setText("#feed-tag", "LIVE");
     setText("#cam-state", "켜짐");
     setText("#cam-name", track.label || "CAMERA");
