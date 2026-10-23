@@ -28,8 +28,8 @@ OPENAI_API_KEY 가 없으면 VLM 은 가짜(vlm.FakeVLMClient)로 답하고 기�
 
 from __future__ import annotations
 
-import logging
 import inspect
+import logging
 import time
 from pathlib import Path
 
