@@ -28,6 +28,7 @@ OPENAI_API_KEY 가 없으면 VLM 은 가짜(vlm.FakeVLMClient)로 답하고 기�
 
 from __future__ import annotations
 
+import inspect
 import time
 from pathlib import Path
 
@@ -64,6 +65,13 @@ class _WholeFrameIfNothing:
         return [Detection(label=WHOLE_LABEL, confidence=1.0, bbox=BBox(0, 0, w, h))]
 
 
+def _accepts(func, name: str) -> bool:
+    try:
+        return name in inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 class _RetryWholeFrame:
     """크롭에서 성분표를 못 읽어 재촬영을 청할 참이면, 사진 전체로 한 번 더 판정한다."""
 
@@ -74,7 +82,12 @@ class _RetryWholeFrame:
         self.used: np.ndarray | None = None  # 마지막 판정에 쓴 사진(크롭 또는 사진 전체)
 
     def check(self, image: np.ndarray, allergens: list[str], *args, **kwargs):
+        # 크롭에 바코드가 안 걸리면 사진 전체에서 찾게 한다.
+        # 판정기가 그 인자를 받을 때만 넘긴다(테스트용 가짜 판정기는 안 받는다).
+        if image.shape != self.frame.shape and _accepts(self.inner.check, "barcode_image"):
+            kwargs.setdefault("barcode_image", self.frame)
         result = self.inner.check(image, allergens, *args, **kwargs)
+        kwargs.pop("barcode_image", None)  # 사진 전체로 다시 읽을 때는 필요 없다
         self.used = image
         if result.retake and image.shape != self.frame.shape:
             self.retried = True
