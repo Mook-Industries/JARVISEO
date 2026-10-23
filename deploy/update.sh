@@ -53,6 +53,8 @@ echo "받음: $(cut -d= -f1 "$SECRETS" | tr '\n' ' ')"
 account=$(aws sts get-caller-identity --query Account --output text)
 registry="$account.dkr.ecr.$REGION.amazonaws.com"
 export WEB_IMAGE=${WEB_IMAGE:-$registry/jarviseo-web:latest}
+# 띄운 이미지를 secrets.env 에도 적어 둔다. 그래야 배포 밖에서 손으로 ps · logs 를 칠 때도 compose 가 뜬다.
+printf "WEB_IMAGE='%s'\n" "$WEB_IMAGE" >> "$SECRETS"
 echo "== 이미지 $WEB_IMAGE"
 aws ecr get-login-password --region "$REGION" |
   docker login --username AWS --password-stdin "$registry" >/dev/null
@@ -66,7 +68,9 @@ for _ in $(seq 1 30); do
   compose exec -T db pg_isready -U jarviseo -d jarviseo >/dev/null 2>&1 && break
   sleep 2
 done
-compose exec -T db psql -v ON_ERROR_STOP=1 -q -U jarviseo -d jarviseo < schema.sql
+# 이미 있는 테이블마다 NOTICE 가 한 줄씩 나와 배포 로그를 덮어서 경고 이상만 찍는다.
+compose exec -T -e PGOPTIONS='-c client_min_messages=warning' db \
+  psql -v ON_ERROR_STOP=1 -q -U jarviseo -d jarviseo < schema.sql
 
 echo "== /health"
 # 막 띄운 uvicorn 이 아직 안 받으면 연결 거부가 난다. 기다리는 동안의 오류는 숨기고, 끝내 안 되면 로그를 찍는다.
