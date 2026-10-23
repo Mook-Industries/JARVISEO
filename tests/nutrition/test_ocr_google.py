@@ -196,3 +196,38 @@ def test_typo_fix_leaves_normal_ingredients_alone():
     assert _fix_list_typos("설탕,일,소금") == "설탕,일,소금"
     assert _fix_list_typos("우유,일,대두") == "우유,밀,대두"
     assert _fix_list_typos("우유,잣,대두") == "우유,잣,대두"
+
+
+# --- 이 컴퓨터 OCR 끄기 (JARVISEO_OCR_LOCAL_FALLBACK, 클라우드 서버 #179) -------------------
+
+
+def test_vision_failure_does_not_load_easyocr_when_local_fallback_off(monkeypatch):
+    """로컬 OCR 을 꺼 두면 Vision 이 실패해도 EasyOCR 을 만들지 않고 OcrUnavailableError 를 낸다."""
+    monkeypatch.setattr(ocr.config, "OCR_LOCAL_FALLBACK", False)
+    monkeypatch.setattr(ocr.config, "OCR_REMOTE_URL", "")
+    made = []
+    monkeypatch.setattr(ocr, "_local_reader", lambda: made.append(1))
+
+    def denied(request):
+        return httpx.Response(429, json={"error": {"message": "quota"}})
+
+    with pytest.raises(ocr.OcrUnavailableError):
+        vision(denied, fallback=ocr._colab_or_local).readtext(IMAGE)
+    assert made == []
+
+
+def test_local_fallback_on_still_uses_easyocr(monkeypatch):
+    """기본값(켬)은 지금처럼 Vision 이 실패하면 이 컴퓨터 OCR 로 읽는다(노트북)."""
+    monkeypatch.setattr(ocr.config, "OCR_LOCAL_FALLBACK", True)
+    monkeypatch.setattr(ocr.config, "OCR_REMOTE_URL", "")
+
+    class Local:
+        def readtext(self, image, **kwargs):
+            return [([[0, 0], [1, 0], [1, 1], [0, 1]], "대체", 0.9)]
+
+    monkeypatch.setattr(ocr, "_local_reader", Local)
+
+    def denied(request):
+        return httpx.Response(429, json={"error": {"message": "quota"}})
+
+    assert vision(denied, fallback=ocr._colab_or_local).readtext(IMAGE)[0][1] == "대체"

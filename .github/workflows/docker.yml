@@ -2,7 +2,8 @@ name: Docker
 
 # 담당: 문태현 (배포)
 #
-# 개발 이미지(Dockerfile)와 클라우드 대시보드 이미지(Dockerfile.api)가 빌드되는지 본다.
+# 개발 이미지(Dockerfile) · 클라우드 대시보드 이미지(Dockerfile.api) · 팀 웹 이미지(Dockerfile.web)가
+# 빌드되는지 본다.
 # Dockerfile 은 9/19 에 만든 뒤 requirements 가 여러 번 바뀌는 동안 아무도 빌드를 확인하지 않았다.
 #
 # 이미지에 들어가는 파일이 바뀐 PR 에서만 돈다(아래 paths). 개발 이미지는 torch 때문에 빌드가
@@ -16,6 +17,8 @@ on:
     paths:
       - Dockerfile
       - Dockerfile.api
+      - Dockerfile.web
+      - data/datasets/allergen_synonyms.json
       - .dockerignore
       - docker-compose.yml
       - requirements.txt
@@ -31,6 +34,8 @@ on:
     paths:
       - Dockerfile
       - Dockerfile.api
+      - Dockerfile.web
+      - data/datasets/allergen_synonyms.json
       - .dockerignore
       - docker-compose.yml
       - requirements.txt
@@ -73,6 +78,34 @@ jobs:
 
       - name: 크기
         run: docker image ls jarviseo-dev --format '{{.Repository}} {{.Size}}'
+
+  web:
+    name: web image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 빌드
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.web
+          tags: jarviseo-web
+          load: true
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+      # 손 관절(mediapipe)은 리눅스에서 libGLESv2 · libEGL 이 있어야 뜬다. 빠지면 첫 질문이 500 이다.
+      - name: 팀 웹 · 손 관절 · YOLO 불러오기
+        run: >
+          docker run --rm jarviseo-web python -c
+          "import jarviseo.api.main; from jarviseo.pointing.hands import HandDetector;
+          from jarviseo.pointing.detector import ObjectDetector; HandDetector(); ObjectDetector(); print('ok')"
+
+      - name: 크기
+        run: docker image ls jarviseo-web --format '{{.Repository}} {{.Size}}'
 
   api:
     name: api image

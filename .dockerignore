@@ -7,8 +7,11 @@
 .git
 .github
 
-# 학습 데이터 · 가중치 · 영상
-data/
+# 학습 데이터 · 가중치 · 영상. 팀 웹 이미지(Dockerfile.web)가 읽는 동의어 사전만 넣는다.
+data/*
+!data/datasets/
+data/datasets/*
+!data/datasets/allergen_synonyms.json
 
 # 가상환경 — 호스트 것이 들어가면 컨테이너 것과 섞인다
 .venv
