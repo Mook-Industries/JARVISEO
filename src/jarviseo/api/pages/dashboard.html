@@ -28,6 +28,8 @@
   .ask-form .text-input { height: 38px; font-size: 13px; color: var(--text); }
   .ask-form .cam-btn { white-space: nowrap; }
   .reason-a.is-warn { color: var(--warn); }
+  /* 듣는 중 파형은 실제 마이크 소리 크기로 움직인다(dashboard.js). 조용하면 납작하게 멈춘다 */
+  .is-listening .wave i { animation: none; transition: height 60ms linear; }
   .saved-note { margin-top: 6px; font-size: 12px; color: var(--text-3); min-height: 1em; }
 </style>
 </head>
@@ -112,8 +114,8 @@
       <a class="nav-item" href="#monitor" data-nav="monitor" title="모니터">
         <svg><use href="#i-command"/></svg><span>모니터</span>
       </a>
-      <a class="nav-item" href="#admin" data-nav="admin" title="관리자">
-        <svg><use href="#i-chart"/></svg><span>관리자</span>
+      <a class="nav-item" href="#admin" data-nav="admin" title="성능 리포트">
+        <svg><use href="#i-chart"/></svg><span>성능 리포트</span>
       </a>
     </nav>
 
@@ -121,17 +123,10 @@
     <div class="sb-history" id="sb-history"></div>
 
     <div class="sb-foot">
-      <div class="profile-pop" id="profile-pop" hidden>
-        <div class="pop-user"><span class="avatar">J</span>로그인해 주세요</div>
-        <a class="pop-link" href="#settings"><svg><use href="#i-gear"/></svg>환경설정</a>
-        <div class="pop-auth">
-          <button type="button">로그인</button><i></i><button type="button">회원가입</button>
-        </div>
-      </div>
-      <button class="profile-card" id="profile-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="profile-pop">
-        <svg><use href="#i-user"/></svg>
-        <span class="pc-text"><strong>내 프로필</strong><span>로그인 필요</span></span>
-      </button>
+      <a class="profile-card" id="profile-btn" href="#settings" title="환경설정">
+        <svg><use href="#i-gear"/></svg>
+        <span class="pc-text"><strong>환경설정</strong><span>알레르기 · 음량 · 카메라</span></span>
+      </a>
     </div>
   </aside>
 
@@ -309,11 +304,11 @@
 
       </section>
 
-      <!-- ====================== 관리자: 성능 리포트 ====================== -->
+      <!-- ====================== 성능 리포트 ====================== -->
       <section class="view" id="view-admin" data-view="admin" hidden>
         <div class="page-head">
           <div>
-            <p class="eyebrow">JARVISEO / Admin console</p>
+            <p class="eyebrow">JARVISEO / Performance report</p>
             <h1 class="page-title">성능 리포트</h1>
             <p class="page-sub">인식부터 응답까지, 자비서의 품질을 확인하세요.</p>
           </div>

@@ -89,6 +89,16 @@ def test_ask_rejects_bad_input(client, body):
     assert c.post("/api/ask", json=body).status_code == 400
 
 
+def test_chime_sounds_are_served(client):
+    """대시보드가 안경과 같은 시작음 · 종료음을 받는다. 다른 이름은 404."""
+    c, _ = client
+    for name in ("start.wav", "end.wav"):
+        r = c.get(f"/sounds/{name}")
+        assert r.status_code == 200 and r.content[:4] == b"RIFF"
+    assert c.get("/sounds/../main.py").status_code == 404
+    assert c.get("/sounds/none.wav").status_code == 404
+
+
 def test_assistant_page_is_served(client):
     c, _ = client
     r = c.get("/assistant")
