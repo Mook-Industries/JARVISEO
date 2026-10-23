@@ -37,6 +37,7 @@ import numpy as np
 
 from jarviseo import config
 from jarviseo.nutrition.allergen import (
+    expand_allergens,
     judge_allergens,
     judge_product,
     load_synonyms,
@@ -296,6 +297,8 @@ class IngredientChecker:
             barcode_image: 크롭에서 바코드를 못 읽으면 이 사진(보통 사진 전체)에서 한 번 더 찾는다.
                 손에 든 제품은 크롭이 성분표만 잡아 바코드가 잘리는 일이 많다.
         """
+        # "모두"를 등록했으면 표시 대상 알레르기 전부를 본다(allergen.expand_allergens)
+        user_allergens = expand_allergens(user_allergens)
         timings: dict[str, int] = {}
 
         t0 = time.perf_counter()
