@@ -588,7 +588,7 @@
     speak((d.spoken && d.spoken.length ? d.spoken : [answer]).join(" "));
   }
 
-  async function ask(question, frame, sttSec) {
+  async function ask(question, frame, sttSec, more = []) {
     busy = true;
     STAGES.forEach((st) => (st.sec = 0));
     STAGES[0].sec = sttSec || 0;
@@ -599,7 +599,12 @@
       const r = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, image: frame || null }),
+        body: JSON.stringify({
+          question,
+          image: frame || null,
+          more: frame ? more.map((m) => m.shot) : [],
+          more_ms: frame ? more.map((m) => m.ms) : [],
+        }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || r.statusText);
@@ -631,10 +636,22 @@
     rec.lang = "ko-KR";
     rec.interimResults = true;
     let frame = null;
+    let more = [];
     let heard = "";
     const t0 = performance.now();
     rec.onspeechstart = () => {
       frame = grabFrame(); // 말을 시작한 순간
+      // 0.15초 간격으로 2장 더 찍어 모두 3장. 서버가 흔들림 · 반사가 가장 적은 장면을 고른다.
+      // 그 순간 손이 흔들리거나 빛이 반사돼도 다른 장면으로 읽을 수 있다. 카메라가 켜졌을 때만.
+      more = [];
+      if (feed.dataset.cam !== "on") return;
+      const start = performance.now();
+      [150, 300].forEach((ms) =>
+        setTimeout(() => {
+          const shot = grabFrame();
+          if (shot) more.push({ shot, ms: Math.round(performance.now() - start) });
+        }, ms)
+      );
     };
     rec.onspeechend = () => chime("end"); // 질문하는 말이 끝났다
     rec.onresult = (e) => {
@@ -649,7 +666,7 @@
       listening = null;
       stopMeter();
       const q = heard.trim();
-      if (q) ask(q, frame || grabFrame(), (performance.now() - t0) / 1000);
+      if (q) ask(q, frame || grabFrame(), (performance.now() - t0) / 1000, frame ? more : []);
       else if (!busy) {
         setState("idle");
         setText("#core-sub", "말씀을 듣지 못했어요. 다시 부르거나 아래에 입력해 주세요.");
