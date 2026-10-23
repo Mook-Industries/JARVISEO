@@ -7,7 +7,7 @@
 | `device_check/` | 카메라·마이크가 제대로 물렸는지 확인하는 5종 |
 | `capture_scenes.py` | 가리킴 평가 장면 촬영 — 안경 카메라로 찍고, 그때 한 말을 `manifest.csv` 에 같이 남긴다 |
 | `label_targets.py` | 가리킴 정답 표시 — 찍은 사진에 YOLO 후보를 번호로 띄우고, 정답을 골라(없으면 박스를 그려) `labels.csv` 에 남긴다 |
-| `extract_frames.py` | 검출기 학습 사진 — 안경 카메라 영상에서 1초에 1장 뽑고, 거의 같은 장면은 버린다 |
+| `extract_frames.py` | 검출기 학습 사진 — 안경 카메라 영상에서 3초에 1장(`--every`, 기본 3) 뽑고, 거의 같은 장면은 버린다 |
 | `auto_label.py` | 검출기 학습 라벨 — 선생 모델 비교(`compare`), 박스 초안(`label`), 회차별 학습 묶음(`build`) |
 
 ## device_check
@@ -54,7 +54,7 @@ python scripts/run_ablation.py --note "v1 기준선"          # 3. v1~v5 채점 
 
 ```bash
 # 맥: 영상(data/datasets/detector/videos/d01_kitchen.mov …)에서 사진 뽑기
-python tools/extract_frames.py                      # 영상마다 "남은 M장" — 3분 영상에 60~100장이면 됨
+python tools/extract_frames.py                      # 3초에 1장(기본). 영상마다 "남은 M장" — 3분 영상에 약 60장
 # Colab: frames/ 와 pointing 의 s01 · s02 · labels.csv 를 Drive 에 올린 뒤
 python tools/auto_label.py compare --pointing <Drive>/pointing         # 선생 비교 (YOLO-World vs yolo11x)
 python tools/auto_label.py label --root <Drive>/detector --teacher world  # 박스 초안 → auto/
@@ -62,10 +62,18 @@ python tools/auto_label.py build --root <Drive>/detector --labels <Drive>/detect
     --val d05 --out <Drive>/detector/yolo_r1                           # R1 학습 묶음
 ```
 
+- **사진 양은 간격으로 정한다(기본 3초).** 안경 카메라는 고개를 따라 계속 움직여서 1초 간격 사진끼리도 지문이 19~26비트(64 중) 달라,
+  중복 거르기(6비트 이하)로는 거의 안 줄었다(영상 6개 1133장). 3초 간격은 406장으로, R2 검수를 하루 안에 끝낼 수 있는 양이다.
+  R3 보강 영상도 같은 간격으로 뽑아야 회차 비교가 맞는다.
+- 뽑은 뒤 사람이 봐도 알아볼 수 없는 사진 · 얼굴이 찍힌 사진은 `excluded/` 로 옮긴다(`data/README.md` "검출기 학습셋 보관 규칙").
 - **`compare` · `label` 은 Colab 에서 돌린다.** ultralytics 는 YOLO-World 를 처음 쓸 때 CLIP 을 git 에서 자동으로 설치해서,
   팀 파이썬 환경에서 돌리면 승인 없이 패키지가 깔린다. `extract_frames.py` · `build` 는 모델을 안 써서 어디서든 돈다.
 - **회차 폴더는 덮어쓰지 않는다.** `auto/`(R1 라벨) · `yolo_r1/` 이 이미 있으면 도구가 멈춘다. 다시 만들려면 이름을 바꿔 보관한다.
   회차를 같은 조건에서 다시 학습 · 비교하려면 그 회차의 라벨과 묶음이 그대로 남아 있어야 한다.
 - R2 는 Label Studio 에서 검수한 뒤 YOLO 형식으로 내보낸 `labels/` 를 `build --labels` 에 준다.
   내보낸 `classes.txt` 의 번호 순서가 우리 종류 표와 달라도 `build` 가 이름으로 다시 맞춘다(우리 표에 없는 이름이면 멈춘다).
+  검수 화면은 밝기 · 대비 조절이 켜져 있다(`label_config()`). 어두운 d04 사진의 물건을 못 보고 지나치면 그 물건이 배경으로 학습된다.
+  R1 때 만든 `auto/label_config.xml` 은 이 설정 전이라, R2 프로젝트에는 지금 코드의 `label_config()` 출력을 넣는다.
+- 학습한 가중치는 `data/models/detector_rN.pt` 로 받아 `scripts/run_ablation.py --weights yolov8n.pt data/models/detector_r1.pt` 처럼
+  R0 와 한 실행에서 나란히 잰다(`scripts/README.md`). 날마다 따로 잰 숫자끼리 비교하면 그사이 바뀐 코드 효과가 섞인다.
 - 종류 정의 · 경계 사례 · 분할 규칙 · 폴더 구조는 `data/README.md` "검출기 학습셋 보관 규칙".

@@ -164,6 +164,15 @@ def test_parse_args_rejects_bad_values(monkeypatch, args):
         extract_frames.parse_args()
 
 
+def test_parse_args_defaults_to_every_three_seconds(monkeypatch):
+    """간격을 안 주면 3초에 1장이다.
+
+    1초 간격은 안경 카메라에서 거의 안 걸러져 양이 세 배가 된다(10/23).
+    """
+    _set_argv(monkeypatch)
+    assert extract_frames.parse_args().every == 3.0
+
+
 def test_main_without_videos_says_so(monkeypatch, tmp_path, capsys):
     _set_argv(monkeypatch, "--root", str(tmp_path))
     extract_frames.main()
@@ -202,7 +211,8 @@ def test_main_extracts_one_per_second_and_drops_same_scene(monkeypatch, tmp_path
     still, other = _gradient(160, 120), _gradient(160, 120, reverse=True)
     if not _write_video(videos / "d01_kitchen.mp4", [still] * 20 + [other] * 20, fps=10):
         pytest.skip("이 OpenCV 는 mp4 를 쓰지 못한다")
-    _set_argv(monkeypatch, "--root", str(tmp_path))
+    # 기본 간격은 3초라, 4초짜리 영상으로 1초 간격 동작을 보려고 간격을 직접 준다.
+    _set_argv(monkeypatch, "--root", str(tmp_path), "--every", "1")
     extract_frames.main()
 
     assert sorted(p.name for p in (tmp_path / "frames" / "d01").iterdir()) == [

@@ -1,8 +1,10 @@
-"""물체 후보 검출 (사전학습 COCO YOLO).  담당: 최홍묵
+"""물체 후보 검출 (기본은 사전학습 COCO yolov8n, ``.env`` 로 학습한 가중치).  담당: 최홍묵
 
 책임 지표: 후보 재현율 (진열대 식품 장면은 따로)
 
-"저거"의 후보가 될 물건(컵·병·가방 등)은 COCO 에 이미 있어서 사전학습 YOLO 를 그대로 쓴다.
+"저거"의 후보가 될 물건(컵·병·가방 등)은 COCO 에 이미 있어서 사전학습 YOLO 에서 시작한다.
+가중치는 ``config.DETECTOR_WEIGHTS``(``JARVISEO_DETECTOR_WEIGHTS``) 하나로 정해서,
+실행 루프 · 웹 · 평가 도구가 같은 설정을 따른다.
 손은 여기서 보지 않는다. 손가락 방향(v2)은 MediaPipe ``HandLandmarker`` 관절로 구하고,
 손끝 YOLO 는 학습하지 않는다(10/14 결정). 손끝 박스 하나로는 방향을 구할 수 없다.
 
@@ -24,6 +26,7 @@ from pathlib import Path
 
 import numpy as np
 
+from jarviseo import config
 from jarviseo.types import BBox, Detection
 
 __all__ = [
@@ -67,11 +70,18 @@ def filter_detections(detections: list[Detection], frame_size: tuple[int, int]) 
 class ObjectDetector:
     """장면 안의 후보 물체들을 찾는다. 앱에서 하나만 만들어 돌려 쓴다(모델을 한 번만 읽으려고)."""
 
-    def __init__(self, weights: Path | str = "yolov8n.pt", conf_threshold: float = 0.25) -> None:
+    def __init__(self, weights: Path | str | None = None, conf_threshold: float = 0.25) -> None:
         # CI 에는 ultralytics 가 없다. 모듈 위에서 import 하면 pointing 테스트가 전부 깨진다.
         from ultralytics import YOLO
 
+        # 기본값 자리에 config 값을 바로 쓰면 함수를 정의할 때 한 번만 읽혀서,
+        # 바꾼 설정이 안 따라온다.
+        if weights is None:
+            weights = config.DETECTOR_WEIGHTS
         self.model = YOLO(str(weights))
+        # 실제로 읽은 파일. "yolov8n.pt" 처럼 이름만 줘도 ultralytics 가 찾은(받은) 위치가 들어
+        # 있다. 평가 기록에 이 파일의 내용 지문을 남긴다(scripts/run_ablation.py).
+        self.weights_path = Path(self.model.ckpt_path or weights)
         self.conf_threshold = conf_threshold
 
     def detect(self, image: np.ndarray) -> list[Detection]:
