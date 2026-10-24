@@ -39,7 +39,6 @@ import numpy as np
 from jarviseo import config
 from jarviseo.capture import FrameBuffer
 from jarviseo.memory import MemoryStore
-from jarviseo.nutrition.quality import best_frame
 from jarviseo.nutrition.service import IngredientChecker
 from jarviseo.types import BBox, Detection, Frame, Intent
 from jarviseo.voice import FakeSpeechToText, FakeTextToSpeech
@@ -178,22 +177,22 @@ class WebAssistant:
 
         Args:
             image: 말을 시작한 순간의 장면.
-            more: 그 뒤 잇달아 찍은 장면과 말 시작으로부터 지난 초. 흔들림 · 반사가 가장 적은
-                장면을 고른다(nutrition.quality.best_frame). 한 장만 찍으면 그 순간 손이 흔들리거나
-                빛이 반사됐을 때 그대로 실패한다(멘토 피드백 2026-10-22).
+            more: 그 뒤 잇달아 찍은 장면과 말 시작으로부터 지난 초. 그래프가 그중 가장 선명한
+                장면을 고른다(FrameBuffer.pick_best, 안경과 같다). 한 장만 찍으면 그 순간 손이
+                흔들렸을 때 그대로 실패한다(멘토 피드백 2026-10-22).
         """
         self._parts()
         now = time.monotonic()
         frames = None
+        shots = []
         if image is not None:
-            # 말 시작 뒤 잇달아 찍은 장면 중 품질(선명도 × (1 - 반사))이 가장 좋은 한 장을 쓴다.
-            # 그래프의 pick_best 는 선명도만 보므로, 반사까지 보는 성분 쪽 기준으로 먼저 고른다.
-            shots = [image, *(shot for shot, _ in more or [])]
-            index = best_frame(shots)[0] if len(shots) > 1 else 0
-            image = shots[index]
-            frames = FrameBuffer(4)
-            frames.push(Frame(image=image, timestamp=now, source_id="web"))
-            self.picked_index = index
+            # 말 시작 뒤 잇달아 찍은 장면을 찍은 시각대로 버퍼에 넣고, 고르기는 그래프가 한다
+            # (workflow/nodes/voice.py → FrameBuffer.pick_best: 말 시작 근처에서 가장 선명한 장면).
+            # 안경(scripts/assistant.py)과 같은 방식이다.
+            shots = [(image, 0.0), *(more or [])]
+            frames = FrameBuffer(max(4, len(shots)))
+            for shot, sec in shots:
+                frames.push(Frame(image=shot, timestamp=now + sec, source_id="web"))
         self.picked = image
         ingredient = classify_intent(question) is Intent.INGREDIENT
         detector, checker = self._detector, self.checker
@@ -219,6 +218,13 @@ class WebAssistant:
         turn = {"session_id": self.session_id, "user_id": self.user_id, "trigger_type": "WAKEWORD"}
         self.pointing = "v2" if image is not None and self._hands is not None else "v1"
         state = build_graph(deps).invoke(turn)
+        picked = state.get("frame")
+        if picked is not None and shots:
+            # 그래프가 고른 장면이 몇 번째였는지(0 = 말 시작 순간)
+            self.picked_index = next(
+                (i for i, (shot, _) in enumerate(shots) if shot is picked.image), 0
+            )
+            self.picked = picked.image
         self.retried_whole = isinstance(checker, _RetryWholeFrame) and checker.retried
         self.judged_image = checker.used if isinstance(checker, _RetryWholeFrame) else None
         if self.photo_dir is not None:
