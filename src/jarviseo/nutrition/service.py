@@ -73,6 +73,7 @@ from jarviseo.nutrition.response import (
     RETAKE_CLOSER,
     RETAKE_GLARE,
     RETAKE_OTHER_SIDE,
+    RETAKE_SHOW_INGREDIENTS,
     RETAKE_STEADY,
     RETAKE_UNCOVER,
     RETAKE_WHOLE,
@@ -545,6 +546,8 @@ class IngredientChecker:
             # 원재료명이 안 보이면 잘린 것이다. 신뢰도만 낮으면 멀거나 흐린 것이다.
             if reason != "no_ingredients":
                 result.retake = RETAKE_CLOSER
+            elif not sec.allergen_notice:
+                result.retake = RETAKE_SHOW_INGREDIENTS  # 원재료명도 함유 표시도 없다
             elif len(normalize_term(best.text)) >= _OTHER_SIDE_CHARS:
                 result.retake = RETAKE_OTHER_SIDE  # 글자는 읽었는데 원재료명이 없다 = 다른 면
             else:

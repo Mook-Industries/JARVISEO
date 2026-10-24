@@ -25,6 +25,7 @@ __all__ = [
     "RETAKE_UNCOVER",
     "MAX_WARNING_CHARS",
     "RETAKE_OTHER_SIDE",
+    "RETAKE_SHOW_INGREDIENTS",
     "RETAKE_WHOLE",
     "SMALL_TEXT_NOTE",
     "build_message",
@@ -40,6 +41,8 @@ RETAKE_CLOSER = "성분표를 더 가까이 가리켜 주세요."
 RETAKE_WHOLE = "원재료명이 잘 안 보여요. 성분표 전체를 카메라에 더 가까이 보여 주세요."
 # 글자는 꽤 읽었는데 원재료명이 없을 때. 영양정보 · 주의사항 면을 보여 준 경우가 많다(크런키 실측).
 RETAKE_OTHER_SIDE = "원재료명이 안 보여요. 원재료명이 적힌 면을 보여 주세요."
+# 원재료명도 함유 표시("○○ 함유")도 못 찾았을 때. 판정할 근거가 하나도 없다(2026-10-24 결정).
+RETAKE_SHOW_INGREDIENTS = "원재료명 부분을 보여 주세요."
 # 성분표 일부가 가려졌거나 잘렸을 때 (nutrition/occlusion.py).
 # 찾은 경고가 있으면 경고 뒤에 OCCLUDED_NOTE 를 붙이고,
 # 없으면 RETAKE_UNCOVER 로 다시 보여 달라고 한다.
@@ -68,7 +71,7 @@ _UNDETERMINED = {
     ),
     "low_ocr_conf": f"성분표 글자를 정확히 읽지 못했어요. {_CHECK_PACKAGE}",
     "unreadable": f"성분표 글자를 정확히 읽지 못했어요. {_CHECK_PACKAGE}",
-    "no_ingredients": "원재료명을 찾지 못했어요. 성분표 전체가 보이게 비춰 주세요.",
+    "no_ingredients": "원재료명 부분을 보여 주세요.",
     "occluded": f"성분표 일부가 가려져서 잘 인식하지 못했어요. {_CHECK_PACKAGE}",
     "small_text": f"글씨가 작아서 성분표를 정확히 읽지 못했어요. {_CHECK_PACKAGE}",
     "opaque_ingredient": f"성분을 알 수 없는 원료가 들어 있어 확인할 수 없어요. {_CHECK_PACKAGE}",
