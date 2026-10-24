@@ -40,7 +40,14 @@ WINDOWS_AWS = Path(r"C:\Program Files\Amazon\AWSCLIV2\aws.exe")
 def aws(*args: str, profile: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     exe = shutil.which("aws") or (str(WINDOWS_AWS) if WINDOWS_AWS.is_file() else "aws")
     cmd = [exe, *args, "--profile", profile, "--region", "ap-northeast-2"]
-    return subprocess.run(cmd, capture_output=True, text=True, check=check)
+    # check=True 로 맡기면 CalledProcessError 가 명령 전체(--value 의 키 값까지)를 찍는다.
+    # 실패하면 무슨 명령이었는지와 AWS 의 오류 문장만 보여 주고 끝낸다.
+    done = subprocess.run(cmd, capture_output=True, text=True)
+    if check and done.returncode != 0:
+        lines = (done.stderr or done.stdout).strip().splitlines()
+        reason = lines[-1] if lines else ""
+        sys.exit(f"aws {' '.join(args[:2])} 실패 (프로필 {profile}): {reason}")
+    return done
 
 
 def put(name: str, value: str, profile: str) -> None:
