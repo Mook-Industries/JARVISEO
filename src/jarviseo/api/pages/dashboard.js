@@ -6,6 +6,7 @@
    원본: api/static/jarviseo.js (사용자 목업). 이 파일은 그 복사본에 실제 API 를 붙였다.
    - 모니터: 호출 → 받아쓰기(브라우저) · 말 시작 순간의 장면 → POST /api/ask(팀 그래프)
    - 환경설정 알러지 → GET · PUT /api/allergens
+   - 04 대화 내역 → GET /api/turns(노트북 assistant.py 가 보낸 턴 · 이 서버에서 물은 턴, 3초마다)
    - 성능 리포트는 아직 예시 데이터다
    ========================================================================== */
 
@@ -527,13 +528,21 @@
   };
 
   let logNo = 0;
-  const addLog = (tag, q, a) => {
-    const d = new Date();
-    const item = { id: `t${++logNo}`, time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}`, tag, q, a };
+  const shownTurns = new Set(); // 이미 보인 서버 turn_id. 물은 턴과 불러온 턴이 두 번 뜨지 않게
+  // turnId: 서버 기록 번호(있으면). at: 물은 시각. quiet: 켤 때 불러온 지난 기록이라 깜빡이지 않는다
+  const addLog = (tag, q, a, { turnId = null, at = new Date(), quiet = false } = {}) => {
+    if (turnId != null) {
+      if (shownTurns.has(turnId)) return;
+      shownTurns.add(turnId);
+    }
+    const id = turnId != null ? `turn-${turnId}` : `t${++logNo}`;
+    const item = { id, time: `${pad2(at.getHours())}:${pad2(at.getMinutes())}`, tag, q, a };
     const li = logItem(item);
-    li.classList.add("is-new");
     logList.prepend(li);
-    logList.scrollTo({ top: 0 });
+    if (!quiet) {
+      li.classList.add("is-new");
+      logList.scrollTo({ top: 0 });
+    }
 
     const btn = document.createElement("button");
     btn.type = "button";
@@ -547,6 +556,33 @@
     });
     sbHistory.prepend(btn);
   };
+
+  /* ------------------------------------------------------------------------
+     대화 기록 불러오기 (#144) — 이 서버 DB 의 턴. 노트북(assistant.py)이 보낸 턴과 웹에서 물은 턴.
+     켤 때 최근 30개, 그 뒤 3초마다 새 턴만 묻는다(?after=마지막 번호).
+     ------------------------------------------------------------------------ */
+
+  const TURN_POLL_MS = 3000;
+  let lastTurnId = null; // null = 아직 한 번도 못 불러옴
+
+  async function loadTurns() {
+    const first = lastTurnId === null;
+    try {
+      const r = await fetch(first ? "/api/turns?limit=30" : `/api/turns?after=${lastTurnId}`);
+      if (!r.ok) return;
+      const { turns } = await r.json();
+      // 처음에는 새것부터 오고, 그 뒤에는 들어온 순서로 온다. 오래된 것부터 위에 쌓는다.
+      (first ? turns.reverse() : turns).forEach((t) => {
+        addLog(t.where, t.question, t.answer || "(대답 없음)", { turnId: t.id, at: new Date(t.asked_at), quiet: first });
+        lastTurnId = Math.max(lastTurnId ?? 0, t.id);
+      });
+      lastTurnId ??= 0;
+    } catch {
+      /* 서버가 잠깐 안 되면 다음 차례에 다시 묻는다 */
+    }
+  }
+  loadTurns();
+  setInterval(loadTurns, TURN_POLL_MS);
 
   // 03 판단 근거의 한 줄 설명
   const reasonOf = (d) => {
@@ -584,7 +620,7 @@
     setText("#feed-msg", d.target ? `선택한 대상: ${d.target}` : answer);
     const overlay = (d.ingredient && d.ingredient.where) || d.boxes;
     if (overlay && !app.classList.contains("no-overlay")) showShot(overlay);
-    addLog(tag, question, answer);
+    addLog(tag, question, answer, { turnId: d.turn_id });
     speak((d.spoken && d.spoken.length ? d.spoken : [answer]).join(" "));
   }
 
