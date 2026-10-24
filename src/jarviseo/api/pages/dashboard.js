@@ -439,6 +439,7 @@
      ------------------------------------------------------------------------ */
 
   let busy = false;
+  let voiceMode = false; // 팀 음성 모드: 서버가 듣고 읽는다(api/voice_loop.py)
   let photo = null; // 카메라가 꺼져 있을 때 올린 사진(data URL)
   const shot = $("#feed-shot");
   const askForm = $("#ask-form");
@@ -585,7 +586,8 @@
     const overlay = (d.ingredient && d.ingredient.where) || d.boxes;
     if (overlay && !app.classList.contains("no-overlay")) showShot(overlay);
     addLog(tag, question, answer);
-    speak((d.spoken && d.spoken.length ? d.spoken : [answer]).join(" "));
+    // 팀 음성 모드면 서버 스피커가 이미 읽었다
+    if (!voiceMode) speak((d.spoken && d.spoken.length ? d.spoken : [answer]).join(" "));
   }
 
   async function ask(question, frame, sttSec, more = []) {
@@ -619,6 +621,11 @@
   }
 
   const listen = () => {
+    if (voiceMode) {
+      // "자비서"라고 부른 것과 같다. 듣기 · 읽기는 서버가 한다(읽는 중이면 끼어들기)
+      fetch("/api/voice/call", { method: "POST" });
+      return;
+    }
     if (busy) return;
     stopDemo();
     if (feed.dataset.cam === "on") showShot(null);
@@ -828,13 +835,95 @@
   });
   window.addEventListener("pagehide", stopCamera);
 
-  if (camSupported) {
-    camToggle.hidden = false;
-    setNoSignal("카메라가 꺼져 있습니다.");
-    openCamModal();
-  } else {
-    setNoSignal("이 환경에서는 카메라를 사용할 수 없습니다.", { canRetry: false });
+  const browserCamera = () => {
+    if (camSupported) {
+      camToggle.hidden = false;
+      setNoSignal("카메라가 꺼져 있습니다.");
+      openCamModal();
+    } else {
+      setNoSignal("이 환경에서는 카메라를 사용할 수 없습니다.", { canRetry: false });
+    }
+  };
+
+  /* 팀 음성 모드 — 안경 실행(scripts/assistant.py)과 같은 팀 부품을 서버가 그대로 돌린다.
+     호출어 모델 · 시작음 · OpenAI 받아쓰기 · "잠깐만요" · OpenAI 목소리 · 끼어들기 · 되묻기 · 기억.
+     서버가 이 PC 의 마이크 · 스피커 · 웹캠을 열고, 페이지는 결과(/api/voice/events)와
+     카메라 미리 보기(/video)만 보여 준다. 못 켜면(키 · 장치 · 모델 없음) 브라우저 방식으로 돈다. */
+  // 카메라 장면을 서버의 프레임 버퍼로 보낸다(초당 약 6장, 앞의 것이 가야 다음 것을 보낸다).
+  // 서버는 "자비서" 뒤 말을 시작한 순간 근처에서 가장 선명한 장면을 고른다(안경과 같다).
+  const FRAME_WIDTH = 1920;
+  async function feedFrames() {
+    const c = document.createElement("canvas");
+    while (voiceMode) {
+      const started = performance.now();
+      if (feed.dataset.cam === "on" && video.videoWidth) {
+        const scale = Math.min(1, FRAME_WIDTH / video.videoWidth);
+        c.width = Math.round(video.videoWidth * scale);
+        c.height = Math.round(video.videoHeight * scale);
+        c.getContext("2d").drawImage(video, 0, 0, c.width, c.height);
+        const blob = await new Promise((ok) => c.toBlob(ok, "image/jpeg", 0.85));
+        if (blob) await fetch("/api/voice/frame", { method: "POST", body: blob }).catch(() => {});
+      }
+      await new Promise((ok) => setTimeout(ok, Math.max(0, 160 - (performance.now() - started))));
+    }
   }
+
+  const onVoiceEvent = (e) => {
+    if (e.type === "wake") {
+      showShot(null);
+      setState("wake", { stages: ["run", "off", "off", "off", "off"] });
+      setText("#core-sub", e.barge_in ? "끼어들었어요. 말씀하세요…" : "말씀하세요…");
+      setText("#reason-q", "듣고 있어요");
+      setText("#reason-a", "말을 시작한 순간 가장 선명한 장면을 고를게요.");
+    } else if (e.type === "thinking") {
+      setState("processing", { stages: ["done", "run", "off", "off", "off"] });
+      setText("#core-sub", "생각하고 있어요…");
+    } else if (e.type === "result") {
+      showResult(e.data.question, e.data, 0);
+    } else if (e.type === "no_question") {
+      setState("idle");
+      setText("#core-sub", "말씀을 듣지 못했어요. 다시 불러 주세요.");
+    } else if (e.type === "error") {
+      setState("idle");
+      setText("#core-title", "대답하지 못했어요.");
+      setText("#core-sub", e.message || "");
+    }
+  };
+
+  let voiceAfter = 0;
+  async function pollVoice() {
+    while (voiceMode) {
+      try {
+        const r = await (await fetch(`/api/voice/events?after=${voiceAfter}`)).json();
+        voiceAfter = r.last;
+        r.events.forEach(onVoiceEvent);
+      } catch (err) {
+        // 서버를 다시 켜는 중일 수 있다. 계속 묻는다
+      }
+      await new Promise((ok) => setTimeout(ok, 300));
+    }
+  }
+
+  async function startVoice() {
+    setText("#core-sub", "팀 음성 모드를 준비하고 있어요… (처음엔 20초쯤 걸려요)");
+    try {
+      const r = await (await fetch("/api/voice/start", { method: "POST" })).json();
+      if (!r.on) throw new Error(r.reason || "꺼짐");
+      voiceMode = true;
+      setText("#core-sub", "“자비서”라고 부르면 대화를 시작합니다.");
+      setText("#reason-a", `팀 음성 모드 · 가리킴 ${r.pointing} · 대답은 PC 스피커로 읽어요.`);
+      console.info("[voice] 팀 음성 모드 켜짐 · 가리킴", r.pointing);
+      // 페이지를 새로 열었으면 지난 알림은 건너뛴다
+      voiceAfter = (await (await fetch("/api/voice/events")).json()).last;
+      pollVoice();
+      feedFrames();
+    } catch (err) {
+      console.info("[voice] 팀 음성 모드 꺼짐 — 브라우저로 돈다:", err.message);
+      setText("#core-sub", "“자비서”라고 부르면 대화를 시작합니다.");
+    }
+    browserCamera();
+  }
+  startVoice();
 
   /* ------------------------------------------------------------------------
      관리자: 단계별 지연
