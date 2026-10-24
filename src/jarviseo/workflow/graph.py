@@ -3,7 +3,7 @@
 이 파일은 노드(nodes/)를 잇기만 한다. 질문 한 번이 graph.invoke() 한 번이다.
 분기 함수는 "무슨 일이 있었나"(결과 이름)만 돌려주고, 어느 노드로 갈지는 아래 매핑이 정한다.
 
-    listen ─(no_question)─▶ END
+    listen ─(no_question · wake_rejected: 호출어 2단계 확인에서 걸러짐)─▶ END
       │ └─(bad_frame)─▶ recapture ↺(still_bad) ─(gave_up)──────────────────────▶ speak
       ▼                        │(good)
     route ◀────────────────────┘
@@ -76,7 +76,7 @@ def build_graph(deps: GraphDeps):  # -> CompiledStateGraph
     graph.add_conditional_edges(
         "listen",
         bind(voice.after_listen),
-        {"no_question": END, "bad_frame": "recapture", "heard": "route"},
+        {"wake_rejected": END, "no_question": END, "bad_frame": "recapture", "heard": "route"},
     )
     graph.add_conditional_edges(
         "recapture",
