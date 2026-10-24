@@ -10,15 +10,17 @@ Postgres 에 붙어서 대화 기록·지연시간·판정 결과를 남기고 �
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import create_engine, make_url, select, text
+from sqlalchemy import create_engine, func, make_url, select, text
 from sqlalchemy.orm import Session as OrmSession
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import selectinload, sessionmaker
 
 from jarviseo import config
 from jarviseo.memory.models import (
@@ -40,7 +42,9 @@ if TYPE_CHECKING:
     # 타입 표기에만 쓴다. 실제로 불러오면 DB 모듈이 OpenCV·OCR 까지 끌고 온다.
     from jarviseo.nutrition.service import IngredientCheck
 
-__all__ = ["MemoryStore", "STAGE_COLUMNS"]
+__all__ = ["MemoryStore", "STAGE_COLUMNS", "UPLOAD_TITLE", "turn_payload"]
+
+log = logging.getLogger(__name__)
 
 
 # 파이프라인이 넘겨주는 단계 이름 → 그 지연을 담는 열.
@@ -59,6 +63,68 @@ STAGE_COLUMNS = {
     "tts": TurnVoice.tts_ms,
     "total": SessionTurn.total_ms,
 }
+
+
+# 노트북이 클라우드로 보내는 열(#144). 사진 · 녹음 경로(image_path · audio_path)는 넣지 않는다.
+# 얼굴 · 집 안이 찍힐 수 있고, 경로는 서버에서 열 수도 없다. 후보 목록 · 성분 판정도 아직 안 보낸다.
+UPLOAD_FIELDS = {
+    "session_turn": (
+        "asked_at", "trigger_type", "question_text", "answer_text", "ocr_text", "total_ms",
+    ),
+    "turn_voice": (
+        "speech_started_at", "speech_ended_at", "stt_raw_text", "is_interrupted",
+        "is_filler_sent", "stt_ms", "tts_ms",
+    ),
+    "turn_inference": (
+        "target_label", "confidence", "margin", "pointing_variant", "resolved_by", "is_reask",
+        "is_retake", "vision_ms", "llm_ms", "route_ms", "frame_offset_ms", "detected_count",
+        "detector_version", "blur_score",
+    ),
+}  # fmt: skip
+# 받은 턴을 묶는 세션 제목의 앞말. 대시보드가 이것으로 노트북 턴과 웹 턴을 가른다.
+UPLOAD_TITLE = "노트북"
+
+
+def turn_payload(turn: SessionTurn) -> dict:
+    """클라우드로 보낼 턴 하나(JSON). ``turns_after`` 로 읽은 행을 넣는다."""
+    out: dict = {
+        "local_turn_id": turn.turn_id,
+        "local_session_id": turn.session_id,
+        "turn": _values(turn),
+    }
+    for key, row in (("voice", turn.voice), ("inference", turn.inference)):
+        out[key] = _values(row) if row is not None else None
+    return out
+
+
+def _values(row) -> dict:
+    out = {}
+    for name in UPLOAD_FIELDS[row.__tablename__]:
+        v = getattr(row, name)
+        if isinstance(v, datetime):
+            v = _utc(v).isoformat()
+        elif isinstance(v, Decimal):
+            v = float(v)
+        out[name] = v
+    return out
+
+
+def _pick(values: dict, names: tuple[str, ...]) -> dict:
+    """받은 값에서 정해 둔 열만 고른다. 시각(…_at)은 글자에서 UTC 시각으로 바꾼다."""
+    out = {}
+    for name in names:
+        if name not in values:
+            continue
+        v = values[name]
+        if name.endswith("_at") and isinstance(v, str):
+            v = _utc(datetime.fromisoformat(v))
+        out[name] = v
+    return out
+
+
+def _utc(t: datetime) -> datetime:
+    # SQLite 는 시각대를 버리고 UTC 그대로 돌려준다(server_default CURRENT_TIMESTAMP 도 UTC).
+    return t.replace(tzinfo=UTC) if t.tzinfo is None else t.astimezone(UTC)
 
 
 def _wall_clock(t: float) -> datetime:
@@ -485,3 +551,99 @@ class MemoryStore:
             if session_id is not None:
                 stmt = stmt.where(SessionTurn.session_id == session_id)
             return list(db.scalars(stmt))
+
+    def turn_feed(self, after_id: int | None = None, limit: int = 30) -> list[SessionTurn]:
+        """대시보드 채팅 이력. 세션(어디서 물었는지)·추론 결과를 같이 읽어 둔다.
+
+        after_id 가 없으면 최근 limit 개를 새것부터, 있으면 그보다 뒤에 들어온 턴을
+        들어온 순서로 준다. 들어온 순서는 turn_id 다. 노트북에서 받은 턴은 asked_at 이
+        노트북 시각이라 섞일 수 있다.
+        """
+        options = (selectinload(SessionTurn.session), selectinload(SessionTurn.inference))
+        with self.session() as db:
+            stmt = select(SessionTurn).options(*options).limit(limit)
+            if after_id is None:
+                stmt = stmt.order_by(SessionTurn.turn_id.desc())
+            else:
+                stmt = stmt.where(SessionTurn.turn_id > after_id).order_by(SessionTurn.turn_id)
+            return list(db.scalars(stmt))
+
+    # -- 클라우드로 보내기 (#144) -------------------------------------------
+    # 노트북은 이 DB 에 먼저 쓰고(turns_after · turn_payload), 클라우드 서버는 받은 턴을
+    # 자기 DB 에 새로 만든다(import_turns). 사진 · 녹음 경로와 후보 목록은 보내지 않는다.
+
+    def last_turn_id(self) -> int:
+        """가장 마지막 턴 번호. 턴이 없으면 0."""
+        with self.session() as db:
+            return db.scalar(select(func.max(SessionTurn.turn_id))) or 0
+
+    def turns_after(self, turn_id: int, limit: int = 20) -> list[SessionTurn]:
+        """turn_id 보다 뒤에 기록한 턴을 오래된 것부터. 음성 · 추론 기록을 같이 읽어 둔다."""
+        options = (selectinload(SessionTurn.voice), selectinload(SessionTurn.inference))
+        with self.session() as db:
+            stmt = (
+                select(SessionTurn)
+                .options(*options)
+                .where(SessionTurn.turn_id > turn_id)
+                .order_by(SessionTurn.turn_id)
+                .limit(limit)
+            )
+            return list(db.scalars(stmt))
+
+    def import_turns(self, source: str, turns: list[dict]) -> dict[str, int]:
+        """노트북이 보낸 턴(turn_payload 모양)을 이 DB 에 남긴다. 클라우드 서버가 부른다.
+
+        노트북 세션 하나를 여기 세션 하나로 만든다(제목 ``노트북 <source> #<세션 번호>``).
+        같은 세션에 asked_at · 질문이 같은 턴이 이미 있으면 건너뛴다. 노트북은 서버가 받았다는
+        답을 못 들으면 같은 턴을 다시 보내기 때문이다.
+        턴마다 따로 저장한다. 하나가 깨져도(예: Postgres 열 길이 초과) 나머지는 남기고,
+        깨진 턴은 failed 로 센다. 노트북이 그 턴을 붙잡고 계속 다시 보내지 않게 한다.
+        """
+        counts = {"saved": 0, "skipped": 0, "failed": 0}
+        user_id = self.ensure_user()
+        sessions: dict[int, int] = {}
+        for item in turns:
+            try:
+                local_session = int(item["local_session_id"])
+                if local_session not in sessions:
+                    title = f"{UPLOAD_TITLE} {source} #{local_session}"
+                    sessions[local_session] = self._session_titled(user_id, title)
+                saved = self._import_turn(sessions[local_session], item)
+            except Exception:
+                log.exception("받은 턴을 남기지 못함 (local_turn_id %s)", item.get("local_turn_id"))
+                counts["failed"] += 1
+                continue
+            counts["saved" if saved else "skipped"] += 1
+        return counts
+
+    def _session_titled(self, user_id: int, title: str) -> int:
+        with self.session() as db:
+            found = db.scalar(select(ChatSession.session_id).where(ChatSession.title == title))
+            if found is not None:
+                return found
+            row = ChatSession(user_id=user_id, title=title)
+            db.add(row)
+            db.flush()
+            return row.session_id
+
+    def _import_turn(self, session_id: int, item: dict) -> bool:
+        fields = _pick(item.get("turn") or {}, UPLOAD_FIELDS["session_turn"])
+        asked_at = fields.get("asked_at")
+        with self.session() as db:
+            dup = db.scalar(
+                select(SessionTurn.turn_id).where(
+                    SessionTurn.session_id == session_id,
+                    SessionTurn.asked_at == asked_at,
+                    SessionTurn.question_text == fields.get("question_text", ""),
+                )
+            )
+            if dup is not None:
+                return False
+            turn = SessionTurn(session_id=session_id, **fields)
+            db.add(turn)
+            db.flush()
+            for key, model in (("voice", TurnVoice), ("inference", TurnInference)):
+                if item.get(key):
+                    values = _pick(item[key], UPLOAD_FIELDS[model.__tablename__])
+                    db.add(model(turn_id=turn.turn_id, **values))
+            return True

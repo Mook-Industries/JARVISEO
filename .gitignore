@@ -13,6 +13,8 @@ data/videos/*
 data/captures/
 *.db
 *.sqlite3
+# 클라우드로 어디까지 보냈는지(memory/uploader.py). 노트북마다 다르다
+data/cloud_upload.json
 !data/datasets/.gitkeep
 !data/models/.gitkeep
 !data/videos/.gitkeep
