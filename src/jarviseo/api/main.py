@@ -63,7 +63,11 @@ from jarviseo import config
 from jarviseo.api.assistant_web import WebAssistant, draw_boxes
 from jarviseo.api.marks import jpeg_data_url, mark_findings
 from jarviseo.memory import MemoryStore
-from jarviseo.nutrition.allergen import KNOWN_ALLERGENS, find_allergens, normalize_term
+from jarviseo.nutrition.allergen import (
+    expand_allergens,
+    find_allergens,
+    normalize_term,
+)
 from jarviseo.nutrition.ocr import google_vision_key
 from jarviseo.nutrition.service import IngredientChecker, make_checker
 from jarviseo.types import IngredientSource
@@ -78,7 +82,6 @@ OCR_NOTEBOOK_URL = os.environ.get("JARVISEO_OCR_NOTEBOOK_URL", "")
 OCR_STATUS_TTL_SEC = 5.0  # 여러 탭이 동시에 물어봐도 Colab 에는 5초에 한 번만 묻는다
 SOURCE_NAMES = {"barcode": "바코드 · 푸드QR", "ocr": "성분표 OCR", "retake": "다시 찍기 안내"}
 # 알레르기 칸에 이 말을 넣으면 법정 알레르기 전체로 판정한다. 인식 성능을 볼 때 쓴다.
-ALL_KEYWORDS = {"모두", "테스트", "전체"}
 # 근거 구간 이름. 원재료·알레르기 표시에서 찾으면 함유, 혼입 문장에서만 찾으면 혼입 가능이다.
 SECTIONS = (("ingredients", "원재료"), ("notice", "알레르기 표시"), ("cross", "같은 제조시설"))
 
@@ -326,7 +329,7 @@ def _ask(s, question: str, image: np.ndarray | None, more=None) -> dict:
     }
     check = state.get("ingredient")
     if check is not None:
-        allergens = s.store.get_user_allergens(s.user_id)
+        allergens = expand_allergens(s.store.get_user_allergens(s.user_id))
         ev = evidence(check, allergens, getattr(s.checker, "synonyms", {}) or {})
         judged = s.assistant.judged_image  # 판정기에 실제로 들어간 사진(크롭 또는 사진 전체)
         result["ingredient"] = {
@@ -349,14 +352,6 @@ def where_image(image: np.ndarray, r, ev: list[dict]) -> np.ndarray | None:
         barcode=read.bbox if read is not None else None,
         barcode_code=read.code if read is not None else None,
     )
-
-
-def expand_allergens(names: list[str]) -> list[str]:
-    """'모두' · '테스트'가 있으면 법정 알레르기 전체를 더한다. 나머지 이름은 그대로 둔다."""
-    if not any(n.strip() in ALL_KEYWORDS for n in names):
-        return names
-    rest = [n for n in names if n.strip() not in ALL_KEYWORDS]
-    return list(dict.fromkeys([*KNOWN_ALLERGENS, *rest]))
 
 
 def evidence(r, allergens: list[str], synonyms: dict[str, list[str]]) -> list[dict]:

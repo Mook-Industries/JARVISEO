@@ -15,10 +15,9 @@ from jarviseo.nutrition.response import (
     OCCLUDED_NOTE,
     RETAKE_CLOSER,
     RETAKE_GLARE,
-    RETAKE_OTHER_SIDE,
+    RETAKE_SHOW_INGREDIENTS,
     RETAKE_STEADY,
     RETAKE_UNCOVER,
-    RETAKE_WHOLE,
     SMALL_TEXT_NOTE,
 )
 from jarviseo.nutrition.service import IngredientChecker
@@ -141,7 +140,7 @@ def test_missing_header_asks_full_view_retake(monkeypatch):
     """원재료명이 안 보이면 전체가 보이게 재촬영을 요청한다."""
     monkeypatch.setattr(service, "lookup_product", miss())
     r = checker(FakeReader((["밀가루, 설탕"], 0.95))).check(CROP, ["땅콩"])
-    assert r.retake == RETAKE_WHOLE and r.judgement.reason == "no_ingredients"
+    assert r.retake == RETAKE_SHOW_INGREDIENTS and r.judgement.reason == "no_ingredients"
 
 
 def test_retake_limit_ends_undetermined(monkeypatch):
@@ -331,7 +330,7 @@ def test_unreadable_panel_asks_retake(monkeypatch):
     """성분표도 못 읽으면 재촬영을 요청한다."""
     monkeypatch.setattr(service, "lookup_product", found(RAMEN))
     r = checker(FakeReader((["설탕, 정제수"], 0.95))).check(CROP, ["밀"])  # 원재료명 머리말 없음
-    assert r.retake == RETAKE_WHOLE
+    assert r.retake == RETAKE_SHOW_INGREDIENTS
     assert r.judgement.verdict is V.UNDETERMINED
 
 
@@ -397,7 +396,7 @@ def test_auto_region_without_anchor_reads_whole_photo(monkeypatch):
     r = checker(reader, auto_region=True, max_reprocess=0).check(CROP, ["땅콩"])
     assert r.panel_region is None
     assert reader.shapes[1] == (CROP.shape[0] * 2, CROP.shape[1] * 2)  # 기존처럼 전체 2배
-    assert r.retake == RETAKE_WHOLE
+    assert r.retake == RETAKE_SHOW_INGREDIENTS
 
 
 def test_auto_region_off_reads_once(monkeypatch):
@@ -440,7 +439,7 @@ def test_answer_returns_retake_guide_when_unreadable(monkeypatch):
     monkeypatch.setattr(service, "lookup_product", miss())
     reader = FakeReader((["글자 없음"], 0.2))
     text = checker(reader).answer(CROP, True, ["땅콩"])
-    assert text in {RETAKE_CLOSER, RETAKE_WHOLE, RETAKE_STEADY, RETAKE_GLARE}
+    assert text in {RETAKE_CLOSER, RETAKE_SHOW_INGREDIENTS, RETAKE_STEADY, RETAKE_GLARE}
 
 
 def test_close_closes_food_qr():
@@ -602,11 +601,11 @@ def test_barcode_number_in_ocr_text_finds_cached_product(monkeypatch):
     assert r.barcode.barcode.code == code and r.barcode.barcode.symbology == "TEXT"
 
 
-def test_other_side_without_ingredients_asks_for_ingredient_side(monkeypatch):
+def test_no_ingredients_and_no_notice_asks_for_ingredient_part(monkeypatch):
     """글자는 꽤 읽었는데 원재료명이 없으면 원재료명이 적힌 면을 보여 달라고 한다."""
     monkeypatch.setattr(service, "lookup_product", miss())
     r = checker(BoxReader(BACK)).check(CROP, ["우유"])
-    assert r.retake == RETAKE_OTHER_SIDE
+    assert r.retake == RETAKE_SHOW_INGREDIENTS
     assert r.barcode.barcode.code == "8801062640782"  # 번호는 남겼다(다음에 캐시로 쓰게)
 
 

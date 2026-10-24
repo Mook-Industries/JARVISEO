@@ -118,7 +118,7 @@ def test_not_detected_is_not_called_safe():
     [
         ("no_user_allergens", "알레르기를 등록해"),
         ("low_ocr_conf", "정확히 읽지 못했어요"),
-        ("no_ingredients", "원재료명을 찾지 못했어요"),
+        ("no_ingredients", "원재료명 부분을 보여 주세요"),
         ("opaque_ingredient", "알 수 없는 원료"),
         ("모르는사유", "확인하지 못했어요"),
     ],
