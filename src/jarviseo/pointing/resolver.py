@@ -12,7 +12,9 @@ cues.py 가 매긴 단서별 점수를 가중치로 합쳐 후보 순위를 정�
 손 단서(v2)는 가리키는 손이 없으면 기권한다. 0점을 주는 게 아니라 그 사진에서 빼고
 켜진 나머지 단서로 다시 나눈다(10/14 요구사항: 손이 없어도 대상을 골라야 한다).
 말 단서(v4)도 같다. 질문에 쓸 말이 없거나, 관계 말("컵 옆에")이거나, 후보를 못 가르면 기권한다.
-말 단서는 config.ENABLE_LANGUAGE_CUE 가 켜져 있을 때만 기본으로 켠다(라우터 보강 PR 에서 켬).
+이어 묻기 단서(v5)는 직전 대상이 없거나, 되가리키는 말("그거")이 없거나, 후보를 못 가르면 기권한다.
+두 단서는 config.ENABLE_LANGUAGE_CUE · ENABLE_CONTEXT_CUE 가 켜져 있을 때만 기본으로 켠다
+(말 · 맥락 세션 s04 로 잰 뒤 켬).
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from functools import partial
 import numpy as np
 
 from jarviseo import config
-from jarviseo.pointing.cues import parse_lang, score_center, score_lang, score_point
+from jarviseo.pointing.cues import parse_lang, score_center, score_ctx, score_lang, score_point
 from jarviseo.pointing.hands import HandPose, Ray, pointing_ray
 from jarviseo.pointing.labels import KIND_WORDS, korean_name
 from jarviseo.types import (
@@ -47,7 +49,7 @@ WEIGHTS: dict[CueKind, float] = {
 }
 
 # 단서를 구현하면 여기와 _scorers 에 넣는다. ablation 은 여기 있는 단서를 직접 골라 켠다.
-IMPLEMENTED_CUES = frozenset({CueKind.CENTER, CueKind.POINT, CueKind.LANG})
+IMPLEMENTED_CUES = frozenset({CueKind.CENTER, CueKind.POINT, CueKind.LANG, CueKind.CTX})
 
 # 후보 목록만 받아 단서 점수를 돌려주는 함수. 사진 크기 · 손 방향은 _scorers 가 미리 묶는다.
 Scorer = Callable[[list[Detection]], list[CueScore]]
@@ -73,10 +75,12 @@ def resolve_target(
         gaze_vector: 시선 단서(v3) 자리. v1 은 쓰지 않는다.
         text: 처음 질문 원문. 되묻기 대답은 넣지 않는다(``replies``). 말 단서(v4)가 읽는다.
         frame_size: (width, height).
-        prev_target_label: 대화 맥락 단서(v5) 자리. v1 은 쓰지 않는다.
+        prev_target_label: 같은 세션에서 바로 전에 고른 대상의 검출 이름. 이어 묻기 단서(v5)가
+            "그거"를 이 대상으로 읽는다. None 이면 이어 묻기 단서는 기권한다.
         replies: 되묻기 대답들, 받은 순서대로. 후보를 걸러내는 데만 쓴다.
         enabled_cues: 켤 단서. **ablation 의 스위치.** None 이면 구현된 단서 전부
-            (말 단서는 ``config.ENABLE_LANGUAGE_CUE`` 가 켜져 있을 때만).
+            (말 · 이어 묻기 단서는 ``config.ENABLE_LANGUAGE_CUE`` · ``ENABLE_CONTEXT_CUE`` 가
+            켜져 있을 때만).
             구현 안 된 단서가 있으면 ValueError — 조용히 빼면 v2 줄이 v1 숫자가 된다.
         margin_threshold: 1위-2위 점수차가 이 값보다 작으면 되묻는다.
             기본값은 ``config.CLARIFY_MARGIN_THRESHOLD`` 다(두 곳에 적으면 어긋난다).
@@ -93,6 +97,8 @@ def resolve_target(
         active = IMPLEMENTED_CUES
         if not config.ENABLE_LANGUAGE_CUE:
             active -= {CueKind.LANG}
+        if not config.ENABLE_CONTEXT_CUE:
+            active -= {CueKind.CTX}
     else:
         active = frozenset(enabled_cues)
     if not active or active - IMPLEMENTED_CUES:
@@ -108,13 +114,18 @@ def resolve_target(
         lang = score_lang(candidates, parse_lang(text), frame_size, image)
     if lang is None:
         active -= {CueKind.LANG}  # 기권: 쓸 말이 없거나 관계 말이거나 후보를 못 가른다
+    # 이어 묻기 점수도 같은 이유로 좁히기 전에 한 번만 매긴다.
+    ctx = None
+    if CueKind.CTX in active and candidates:
+        ctx = score_ctx(candidates, prev_target_label, text)
+    if ctx is None:
+        active -= {CueKind.CTX}  # 기권: 직전 대상이 없거나 "그거"가 없거나 후보를 못 가른다
     kinds = [k for k in CueKind if k in active]  # ablation 순서(v1~v5)로 기록한다
 
     if not candidates or not kinds:
         return TargetResolution([], chosen=None, margin=0.0, needs_clarify=True)
 
-    lang_by_id = None if lang is None else {id(d): s for d, s in zip(candidates, lang, strict=True)}
-    scorers = _scorers(frame_size, ray, lang_by_id)
+    scorers = _scorers(frame_size, ray, {CueKind.LANG: lang, CueKind.CTX: ctx}, candidates)
     narrowed = _narrow_by_replies(candidates, replies, kinds, scorers, frame_size[0])
     ranked = _rank(narrowed, kinds, scorers)
     margin = 1.0 if len(ranked) == 1 else ranked[0].total_score - ranked[1].total_score
@@ -125,18 +136,29 @@ def resolve_target(
 
 
 def _scorers(
-    frame_size: tuple[int, int], ray: Ray | None, lang_by_id: dict[int, CueScore] | None
+    frame_size: tuple[int, int],
+    ray: Ray | None,
+    fixed: dict[CueKind, list[CueScore] | None],
+    candidates: list[Detection],
 ) -> dict[CueKind, Scorer]:
-    """이번 사진에서 쓸 단서별 점수 함수. 기권한 단서(손 없음 · 말 없음)는 넣지 않는다.
+    """이번 사진에서 쓸 단서별 점수 함수. 기권한 단서(손 · 말 · 이어 묻기 없음)는 넣지 않는다.
 
-    말 점수는 미리 매긴 것을 같은 후보 객체로 꺼낸다(되묻기로 좁혀도 같은 점수).
+    fixed 는 좁히기 전에 후보 전체로 미리 매긴 점수(말 · 이어 묻기)다. 같은 후보 객체로 꺼내서
+    되묻기 대답으로 후보가 줄어도 처음 질문의 점수가 그대로다.
     """
     scorers: dict[CueKind, Scorer] = {CueKind.CENTER: partial(score_center, frame_size=frame_size)}
     if ray is not None:
         scorers[CueKind.POINT] = partial(score_point, ray=ray)
-    if lang_by_id is not None:
-        scorers[CueKind.LANG] = lambda found: [lang_by_id[id(d)] for d in found]
+    for kind, scores in fixed.items():
+        if scores is not None:
+            by_id = {id(d): s for d, s in zip(candidates, scores, strict=True)}
+            scorers[kind] = partial(_pick, by_id)
     return scorers
+
+
+def _pick(by_id: dict[int, CueScore], found: list[Detection]) -> list[CueScore]:
+    """미리 매긴 점수에서 지금 후보들의 점수를 꺼낸다(같은 후보 객체로)."""
+    return [by_id[id(d)] for d in found]
 
 
 def _rank(

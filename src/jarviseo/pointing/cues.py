@@ -4,8 +4,8 @@
 여기서 나온 점수를 resolver.py 가 가중치로 합친다. ablation 의 축이 이 파일이다.
 
 v1 center(화면 가운데 · 크기) · v2 point(검지 방향) · v4 lang(질문 속 색 · 종류 · 위치 · 크기)
-이 있다. 단서를 추가할 때는 types.CueKind 에 있는 이름으로 score_* 함수를 만들고,
-resolver 의 IMPLEMENTED_CUES 와 단서 → 함수 표에 등록한다.
+· v5 ctx(이어 묻기 — 직전 대상과 같은 종류)가 있다. 단서를 추가할 때는 types.CueKind 에 있는
+이름으로 score_* 함수를 만들고, resolver 의 IMPLEMENTED_CUES 와 단서 → 함수 표에 등록한다.
 
 이 파일의 함수는 딥러닝이 아니다. 좌표 · 낱말표 · 색 범위로 하는 계산이고, 신경망은 detector.py ·
 hands.py 까지만 쓴다. 말 읽기에 LLM 을 부르지 않는 것은 라우터와 같은 이유다 — 말 끝에서 첫 소리까지
@@ -31,7 +31,9 @@ __all__ = [
     "POINT_SIGMA_DEG",
     "LangQuery",
     "parse_lang",
+    "refers_back",
     "score_center",
+    "score_ctx",
     "score_lang",
     "score_point",
 ]
@@ -93,6 +95,13 @@ COLOR_RANGES: dict[str, tuple[tuple[int, int, int, int, int, int], ...]] = {
 }
 # 색은 박스 안쪽만 본다. 사방에서 이만큼씩 덜어 낸다. YOLO 박스 가장자리에는 책상 · 벽이 낀다.
 COLOR_INSET = 0.2
+
+# --- 이어 묻기 단서(v5)의 낱말표 -----------------------------------------------------
+# 바로 전에 말한 물건을 되가리키는 말. "그거 씻어야 돼?"의 "그거". 낱말 단위로 보므로
+# "그런데" · "그래서"는 걸리지 않는다. "이거" · "저거"는 눈앞의 물건이라 넣지 않는다.
+BACK_WORDS: dict[str, str] = dict.fromkeys(
+    ("그", "그거", "그것", "그건", "그게", "그걸", "걔", "아까", "방금"), "back"
+)
 
 
 def score_center(candidates: list[Detection], frame_size: tuple[int, int]) -> list[CueScore]:
@@ -293,4 +302,30 @@ def score_lang(
     return [
         CueScore(kind=CueKind.LANG, score=score, detail=part)
         for score, part in zip(scores, parts, strict=True)
+    ]
+
+
+def refers_back(text: str) -> bool:
+    """질문에 바로 전 물건을 되가리키는 말(그거 · 아까 · 방금 …)이 있나. 낱말 단위로 본다."""
+    return any(_lookup(token, BACK_WORDS) for token in re.findall(r"[^\s?!.,~]+", text))
+
+
+def score_ctx(
+    candidates: list[Detection], prev_label: str | None, text: str
+) -> list[CueScore] | None:
+    """이어 묻기에서 바로 전 대상과 같은 종류의 후보에 1, 아니면 0. 후보 순서대로, 기권이면 None.
+
+    이름만 본다. 안경 카메라는 턴 사이에 고개를 따라 움직여서 앞 사진의 박스 자리는 뜻이 없다.
+    되가리키는 말이 있을 때만 쓴다 — "이 병 뭐야?"처럼 새 물건을 물을 때 앞에서 물은 컵이 끼어들면
+    틀린 물건을 밀어 준다. 기권(None): 직전 대상이 없을 때, 되가리키는 말이 없을 때, 후보를 못
+    가를 때(맞는 후보가 없거나 모두 같은 이름). 0점 대신 기권하는 이유는 말 단서와 같다.
+    """
+    if prev_label is None or not candidates or not refers_back(text):
+        return None
+    scores = [1.0 if d.label == prev_label else 0.0 for d in candidates]
+    if max(scores) == min(scores):
+        return None
+    return [
+        CueScore(kind=CueKind.CTX, score=score, detail={"prev_label": prev_label})
+        for score in scores
     ]
