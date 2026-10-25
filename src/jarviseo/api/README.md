@@ -43,6 +43,17 @@ python -m jarviseo.api          # http://localhost:8000 이 열린다. 끄려면
 카메라 · 마이크는 브라우저가 켠다. 처음에 뜨는 "카메라 · 마이크 허용"을 누른다.
 `localhost` 로 열어야 켜진다(브라우저는 localhost · https 에서만 카메라를 허락한다).
 
+### 팀 음성 모드
+
+대시보드를 열면 서버가 이 PC 의 마이크 · 스피커를 열고 안경(`scripts/assistant.py`)과 같은 팀 부품으로 돈다
+(`api/voice_loop.py`): 호출어 모델 → 시작음 → OpenAI 받아쓰기 → 그래프(가리킴 · 되묻기 · 성분 · 기억)
+→ "잠깐만요" → OpenAI 목소리 → 끼어들기. 대답은 **PC 스피커**로 나온다. 카메라는 대시보드 탭이 잡고
+장면을 서버로 보낸다. 입력창 질문도 같은 부품으로 돈다(받아쓰기만 건너뛴다).
+
+- 필요한 것: `OPENAI_API_KEY`, 호출어 모델 `data/models/jarviseo.onnx`(받는 법은 `data/README.md`),
+  손 모델(선택, 위 2-1). 마이크 · 스피커는 `.env` 의 `JARVISEO_MIC` · `JARVISEO_SPEAKER`(비면 기본 장치).
+- 키나 마이크가 없으면 예전처럼 브라우저 받아쓰기 · 읽기로 돈다(콘솔에 `[voice] 팀 음성 모드 꺼짐`).
+
 ### 질문 하나가 도는 곳
 
 | 단계 | 어디서 |
