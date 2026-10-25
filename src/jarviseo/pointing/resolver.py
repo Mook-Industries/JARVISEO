@@ -11,6 +11,8 @@ cues.py 가 매긴 단서별 점수를 가중치로 합쳐 후보 순위를 정�
 
 손 단서(v2)는 가리키는 손이 없으면 기권한다. 0점을 주는 게 아니라 그 사진에서 빼고
 켜진 나머지 단서로 다시 나눈다(10/14 요구사항: 손이 없어도 대상을 골라야 한다).
+말 단서(v4)도 같다. 질문에 쓸 말이 없거나, 관계 말("컵 옆에")이거나, 후보를 못 가르면 기권한다.
+말 단서는 config.ENABLE_LANGUAGE_CUE 가 켜져 있을 때만 기본으로 켠다(라우터 보강 PR 에서 켬).
 """
 
 from __future__ import annotations
@@ -18,10 +20,12 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from functools import partial
 
+import numpy as np
+
 from jarviseo import config
-from jarviseo.pointing.cues import score_center, score_point
+from jarviseo.pointing.cues import parse_lang, score_center, score_lang, score_point
 from jarviseo.pointing.hands import HandPose, Ray, pointing_ray
-from jarviseo.pointing.labels import korean_name
+from jarviseo.pointing.labels import KIND_WORDS, korean_name
 from jarviseo.types import (
     CueKind,
     CueScore,
@@ -42,8 +46,8 @@ WEIGHTS: dict[CueKind, float] = {
     CueKind.CTX: 0.10,
 }
 
-# 단서를 구현하면 여기와 _scorers 에 넣는다.
-IMPLEMENTED_CUES = frozenset({CueKind.CENTER, CueKind.POINT})
+# 단서를 구현하면 여기와 _scorers 에 넣는다. ablation 은 여기 있는 단서를 직접 골라 켠다.
+IMPLEMENTED_CUES = frozenset({CueKind.CENTER, CueKind.POINT, CueKind.LANG})
 
 # 후보 목록만 받아 단서 점수를 돌려주는 함수. 사진 크기 · 손 방향은 _scorers 가 미리 묶는다.
 Scorer = Callable[[list[Detection]], list[CueScore]]
@@ -59,6 +63,7 @@ def resolve_target(
     replies: Sequence[str] = (),
     enabled_cues: set[CueKind] | None = None,
     margin_threshold: float = config.CLARIFY_MARGIN_THRESHOLD,
+    image: np.ndarray | None = None,
 ) -> TargetResolution:
     """사용자가 가리킨 물체를 결정한다.
 
@@ -66,33 +71,50 @@ def resolve_target(
         candidates: 장면에서 찾은 후보 물체들.
         hand: 가리키는 손(hands.pick_pointing_hand 로 고른 것). None 이면 손 단서는 기권한다.
         gaze_vector: 시선 단서(v3) 자리. v1 은 쓰지 않는다.
-        text: 처음 질문 원문. 되묻기 대답은 넣지 않는다(``replies``).
+        text: 처음 질문 원문. 되묻기 대답은 넣지 않는다(``replies``). 말 단서(v4)가 읽는다.
         frame_size: (width, height).
         prev_target_label: 대화 맥락 단서(v5) 자리. v1 은 쓰지 않는다.
         replies: 되묻기 대답들, 받은 순서대로. 후보를 걸러내는 데만 쓴다.
-        enabled_cues: 켤 단서. **ablation 의 스위치.** None 이면 구현된 단서 전부.
+        enabled_cues: 켤 단서. **ablation 의 스위치.** None 이면 구현된 단서 전부
+            (말 단서는 ``config.ENABLE_LANGUAGE_CUE`` 가 켜져 있을 때만).
             구현 안 된 단서가 있으면 ValueError — 조용히 빼면 v2 줄이 v1 숫자가 된다.
         margin_threshold: 1위-2위 점수차가 이 값보다 작으면 되묻는다.
             기본값은 ``config.CLARIFY_MARGIN_THRESHOLD`` 다(두 곳에 적으면 어긋난다).
+        image: 그 사진(OpenCV BGR). 말 단서의 색("노란 캔")에만 쓴다. None 이면 색은 빼고 본다.
 
     후보가 0개면 chosen=None, needs_clarify=True, 되물을 문장 없음(그래프가 "다시 가리켜
     주세요"로 끝낸다). 켜진 단서가 모두 기권해도(손 단서만 켰는데 손이 없음) 같다.
     후보가 1개면 margin 은 1.0(비교 상대가 없으므로 확신)이다.
     candidates 칸에는 걸러낸 뒤의 순위를 담는다. chosen 이 그 안에 있어야 DB 기록이 맞는다.
     """
-    active = IMPLEMENTED_CUES if enabled_cues is None else frozenset(enabled_cues)
+    if enabled_cues is None:
+        # 실제 비서의 기본값. 말 단서는 말 세트(s04)로 잰 뒤 라우터 보강과 같이 켠다.
+        # 설정을 부를 때 읽어야 테스트 · 실행 중에 바꾼 값이 따라온다.
+        active = IMPLEMENTED_CUES
+        if not config.ENABLE_LANGUAGE_CUE:
+            active -= {CueKind.LANG}
+    else:
+        active = frozenset(enabled_cues)
     if not active or active - IMPLEMENTED_CUES:
         allowed = ", ".join(k.value for k in IMPLEMENTED_CUES)
         raise ValueError(f"켤 단서가 없거나 구현 안 된 단서가 있다. 켤 수 있는 단서: {allowed}")
     ray = pointing_ray(hand) if hand is not None else None
     if ray is None:
         active -= {CueKind.POINT}  # 기권: 빼고 나머지 가중치로 다시 나눈다
+    # 말 점수는 되묻기로 후보를 좁히기 전에 한 번만 매긴다. 위치 · 크기는 "무리 안 순위"라 후보가
+    # 줄면 값이 바뀌는데, 대답은 단서가 아니라 필터라서 질문 원문의 뜻을 그대로 둬야 한다.
+    lang = None
+    if CueKind.LANG in active and candidates:
+        lang = score_lang(candidates, parse_lang(text), frame_size, image)
+    if lang is None:
+        active -= {CueKind.LANG}  # 기권: 쓸 말이 없거나 관계 말이거나 후보를 못 가른다
     kinds = [k for k in CueKind if k in active]  # ablation 순서(v1~v5)로 기록한다
 
     if not candidates or not kinds:
         return TargetResolution([], chosen=None, margin=0.0, needs_clarify=True)
 
-    scorers = _scorers(frame_size, ray)
+    lang_by_id = None if lang is None else {id(d): s for d, s in zip(candidates, lang, strict=True)}
+    scorers = _scorers(frame_size, ray, lang_by_id)
     narrowed = _narrow_by_replies(candidates, replies, kinds, scorers, frame_size[0])
     ranked = _rank(narrowed, kinds, scorers)
     margin = 1.0 if len(ranked) == 1 else ranked[0].total_score - ranked[1].total_score
@@ -102,11 +124,18 @@ def resolve_target(
     return TargetResolution(ranked, ranked[0], margin, False)
 
 
-def _scorers(frame_size: tuple[int, int], ray: Ray | None) -> dict[CueKind, Scorer]:
-    """이번 사진에서 쓸 단서별 점수 함수. 손이 없으면(ray None) 손 단서는 넣지 않는다."""
+def _scorers(
+    frame_size: tuple[int, int], ray: Ray | None, lang_by_id: dict[int, CueScore] | None
+) -> dict[CueKind, Scorer]:
+    """이번 사진에서 쓸 단서별 점수 함수. 기권한 단서(손 없음 · 말 없음)는 넣지 않는다.
+
+    말 점수는 미리 매긴 것을 같은 후보 객체로 꺼낸다(되묻기로 좁혀도 같은 점수).
+    """
     scorers: dict[CueKind, Scorer] = {CueKind.CENTER: partial(score_center, frame_size=frame_size)}
     if ray is not None:
         scorers[CueKind.POINT] = partial(score_point, ray=ray)
+    if lang_by_id is not None:
+        scorers[CueKind.LANG] = lambda found: [lang_by_id[id(d)] for d in found]
     return scorers
 
 
@@ -151,13 +180,17 @@ def _narrow_by_replies(
 
 
 def _by_name(candidates: list[Detection], said: str) -> list[Detection]:
-    """대답에 든 후보 이름과 같은 후보만. "곰인형"처럼 여러 이름이 걸리면 가장 긴 이름."""
-    names = {korean_name(d.label).replace(" ", "") for d in candidates}
-    hits = [name for name in names if name in said]
+    """대답에 든 종류 낱말(labels.KIND_WORDS)에 맞는 후보만. 여러 낱말이 걸리면 가장 긴 낱말.
+
+    한글 이름("병")뿐 아니라 별칭("텀블러")도 알아듣는다. "컵라면"처럼 짧은 낱말("컵")을 품은
+    말은 긴 낱말이 이긴다. 지금 후보에 없는 종류의 낱말은 보지 않는다.
+    """
+    labels = {d.label for d in candidates}
+    hits = [word for word, kinds in KIND_WORDS.items() if kinds & labels and word in said]
     if not hits:
         return []
-    best = max(hits, key=len)
-    return [d for d in candidates if korean_name(d.label).replace(" ", "") == best]
+    best = KIND_WORDS[max(hits, key=len)]
+    return [d for d in candidates if d.label in best]
 
 
 def _by_position(candidates: list[Detection], said: str, width: int) -> list[Detection]:

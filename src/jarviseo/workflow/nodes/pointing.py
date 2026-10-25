@@ -59,6 +59,8 @@ def resolve(state: JarviseoState, deps: GraphDeps) -> dict:
         frame_size=state["frame"].size,
         # 되묻기 대답("왼쪽 거")은 단서가 아니라 후보를 좁히는 데 쓴다. 질문과 따로 넘긴다.
         replies=state.get("clarify_replies", []),
+        # 말 단서의 색("노란 캔")을 보려고 사진도 넘긴다. 말 단서가 꺼져 있으면 쓰이지 않는다.
+        image=state["frame"].image,
     )
     return {"target": target}
 

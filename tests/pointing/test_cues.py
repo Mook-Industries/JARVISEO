@@ -1,10 +1,21 @@
-"""단서 점수 — 가운데 단서(v1)와 손 방향 단서(v2)가 맞는 후보에 높은 점수(0~1)를 주는지."""
+"""단서 점수 — 가운데(v1) · 손 방향(v2) · 말(v4) 단서가 맞는 후보에 높은 점수(0~1)를 주는지.
+
+말 단서는 질문 읽기(parse_lang)와 점수(score_lang)를 따로 본다. 색은 칠한 가짜 사진으로 잰다.
+"""
 
 import math
 
+import numpy as np
 import pytest
 
-from jarviseo.pointing.cues import POINT_SIGMA_DEG, score_center, score_point
+from jarviseo.pointing.cues import (
+    POINT_SIGMA_DEG,
+    LangQuery,
+    parse_lang,
+    score_center,
+    score_lang,
+    score_point,
+)
 from jarviseo.types import BBox, CueKind, Detection
 
 FRAME = (1920, 1080)
@@ -130,3 +141,144 @@ def test_point_kind_and_order():
 def test_point_no_candidates():
     """후보가 없으면 빈 리스트다."""
     assert score_point([], RAY) == []
+
+
+# --- 말 단서 (v4): 질문 읽기 ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("노란 캔 먹어도 돼?", LangQuery(frozenset({"product"}), ("yellow",))),
+        ("흰색 컵 뭐야?", LangQuery(frozenset({"cup"}), ("white",))),
+        ("왼쪽 컵 뭐야?", LangQuery(frozenset({"cup"}), position="left")),
+        ("위에 있는 병 뭐야?", LangQuery(frozenset({"bottle"}), position="top")),
+        ("큰 병 뭐야?", LangQuery(frozenset({"bottle"}), size="big")),
+        ("작은 거 뭐야?", LangQuery(size="small")),
+        ("이 폰 뭐야?", LangQuery(frozenset({"cell phone"}))),
+        ("이 텀블러 뭐야?", LangQuery(frozenset({"bottle"}))),
+        ("보라색 뭐야?", LangQuery(colors=("purple",))),
+    ],
+)
+def test_parse_lang_reads_s04_style_questions(text, expected):
+    """말 · 맥락 세션(s04)에서 실제로 한 말 모양 그대로 읽는다.
+
+    별칭(폰 · 텀블러 · 캔)도 알아듣는다.
+    """
+    assert parse_lang(text) == expected
+
+
+def test_parse_lang_reads_words_not_letters():
+    """낱말 단위로 본다. "책상"은 책이 아니고, "컵라면"은 컵이 아니라 식품이다."""
+    assert parse_lang("책상 위 컵 뭐야?").kinds == {"cup"}
+    assert parse_lang("이 컵라면 먹어도 돼?").kinds == {"product"}
+
+
+def test_parse_lang_keeps_adjectives_that_end_like_particles():
+    """ "작은" · "검은"의 "은"은 조사가 아니다. 먼저 떼면 "작" · "검"이 되어 못 알아듣는다."""
+    assert parse_lang("작은 거 뭐야?").size == "small"
+    assert parse_lang("검은 컵 뭐야?").colors == ("black",)
+
+
+def test_parse_lang_strips_particles():
+    """ "위에" · "왼쪽에" · "컵을"처럼 조사가 붙어도 낱말을 찾는다."""
+    query = parse_lang("왼쪽에 있는 컵을 줘")
+    assert (query.position, query.kinds) == ("left", {"cup"})
+
+
+@pytest.mark.parametrize(
+    ("text", "relation"),
+    [
+        ("컵 옆에 있는 거 뭐야?", True),  # 컵은 답이 아니라 기준점
+        ("컵 위에 있는 거 뭐야?", True),  # 종류 이름 바로 뒤의 위 · 아래도 관계
+        ("위에 있는 병 뭐야?", False),  # 앞에 종류 이름이 없으면 위치
+    ],
+)
+def test_parse_lang_tells_relation_from_position(text, relation):
+    assert parse_lang(text).relation is relation
+
+
+def test_parse_lang_without_words_is_empty():
+    """ "그거"처럼 쓸 말이 없으면 비어 있다(이어 묻기는 v5 몫)."""
+    assert parse_lang("그거 먹어도 돼?").empty
+    assert not parse_lang("파란 거 먹어도 돼?").empty
+
+
+# --- 말 단서 (v4): 점수 --------------------------------------------------------------
+
+YELLOW, WHITE = (0, 255, 255), (255, 255, 255)  # OpenCV 는 BGR 순서
+
+
+def _photo(*paints: tuple[BBox, tuple[int, int, int]]) -> np.ndarray:
+    """검은 1080p 사진에 박스마다 색을 칠한다."""
+    image = np.zeros((1080, 1920, 3), np.uint8)
+    for box, color in paints:
+        image[int(box.y1) : int(box.y2), int(box.x1) : int(box.x2)] = color
+    return image
+
+
+def _scores(candidates, text, image=None):
+    found = score_lang(candidates, parse_lang(text), FRAME, image)
+    return None if found is None else [round(s.score, 3) for s in found]
+
+
+def test_lang_kind_word_scores_matching_label():
+    """종류 말이 맞는 후보는 1, 아니면 0."""
+    candidates = [_det(400, 440, 600, 640, "cup"), _det(1320, 440, 1520, 640, "bottle")]
+    assert _scores(candidates, "이 컵 뭐야?") == [1.0, 0.0]
+
+
+def test_lang_color_looks_inside_the_box():
+    """색은 박스 안쪽만 본다. 노란 박스 1, 흰 박스 0, 가장자리만 노란 박스(안쪽은 검정)도 0."""
+    full, white, rim = (
+        BBox(100, 100, 300, 300),
+        BBox(800, 100, 1000, 300),
+        BBox(1500, 100, 1700, 300),
+    )
+    image = _photo((full, YELLOW), (white, WHITE), (rim, YELLOW))
+    image[140:260, 1540:1660] = 0  # 사방 20% 가장자리만 노랗게 남기고 안쪽을 검게
+    candidates = [Detection(label="can", confidence=0.9, bbox=b) for b in (full, white, rim)]
+
+    assert _scores(candidates, "노란 거 뭐야?", image) == [1.0, 0.0, 0.0]
+
+
+def test_lang_left_cup_is_left_among_cups():
+    """ "왼쪽 컵"은 컵 중 왼쪽이다. 더 왼쪽에 있는 병은 0(곱이라 종류가 틀리면 0)."""
+    bottle = _det(0, 440, 200, 640, "bottle")
+    left_cup, right_cup = _det(400, 440, 600, 640), _det(1320, 440, 1520, 640)
+    assert _scores([bottle, left_cup, right_cup], "왼쪽 컵 뭐야?") == [0.0, 1.0, 0.0]
+
+
+def test_lang_center_and_size_rank_within_pool():
+    """ "가운데 컵"은 컵 무리의 가운데, "큰 병"은 병 중 넓이가 큰 것."""
+    cups = [_det(100, 440, 300, 640), _det(860, 440, 1060, 640), _det(1620, 440, 1820, 640)]
+    assert _scores(cups, "가운데 컵 뭐야?") == [0.0, 1.0, 0.0]
+    bottles = [_det(100, 400, 200, 600, "bottle"), _det(1000, 300, 1300, 900, "bottle")]
+    assert _scores(bottles, "큰 병 뭐야?") == [0.0, 1.0]
+
+
+def test_lang_detail_records_each_part():
+    """기록(cue_scores)에 무엇이 점수를 냈는지 남는다."""
+    cups = [_det(400, 440, 600, 640), _det(1320, 440, 1520, 640)]
+    found = score_lang(cups, parse_lang("왼쪽 컵 뭐야?"), FRAME)
+    assert found[0].kind is CueKind.LANG
+    assert found[0].detail == {"kind": 1.0, "position": 1.0}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "컵 옆에 있는 거 뭐야?",  # 관계 말
+        "저거 뭐야?",  # 쓸 말이 없음
+        "노란 거 뭐야?",  # 색만 말했는데 사진이 없음
+        "이 컵 뭐야?",  # 둘 다 컵이라 못 가름
+    ],
+)
+def test_lang_abstains_instead_of_zero(text):
+    """기권(None)한다. 모두에게 같은 점수를 주면 총점 차이만 줄어 되묻기가 는다."""
+    cups = [_det(400, 440, 600, 640), _det(1320, 440, 1520, 640)]
+    assert score_lang(cups, parse_lang(text), FRAME, image=None) is None
+
+
+def test_lang_no_candidates_abstains():
+    assert score_lang([], parse_lang("왼쪽 컵 뭐야?"), FRAME) is None
