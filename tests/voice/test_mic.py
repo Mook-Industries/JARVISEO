@@ -208,3 +208,14 @@ def test_microphone_blocks_follow_slow_device(monkeypatch):
     # 마지막 블록은 방금(fake.now) 다 들어왔다. 첫 샘플은 그보다 블록 길이 + 지연만큼 앞이다.
     started = fake.now - BLOCK_SEC / 0.985 - LATENCY
     assert abs(t - started) < 0.05
+
+
+def test_clip_returns_held_blocks_between_times():
+    """`clip(start, end)` 는 들고 있는 블록 중 그 시각 사이에 들어온 것만 이어 붙인다."""
+    with MicStream(source=blocks(10)) as mic:
+        list(mic.blocks(since=0.0))  # 다 들어올 때까지 기다린다
+        got = mic.clip(3 * BLOCK_SEC, 6 * BLOCK_SEC)
+        none = mic.clip(20 * BLOCK_SEC, 30 * BLOCK_SEC)
+
+    assert [int(v) for v in got[::BLOCK]] == [3, 4, 5]
+    assert len(none) == 0 and none.dtype == np.int16

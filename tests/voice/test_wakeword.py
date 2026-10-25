@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from jarviseo import config
 from jarviseo.voice import stt
 from jarviseo.voice.gate import MicGate
 from jarviseo.voice.mic import BLOCK, SAMPLE_RATE, MicStream
@@ -164,7 +165,7 @@ def test_listen_transcribes_only_after_since_on_shared_mic(monkeypatch):
     with wave.open(str(DATA / "jarviseo_question.wav"), "rb") as f:
         voice = np.frombuffer(f.readframes(f.getnframes()), dtype="<i2")
     silence = np.zeros(SAMPLE_RATE, np.int16)
-    audio = np.concatenate([silence, voice, silence, silence])
+    audio = np.concatenate([silence, voice, silence, silence, silence])
     blocks = [
         (audio[i : i + BLOCK], i / SAMPLE_RATE) for i in range(0, len(audio) - BLOCK + 1, BLOCK)
     ]
@@ -175,8 +176,10 @@ def test_listen_transcribes_only_after_since_on_shared_mic(monkeypatch):
         client = FakeClient()
         listener = stt.SpeechToText(mic=mic, client=client)
         before = listener.listen(since=0.5, timeout=2.0)  # 말 시작(1초) 앞을 잡았다
-        # 말이 끝나고 1.2초 뒤 (앞으로 1초 당겨 읽어도 말이 끝난 뒤다)
-        after = listener.listen(since=2.2 + len(voice) / SAMPLE_RATE, timeout=2.0)
+        # 앞으로 WAKE_LOOKBACK_SEC 당겨 읽어도 말이 끝나고 0.2초 뒤다. .env 값에 따라 달라지지 않게
+        # config 에서 읽는다(로컬 .env 1.0 에서만 통과하고 기본값 1.5 에서는 깨졌다).
+        voice_end = 1.0 + len(voice) / SAMPLE_RATE
+        after = listener.listen(since=voice_end + config.WAKE_LOOKBACK_SEC + 0.2, timeout=2.0)
 
     assert before.text == "저거 뭐야?"
     assert before.started_at == pytest.approx(1.0, abs=0.06)
@@ -218,22 +221,50 @@ def test_speech_start_is_after_wake_word_in_same_recording(monkeypatch):
     assert starts == [utterance.started_at]
 
 
-def test_wake_word_then_pause_waits_for_question(monkeypatch):
-    """호출어만 말하고 쉬면 받아쓰지 않고 이어서 질문을 받는다."""
+@pytest.mark.parametrize("wake_text", ["자비서.", "자비다."])
+def test_wake_word_then_pause_waits_for_question(monkeypatch, wake_text):
+    """호출어만 말하고 쉬면 그 녹음은 질문으로 안 쓰고 이어서 질문을 받는다.
+
+    호출어 쪽도 받아써 보지만(붙여 말해 감지가 늦은 경우를 가리려고, #149) 호출어 뒤에 질문이
+    없거나, "자비다"처럼 호출어로 안 보이게 받아써지면 질문으로 넘기지 않는다.
+    """
     monkeypatch.setattr(stt, "MIC_GATE", MicGate())
     # "자비서" 0.6초, 1초 쉬고, 질문 1.2초. 감지는 호출어가 끝나고 0.1초 뒤
     blocks = question_audio((1.0, False), (0.6, True), (1.0, False), (1.2, True), (1.0, False))
-    client = FakeClient(["저거 뭐야?"])
-    starts = []
+    client = FakeClient([wake_text, "저거 뭐야?"])
+    starts, ends = [], []
 
     with MicStream(source=blocks, history_sec=10.0) as mic:
-        listener = stt.SpeechToText(mic=mic, client=client)
+        listener = stt.SpeechToText(mic=mic, client=client, on_speech_end=lambda: ends.append(1))
         utterance = listener.listen(on_speech_start=starts.append, since=1.7, timeout=2.0)
 
     assert utterance.text == "저거 뭐야?"
-    assert len(client.requests) == 1  # 호출어 쪽은 STT 에 보내지 않았다
+    assert len(client.requests) == 2
+    assert ends == [1]  # 종료음은 질문 끝에 한 번만
     assert utterance.started_at == pytest.approx(2.6, abs=0.06)  # 질문 시작
     assert starts[-1] == utterance.started_at
+
+
+def test_late_detection_after_whole_question_uses_that_recording(monkeypatch):
+    """붙여 말해서 감지가 질문 끝까지 늦어도 그 녹음에서 질문을 받는다(#149 실측).
+
+    실제로 "자비서 이거 뭐야"를 붙여 말하면 감지 직전 1.3초에 호출어와 질문이 다 들어 있었다.
+    예전에는 감지 바로 뒤에 말이 끝나 "호출어만 부르고 쉬었다"로 보고 질문을 잃었다.
+    """
+    monkeypatch.setattr(stt, "MIC_GATE", MicGate())
+    # "자비서 저거 뭐야" 1.4초를 1.0~2.4초에 말했고, 감지는 말이 끝나고 0.1초 뒤(2.5초)
+    blocks = question_audio((1.0, False), (1.4, True), (2.5, False))
+    client = FakeClient(["자비서, 저거 뭐야?"])
+    ends = []
+
+    with MicStream(source=blocks, history_sec=10.0) as mic:
+        listener = stt.SpeechToText(mic=mic, client=client, on_speech_end=lambda: ends.append(1))
+        utterance = listener.listen(since=2.5, timeout=2.0)
+
+    assert utterance.text == "저거 뭐야?"
+    assert len(client.requests) == 1  # 다시 듣지 않았다
+    assert ends == [1]
+    assert utterance.started_at >= 2.5 - stt.WAKE_LAG_SEC  # 사진은 호출어 끝 뒤로 고른다
 
 
 def test_drawn_out_wake_word_only_waits_for_question(monkeypatch):

@@ -63,6 +63,11 @@ class JarviseoState(TypedDict, total=False):
     # 호출어·필러를 빼기 전 받아쓴 원문 (turn_voice.stt_raw_text)
     stt_raw_text: str | None
     frame: Frame | None
+    # 호출어 2단계 확인(voice/wakecheck.py)에서 호출어가 아니라고 본 턴이면 True.
+    # 되묻기·대답·기록 없이 끝난다. 확인에서 받아쓴 글자는 통과한 턴에도 wake_check_text 에
+    # 남는다(받아쓰지 못했으면 None).
+    wake_rejected: bool
+    wake_check_text: str | None
 
     # --- 의도 · 기억 ---
     intent: Intent

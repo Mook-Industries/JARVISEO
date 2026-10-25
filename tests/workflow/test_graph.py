@@ -444,3 +444,136 @@ def test_filler_then_notice_when_answer_is_too_slow():
     assert tts.spoken == [FILLER, VLM_TOO_SLOW]
     assert result["filler_sent"] is True
     assert "늦은 답" not in tts.prefetched  # 버린 답은 미리 합성하지 않는다
+
+
+class FakeWakeCheck:
+    """호출어 2단계 확인 대신. 정해 둔 받아쓰기 결과로 통과·거절한다(None 은 확인 못 함 = 통과)."""
+
+    def __init__(self, text):
+        self.text, self.started = text, []
+
+    def start(self, t):
+        self.started.append(t)
+        rejected = self.text is not None and "자비서" not in self.text
+        return SimpleNamespace(
+            text=self.text, rejected=lambda: rejected, passed=lambda: not rejected
+        )
+
+
+class LateWakeVerdict:
+    """질문 듣기보다 늦게 끝나는 확인. WakeVerdict 처럼 passed() 가 기다리기 전에는 글자가 없다."""
+
+    def __init__(self, text):
+        self._text, self._done = text, False
+
+    @property
+    def text(self):
+        return self._text if self._done else None
+
+    def rejected(self):
+        return self.text is not None and "자비서" not in self.text
+
+    def passed(self):
+        self._done = True  # 결과가 나올 때까지 기다렸다
+        return not self.rejected()
+
+
+@pytest.mark.parametrize("texts", [["오늘 서울은 맑겠습니다."], []])
+def test_rejected_wake_speaks_nothing_and_logs_nothing(file_store, texts):
+    """2단계 확인에서 호출어가 아니면 되묻기·대답 없이 끝나고 기록도 남기지 않는다."""
+    tts = FakeTextToSpeech()
+    vlm = FakeVLMClient(["맑아요."])
+    check = FakeWakeCheck("오늘 서울은")
+    graph = build_graph(
+        GraphDeps(stt=FakeSpeechToText(texts), tts=tts, vlm=vlm, store=file_store, wake_check=check)
+    )
+
+    wake_at = time.monotonic()
+    result = graph.invoke(turn_input(file_store) | {"wake_at": wake_at})
+
+    assert result["wake_rejected"] is True
+    assert result["wake_check_text"] == "오늘 서울은"
+    assert check.started == [wake_at]
+    assert tts.spoken == []  # REPROMPT 도 읽지 않는다
+    assert vlm.asked == []
+    with file_store.session() as db:
+        assert db.query(SessionTurn).count() == 0
+
+
+@pytest.mark.parametrize("text", ["자비서.", None])
+def test_confirmed_wake_answers_as_before(text):
+    """호출어가 확인됐거나 확인하지 못했으면(받아쓰기 실패) 지금처럼 질문을 받는다."""
+    tts = FakeTextToSpeech()
+    graph = build_graph(
+        GraphDeps(
+            stt=FakeSpeechToText(["이거 뭐야?"]),
+            tts=tts,
+            vlm=FakeVLMClient(["컵이에요."]),
+            wake_check=FakeWakeCheck(text),
+        )
+    )
+
+    result = graph.invoke({"wake_at": time.monotonic()})
+
+    assert "wake_rejected" not in result
+    assert result["wake_check_text"] == text  # 통과한 턴에도 무엇을 받아썼는지 남는다
+    assert tts.spoken == ["컵이에요."]
+
+
+def test_confirmed_wake_without_question_keeps_check_text():
+    """호출어만 부르고 질문이 없던 턴도 확인에서 받아쓴 글자를 남긴다."""
+    tts = FakeTextToSpeech()
+    graph = build_graph(
+        GraphDeps(
+            stt=FakeSpeechToText([]),
+            tts=tts,
+            vlm=FakeVLMClient(),
+            wake_check=FakeWakeCheck("자비서."),
+        )
+    )
+
+    result = graph.invoke({"wake_at": time.monotonic()})
+
+    assert result["wake_check_text"] == "자비서."
+    assert tts.spoken == [REPROMPT]
+
+
+@pytest.mark.parametrize("text, rejected", [("오늘 서울은", True), ("자비서.", False)])
+def test_late_check_still_records_check_text(text, rejected):
+    """확인 받아쓰기가 질문 듣기보다 늦게 끝나도, 기다려서 받은 글자를 남긴다.
+
+    전에는 기다리기 전에 글자를 읽어서 거른 호출이 'None'으로 찍혔다(TV 실측 session 14).
+    """
+    tts = FakeTextToSpeech()
+    graph = build_graph(
+        GraphDeps(
+            stt=FakeSpeechToText(["이거 뭐야?"]),
+            tts=tts,
+            vlm=FakeVLMClient(["컵이에요."]),
+            wake_check=SimpleNamespace(start=lambda t: LateWakeVerdict(text)),
+        )
+    )
+
+    result = graph.invoke({"wake_at": time.monotonic()})
+
+    assert result["wake_check_text"] == text
+    assert result.get("wake_rejected", False) is rejected
+    assert tts.spoken == ([] if rejected else ["컵이에요."])
+
+
+def test_wake_check_skipped_without_wake_time():
+    """호출어 감지 시각이 없는 턴(테스트·직접 부름)은 확인하지 않는다."""
+    check = FakeWakeCheck("오늘 서울은")
+    graph = build_graph(
+        GraphDeps(
+            stt=FakeSpeechToText(["이거 뭐야?"]),
+            tts=FakeTextToSpeech(),
+            vlm=FakeVLMClient(["컵이에요."]),
+            wake_check=check,
+        )
+    )
+
+    result = graph.invoke({})
+
+    assert check.started == []
+    assert result["response"].text == "컵이에요."

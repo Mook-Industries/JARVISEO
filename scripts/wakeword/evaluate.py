@@ -23,6 +23,7 @@ eval/speech.csv 가 있으면 실제 "자비서" 녹음을 사람이 들어 보�
     python scripts/wakeword/evaluate.py                                   # 기성 hey_jarvis
     python scripts/wakeword/evaluate.py --model data/models/jarviseo.onnx # 커스텀 학습 뒤
     python scripts/wakeword/evaluate.py --model data/models/jarviseo.onnx --thresholds 0.95 0.99
+    python scripts/wakeword/evaluate.py --model data/models/jarviseo.onnx --split test  # 최종 평가
 
 결과: data/datasets/wakeword/results/ 에
     <모델>-<날짜시각>-scores.csv    파일별 최고 점수
@@ -193,18 +194,22 @@ def main() -> None:
     parser.add_argument(
         "--thresholds", nargs="+", type=float, help=f"출력할 임계값 (기본: config {SHOWN})"
     )
+    parser.add_argument(
+        "--split", choices=["eval", "test"], default="eval", help="test = 고를 때 안 쓴 녹음"
+    )
     args = parser.parse_args()
     shown = tuple(args.thresholds or SHOWN)
     thresholds = sorted({*THRESHOLDS, *shown})
 
     np.random.seed(0)  # model.reset() 이 버퍼를 난수로 채운다. 다시 돌려도 같은 점수가 나오게
     model = load_model(args.model)
-    rows, backgrounds = evaluate(model, ROOT / "eval")
+    rows, backgrounds = evaluate(model, ROOT / args.split)
     summary = summarize(rows, backgrounds, thresholds)
 
     out = ROOT / "results"
     out.mkdir(parents=True, exist_ok=True)
-    stamp = f"{Path(args.model).stem}-{datetime.now():%Y%m%d-%H%M}"
+    split = "" if args.split == "eval" else f"{args.split}-"
+    stamp = f"{Path(args.model).stem}-{split}{datetime.now():%Y%m%d-%H%M}"
     write_csv(out / f"{stamp}-scores.csv", FIELDS, rows)
     write_csv(out / f"{stamp}-summary.csv", SUMMARY, summary)
 

@@ -201,6 +201,16 @@ class MicStream:
             start = next(after, self._count)
         return self._follow(start)
 
+    def clip(self, start: float, end: float) -> np.ndarray:
+        """들고 있는 소리 중 start ~ end 시각(monotonic)에 들어온 블록을 이어 붙여 돌려준다.
+
+        지나간 구간만 자른다. 아직 안 들어온 뒤쪽은 기다리지 않고 빈 채로 둔다.
+        호출어 2단계 확인(``wakecheck.py``)이 감지 직전 구간을 받아쓸 때 쓴다.
+        """
+        with self._cond:
+            parts = [block for _, block, t in self._held if start <= t < end]
+        return np.concatenate(parts) if parts else np.empty(0, np.int16)
+
     def _follow(self, nxt: int) -> Iterator[tuple[np.ndarray, float]]:
         while True:
             with self._cond:
