@@ -38,7 +38,8 @@
   .ask-form .cam-btn { white-space: nowrap; }
   .reason-a.is-warn { color: var(--warn); }
   /* 듣는 중 파형은 실제 마이크 소리 크기로 움직인다(dashboard.js). 조용하면 납작하게 멈춘다 */
-  .is-listening .wave i { animation: none; transition: height 60ms linear; }
+  /* 파형은 목소리가 들릴 때만 움직인다. 원본의 상시 애니메이션(듣는 중 · 대답 중)은 끈다 */
+  .wave i { animation: none !important; transition: height 60ms linear; }
   .saved-note { margin-top: 6px; font-size: 12px; color: var(--text-3); min-height: 1em; }
 </style>
 </head>
