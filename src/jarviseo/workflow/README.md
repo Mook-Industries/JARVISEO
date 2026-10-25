@@ -22,7 +22,7 @@ listen(STT + 말을 시작한 순간의 사진) ─▶ (recapture ↺) ─▶ ro
 
 | `nodes/` 파일 | 노드 | 분기가 돌려주는 결과 |
 |---|---|---|
-| `voice.py` | `listen` · `speak` | `no_question` / `bad_frame` / `heard` |
+| `voice.py` | `listen` · `speak` | `wake_rejected` / `no_question` / `bad_frame` / `heard` |
 | `capture.py` | `recapture` | `gave_up` / `still_bad` / `good` |
 | `intent.py` | `route` | 의도 뒤 `recall` / `needs_target` / `ingredient` / `answer`, 크롭 뒤 `ingredient` / `answer` |
 | `pointing.py` | `detect` · `resolve` · `clarify` · `crop_target` | `ambiguous` / `chosen`, `called_again` / `gave_up` / `replied` |

@@ -1,6 +1,7 @@
 """듣기 · 읽기 노드.  담당: 최홍묵 (부르는 모듈: voice/ 문태현)
 
 듣기는 받아쓰고, 말을 시작한 순간 그 시각 근처에서 가장 선명한 사진을 고른다.
+호출어 2단계 확인(deps.wake_check)이 호출어가 아니라고 하면 되묻기·대답 없이 끝난다.
 호출어만 부르고 멈췄으면 "네, 말씀하세요"를 읽고 시작음(deps.start_chime)을 낸 뒤 한 번 더 듣는다.
 읽기는 답을 소리로 읽는다. 도중에 "자비서"가 들리면 바로 끊긴다.
 """
@@ -36,8 +37,21 @@ def listen(state: JarviseoState, deps: GraphDeps) -> dict:
             picked.append(frame)
 
     wake_at = state.get("wake_at")
+    # 호출어 2단계 확인(#149). 질문을 듣는 동안 감지 직전 구간을 따로 받아쓴다.
+    # 호출어가 아니라고 나오면 듣던 것도 멈춘다(TV 소리는 끝없이 이어져 10초를 다 채운다).
+    verdict = None
+    if deps.wake_check is not None and wake_at is not None:
+        verdict = deps.wake_check.start(wake_at)
+    stop = verdict.rejected if verdict is not None else None
     # 호출어를 잡은 시각부터 거슬러 읽어야 "자비서, 저거 뭐야"의 "저거"가 안 잘린다.
-    utterance = stt.listen(on_speech_start=pick, timeout=LISTEN_SEC, since=wake_at)
+    utterance = stt.listen(on_speech_start=pick, timeout=LISTEN_SEC, since=wake_at, stop=stop)
+    # passed() 가 확인 결과를 기다린다. 질문 듣기가 먼저 끝나면 그 전에는 글자가 아직 없다.
+    passed = verdict.passed() if verdict is not None else True
+    # 확인에서 받아쓴 글자는 통과한 턴에도 남긴다. 실측에서 무엇에 깨어났는지 본다.
+    checked = {"wake_check_text": verdict.text} if verdict is not None else {}
+    if not passed:
+        # TV 소리 같은 것에 깨어났다. 되묻지도 대답하지도 않고 호출어 대기로 돌아간다.
+        return {"wake_rejected": True} | checked
     if utterance is None and wake_at is not None:
         # 호출어만 부르고 멈췄다. 되묻고 한 번 더 듣는다.
         deps.tts.speak(REPROMPT)
@@ -45,9 +59,9 @@ def listen(state: JarviseoState, deps: GraphDeps) -> dict:
             deps.start_chime()  # 이제 말하라는 신호. 말이 끝나면 종료음은 stt 가 낸다
         utterance = stt.listen(on_speech_start=pick, timeout=REPLY_SEC)
     if utterance is None:
-        return {}
+        return checked
 
-    update: dict = {"utterance": utterance, "stt_raw_text": stt.last_raw_text}
+    update: dict = {"utterance": utterance, "stt_raw_text": stt.last_raw_text} | checked
     if stt.last_latency_ms is not None:
         update["latency_ms"] = {"stt": stt.last_latency_ms}
     if frames is not None:
@@ -58,7 +72,9 @@ def listen(state: JarviseoState, deps: GraphDeps) -> dict:
 
 def after_listen(
     state: JarviseoState, deps: GraphDeps
-) -> Literal["no_question", "bad_frame", "heard"]:
+) -> Literal["wake_rejected", "no_question", "bad_frame", "heard"]:
+    if state.get("wake_rejected"):
+        return "wake_rejected"
     if state.get("utterance") is None:
         return "no_question"
     if deps.frames is not None and is_bad_frame(state.get("frame"), deps.sharpness_threshold):

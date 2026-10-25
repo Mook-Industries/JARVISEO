@@ -26,7 +26,7 @@ DATA = Path(__file__).parents[1] / "data"
 
 
 class FakeClient:
-    """openai 클라이언트 대신 요청을 받아 두고, 정해 둔 글자를 돌려준다."""
+    """openai 클라이언트 대신 요청을 받아 두고, 정해 둔 글자를 돌려준다(목록이면 차례로)."""
 
     def __init__(self, text="자비서, 저거 뭐야?", error=None):
         self.requests, self.text, self.error = [], text, error
@@ -36,7 +36,9 @@ class FakeClient:
         self.requests.append(kwargs)
         if self.error is not None:
             raise self.error
-        return SimpleNamespace(text=self.text)
+        if isinstance(self.text, str):
+            return SimpleNamespace(text=self.text)
+        return SimpleNamespace(text=self.text[min(len(self.requests), len(self.text)) - 1])
 
 
 @pytest.fixture
@@ -225,8 +227,11 @@ def test_listen_after_pause_skips_chime_between_wake_word_and_question(monkeypat
     blocks = [(audio[i : i + BLOCK], i / SAMPLE_RATE) for i in range(0, len(audio) - BLOCK, BLOCK)]
     starts, ends = [], []
 
+    # 표시하면 호출어 녹음이 따로 끝나고, 그 녹음도 받아써 본다(#149). 호출어만 받아써진다.
+    client = FakeClient(["자비서.", "자비서, 저거 뭐야?"] if marked else "자비서, 저거 뭐야?")
+
     with MicStream(source=blocks, history_sec=len(audio) / SAMPLE_RATE + 1) as mic:
-        s = stt.SpeechToText(mic=mic, client=FakeClient(), on_speech_end=lambda: ends.append(1))
+        s = stt.SpeechToText(mic=mic, client=client, on_speech_end=lambda: ends.append(1))
         utterance = s.listen(on_speech_start=starts.append, timeout=2.0, since=detected)
 
     assert utterance.text == "저거 뭐야?"
