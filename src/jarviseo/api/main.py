@@ -62,6 +62,7 @@ from pydantic import BaseModel
 from jarviseo import config
 from jarviseo.api.assistant_web import WebAssistant, draw_boxes
 from jarviseo.api.marks import jpeg_data_url, mark_findings
+from jarviseo.api.report import report
 from jarviseo.api.voice_loop import VoiceLoop
 from jarviseo.memory import MemoryStore
 from jarviseo.nutrition.allergen import (
@@ -188,6 +189,11 @@ def create_app(
         )
 
     # ---- 팀 음성 모드(voice_loop.py): 마이크 · 스피커 · 웹캠을 서버가 열고 팀 부품으로 돈다 ----
+
+    @app.get("/api/report")
+    def performance_report(request: Request) -> dict:
+        """성능 리포트: 실제 턴 지연 · 평가 실행 · 팀 실측 결과(api/report.py)."""
+        return report(request.app.state.store)
 
     @app.post("/api/voice/start")
     async def voice_start(request: Request) -> dict:

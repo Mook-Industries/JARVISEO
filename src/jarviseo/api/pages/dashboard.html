@@ -316,88 +316,50 @@
 
         <div class="report-meta">
           <div class="report-range">
-            <span class="chip is-accent">샘플 리포트</span>
-            <span class="num" id="range-label">2026.09.16 — 09.22</span>
+            <span class="chip is-accent">실측</span>
+            <span class="num" id="range-label">불러오는 중…</span>
           </div>
-          <label class="period" for="period">평가 기간
-            <span class="select">
-              <select id="period">
-                <option value="7">최근 7일</option>
-                <option value="14">최근 14일</option>
-                <option value="30">최근 30일</option>
-              </select>
-            </span>
-          </label>
         </div>
 
         <div class="overview">
           <div>
             <p class="eyebrow">Performance overview</p>
-            <h2>정확도는 안정적, 응답 속도는 개선 중</h2>
-            <p>장면 이해 단계가 전체 평균 지연의 47%를 차지합니다.</p>
+            <h2 id="report-head">팀이 잰 결과와 이 PC 의 실제 턴 기록</h2>
+            <p id="report-sub">평가 숫자는 docs/experiments.md, 지연은 DB 에 쌓인 턴에서 계산합니다.</p>
           </div>
           <div class="overview-num">
-            <strong class="num">1,248</strong>
-            <span>평가 요청</span>
+            <strong class="num" id="report-turns">—</strong>
+            <span>기록된 턴</span>
           </div>
         </div>
 
-        <div class="kpis">
-          <div class="kpi">
-            <div class="kpi-head">지시 대상 특정 정확도<span>01</span></div>
-            <div class="kpi-val num">94.2<small>%</small></div>
-            <div class="kpi-desc">가리킨 대상과 선택 결과의 일치율</div>
-            <div class="kpi-bar"><i style="width:94.2%"></i></div>
-            <div class="kpi-goal">목표 ≥ 95%</div>
-          </div>
-          <div class="kpi">
-            <div class="kpi-head">되묻기 비율<span>02</span></div>
-            <div class="kpi-val num">8.6<small>%</small></div>
-            <div class="kpi-desc">추가 질문이 발생한 요청 비율</div>
-            <div class="kpi-bar"><i style="width:43%"></i></div>
-            <div class="kpi-goal">낮을수록 좋음 · 목표 ≤ 10%</div>
-          </div>
-          <div class="kpi">
-            <div class="kpi-head">알레르기 인식률<span>03</span></div>
-            <div class="kpi-val num">97.8<small>%</small></div>
-            <div class="kpi-desc">알레르기 성분 재현율 · Recall</div>
-            <div class="kpi-bar is-lavender"><i style="width:97.8%"></i></div>
-            <div class="kpi-goal">목표 ≥ 99% · 미탐지 점검 필요</div>
-          </div>
-          <div class="kpi">
-            <div class="kpi-head">YOLO mAP<span>04</span></div>
-            <div class="kpi-val num">86.4<small>%</small></div>
-            <div class="kpi-desc">mAP@0.5:0.95 · 검출 성능</div>
-            <div class="kpi-bar"><i style="width:86.4%"></i></div>
-            <div class="kpi-goal">목표 ≥ 85%</div>
-          </div>
-        </div>
+        <div class="kpis" id="kpis"></div>
 
         <div class="report-grid">
           <div class="card">
             <div class="card-head">
               <div>
                 <h2 class="card-title">단계별 지연</h2>
-                <p class="card-sub">요청 수신부터 음성 응답 시작까지</p>
+                <p class="card-sub">실제 턴 기록 · MemoryStore.latency_percentiles</p>
               </div>
               <div class="seg" role="group" aria-label="지연 집계 방식">
-                <button type="button" data-agg="avg" aria-pressed="true">평균</button>
+                <button type="button" data-agg="p50" aria-pressed="true">P50</button>
                 <button type="button" data-agg="p95" aria-pressed="false">P95</button>
               </div>
             </div>
             <div class="lat-total">
               <div>
-                <strong class="num" id="lat-total">3.00</strong>
-                <span class="unit"><b>초</b><span id="lat-total-label">평균 응답 시간</span></span>
+                <strong class="num" id="lat-total">—</strong>
+                <span class="unit"><b>초</b><span id="lat-total-label">말 끝 → 대답 첫 소리</span></span>
               </div>
-              <span class="lat-goal" id="lat-goal">예시 목표 ≤ 3.0초</span>
+              <span class="lat-goal" id="lat-goal"></span>
             </div>
             <div class="lat-rows" id="lat-rows"></div>
             <div class="callout">
               <span class="k">병목 구간</span>
               <div>
-                <strong>장면 이해 · VLM</strong>
-                <p>입력 이미지 크기와 추론 시간을 우선 점검하세요.</p>
+                <strong id="lat-peak">—</strong>
+                <p id="lat-peak-note">턴이 쌓이면 가장 오래 걸린 단계를 보여 줘요.</p>
               </div>
             </div>
           </div>
@@ -405,39 +367,32 @@
           <div class="card">
             <div class="card-head">
               <div>
-                <h2 class="card-title">인식 성능 추이</h2>
-                <p class="card-sub">동일 평가 세트 기준 · 일별 정확도</p>
+                <h2 class="card-title">평가 실행 기록</h2>
+                <p class="card-sub">eval_run · scripts/run_ablation.py --db 로 쌓인다</p>
               </div>
-              <span class="card-unit">단위 %</span>
             </div>
-            <div class="legend">
-              <span><i class="is-c-accent"></i>지시 대상 특정</span>
-              <span><i class="is-c-lavender"></i>알레르기 인식</span>
+            <div class="table-scroll">
+              <table class="eval-table">
+                <thead><tr><th>날짜</th><th>버전</th><th>샘플</th><th>지표</th></tr></thead>
+                <tbody id="run-rows"></tbody>
+              </table>
             </div>
-            <div class="chart-wrap" id="chart-wrap">
-              <svg class="chart" id="trend-chart" viewBox="0 0 600 250" role="img" aria-label="일별 정확도 추이 그래프"></svg>
-              <div class="chart-tip" id="chart-tip" hidden></div>
-            </div>
-            <div class="chart-caption" id="chart-caption">일별 평가 결과 · 7일</div>
-            <div class="callout">
-              <span class="k">품질 관찰</span>
-              <p class="is-body">알레르기 인식은 전체 정확도와 함께<br>미탐지 건수를 확인해야 합니다.</p>
-            </div>
+            <div class="chart-caption" id="run-caption"></div>
           </div>
         </div>
 
         <div class="card table-card">
           <div class="card-head">
             <div>
-              <h2 class="card-title">모델별 평가 상세</h2>
-              <p class="card-sub">각 지표의 기준과 개선 항목</p>
+              <h2 class="card-title">팀 실측 결과</h2>
+              <p class="card-sub">docs/experiments.md 에 팀원이 적은 최종 숫자</p>
             </div>
-            <span class="chip is-accent" style="font-family:var(--font-sans);letter-spacing:0">오프라인 평가 · 데모</span>
+            <span class="chip is-accent" style="font-family:var(--font-sans);letter-spacing:0">오프라인 평가 · 실측</span>
           </div>
           <div class="table-scroll">
             <table class="eval-table">
               <thead>
-                <tr><th>모델</th><th>지표</th><th>현재</th><th>목표</th><th>상태</th><th>다음 개선</th></tr>
+                <tr><th>기능</th><th>지표</th><th>결과</th><th>기준</th><th>상태</th><th>출처</th></tr>
               </thead>
               <tbody id="eval-rows"></tbody>
             </table>
