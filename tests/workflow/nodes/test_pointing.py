@@ -6,6 +6,7 @@ CI 에는 YOLO(ultralytics) · MediaPipe 가 없어서 실제 검출기는 여�
 """
 
 import time
+from datetime import UTC, datetime, timedelta
 
 import cv2
 import numpy as np
@@ -23,6 +24,7 @@ from jarviseo.workflow import GraphDeps, build_graph
 from jarviseo.workflow.graph import RECURSION_LIMIT
 from jarviseo.workflow.messages import CLARIFY_GIVE_UP, RECAPTURE_GIVE_UP
 from jarviseo.workflow.nodes.answer import POINTING_CONTEXT
+from jarviseo.workflow.nodes.pointing import PREV_TARGET_SEC, detect
 
 FULL = (1080, 1920, 3)
 # 아래 왼쪽 컵 박스 (400,500)-(700,900) 300×400 에 사방 15% 여백. 긴 변 520 이라 VLM 에도 그대로
@@ -612,3 +614,83 @@ def test_real_resolver_uses_language_cue_when_switched_on(monkeypatch):
     assert deps.tts.spoken == ["컵이에요."]  # 되묻는 말 없이 바로 답
     assert result["target"].chosen.detection is TWO_CUPS[0]
     assert [s.kind.value for s in result["target"].chosen.cue_scores] == ["center", "lang"]
+
+
+# --- 이어 묻기 단서 (v5): 직전 대상 읽기 ------------------------------------------------
+
+
+def _past_turn(store, session_id: int, label: str | None, seconds_ago: float) -> None:
+    """지난 턴 하나를 기록해 둔다. label 이 None 이면 대상을 못 고른 턴(되묻다 포기 등)."""
+    with store.session() as db:
+        turn = SessionTurn(
+            session_id=session_id,
+            asked_at=datetime.now(UTC) - timedelta(seconds=seconds_ago),
+            question_text="지난 질문",
+        )
+        db.add(turn)
+        db.flush()  # turn_id 를 받아야 turn_inference 가 가리킬 수 있다
+        db.add(TurnInference(turn_id=turn.turn_id, target_label=label))
+
+
+def _detect_prev(store, session_id: int | None) -> str | None:
+    """detect 노드만 돌려 직전 대상을 본다."""
+    frame = Frame(image=_sharp(), timestamp=time.monotonic(), source_id="test")
+    state = {"frame": frame} if session_id is None else {"frame": frame, "session_id": session_id}
+    return detect(state, _deps([], store=store))["prev_target_label"]
+
+
+def test_detect_reads_previous_target_within_time_limit(store):
+    """같은 세션에서 60초 안의 가리킴 턴이 고른 대상 이름을 읽는다."""
+    session_id = store.start_session(store.ensure_user())
+    _past_turn(store, session_id, "cup", seconds_ago=10)
+
+    assert _detect_prev(store, session_id) == "cup"
+
+
+def test_detect_ignores_old_or_other_session_turns(store):
+    """60초가 지난 턴과 다른 세션의 턴은 직전 대상이 아니다."""
+    user_id = store.ensure_user()
+    session_id, other = store.start_session(user_id), store.start_session(user_id)
+    _past_turn(store, session_id, "cup", seconds_ago=PREV_TARGET_SEC + 30)
+    _past_turn(store, other, "bottle", seconds_ago=5)
+
+    assert _detect_prev(store, session_id) is None
+
+
+def test_detect_skips_turns_without_target(store):
+    """대상을 못 고른 턴(되묻다 포기)은 건너뛰고, 그 앞의 가장 최근 대상을 읽는다."""
+    session_id = store.start_session(store.ensure_user())
+    _past_turn(store, session_id, "cup", seconds_ago=30)
+    _past_turn(store, session_id, "bottle", seconds_ago=20)
+    _past_turn(store, session_id, None, seconds_ago=5)
+
+    assert _detect_prev(store, session_id) == "bottle"
+
+
+def test_detect_without_store_or_session_has_no_previous_target(store):
+    """DB 가 없거나(기록 없이 실행) 세션 번호가 없으면 직전 대상은 None(이어 묻기 기권)."""
+    assert _detect_prev(None, 1) is None
+    assert _detect_prev(store, None) is None
+
+
+def test_real_resolver_uses_previous_target_when_switched_on(monkeypatch, store):
+    """이어 묻기 플래그를 켜면 앞 턴에 고른 컵을 "그거"로 읽는다.
+
+    대칭인 병 · 컵에서 되묻지 않고 컵을 고른다.
+    """
+    monkeypatch.setattr(config, "ENABLE_CONTEXT_CUE", True)
+    session_id = store.start_session(store.ensure_user())
+    _past_turn(store, session_id, "cup", seconds_ago=10)
+    bottle_and_cup = [
+        Detection("bottle", 0.9, BBox(400, 500, 700, 900)),
+        Detection("cup", 0.9, BBox(1220, 500, 1520, 900)),  # 화면 가운데(960)를 두고 대칭
+    ]
+    deps = _deps(["그거 뭐야?"], detections=bottle_and_cup, store=store)
+    deps.resolve = resolve_target
+
+    result = build_graph(deps).invoke({"session_id": session_id})
+
+    assert deps.tts.spoken == ["컵이에요."]  # 되묻는 말 없이 바로 답
+    assert result["prev_target_label"] == "cup"
+    assert result["target"].chosen.detection is bottle_and_cup[1]
+    assert [s.kind.value for s in result["target"].chosen.cue_scores] == ["center", "ctx"]

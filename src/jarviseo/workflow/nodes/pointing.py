@@ -1,6 +1,7 @@
 """가리킴 노드 — 검출 · 대상 결정 · 되묻기 · 크롭.  담당: 최홍묵
 
-detect      : 사진에서 물체 후보와 가리키는 손을 찾는다 (pointing/detector.py · hands.py)
+detect      : 사진에서 물체 후보와 가리키는 손을 찾는다 (pointing/detector.py · hands.py).
+              이어 묻기 단서가 쓸 직전 대상(같은 세션 바로 전 가리킴 턴)도 DB 에서 한 번 읽는다
 resolve     : 후보 중 가리킨 대상을 고른다 (pointing/resolver.py)
 clarify     : 1·2위가 비슷하면 되묻고 대답을 듣는다. 사진은 다시 고르지 않는다.
               되묻는 말 뒤에 시작음, 대답이 끝나면 종료음을 낸다(처음 질문할 때와 같다)
@@ -15,8 +16,13 @@ crop_target : 고른 대상을 여백 15% 넣어 잘라낸다 (pointing/crop.py)
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Literal
 
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
+
+from jarviseo.memory import SessionTurn, TurnInference
 from jarviseo.pointing.crop import crop_target as cut_target
 from jarviseo.pointing.hands import pick_pointing_hand
 from jarviseo.pointing.labels import korean_name
@@ -40,13 +46,57 @@ log = logging.getLogger(__name__)
 # 되묻기 대답("왼쪽 거")을 받아쓸 때 STT 에 주는 힌트. 짧은 대답이 덜 틀린다(voice/stt.py).
 # 장면에 있는 후보 이름(한글)은 clarify 가 같이 더한다.
 REPLY_HINTS = ("왼쪽", "오른쪽", "가운데")
+# 이어 묻기 단서가 "그거"를 앞 대상으로 읽는 시간(초). 이보다 오래된 가리킴 턴은 직전 대상이 아니다.
+# 출발점이다(말 · 맥락 세션 s04 의 이어 묻기는 10~20초 간격이었다).
+PREV_TARGET_SEC = 60
 
 
 def detect(state: JarviseoState, deps: GraphDeps) -> dict:
     image = state["frame"].image
     # 손도 여기서 한 번만 찾는다. resolve 는 되묻기 대답마다 다시 돌지만 사진은 그대로다.
     hand = pick_pointing_hand(deps.hands.detect(image)) if deps.hands is not None else None
-    return {"detections": deps.detector.detect(image), "hand": hand}
+    return {
+        "detections": deps.detector.detect(image),
+        "hand": hand,
+        # 직전 대상도 사진 · 손처럼 턴마다 한 번만 정한다. 되묻기 대답마다 DB 를 다시 읽지 않는다.
+        "prev_target_label": _previous_target(deps, state),
+    }
+
+
+def _previous_target(deps: GraphDeps, state: JarviseoState) -> str | None:
+    """같은 세션에서 바로 전 가리킴 턴(PREV_TARGET_SEC 안)에 고른 대상의 이름. 없으면 None.
+
+    턴마다 그래프를 새로 불러 상태가 남지 않으므로, 이미 기록하는 turn_inference.target_label 을
+    읽는다. 그래프를 부르는 쪽(assistant.py · 웹)을 고치지 않으려는 것이다. 지금 턴은 log 노드가
+    끝에서 기록하므로 여기서는 안 읽힌다. DB 가 없거나 오류가 나면 None(이어 묻기 기권)이고 턴은
+    그대로 돈다.
+    """
+    session_id = state.get("session_id")
+    if deps.store is None or session_id is None:
+        return None
+    stmt = (
+        select(TurnInference.target_label, SessionTurn.asked_at)
+        .join(SessionTurn, SessionTurn.turn_id == TurnInference.turn_id)
+        .where(SessionTurn.session_id == session_id, TurnInference.target_label.is_not(None))
+        # 같은 초에 기록된 턴은 asked_at 이 같을 수 있어(SQLite 는 초 단위) 번호로 한 번 더 가른다.
+        .order_by(SessionTurn.asked_at.desc(), SessionTurn.turn_id.desc())
+        .limit(1)
+    )
+    try:
+        with deps.store.session() as db:
+            row = db.execute(stmt).first()
+    except SQLAlchemyError as e:
+        log.warning("previous target lookup failed: %s", e)
+        return None
+    if row is None:
+        return None
+    label, asked_at = row
+    # asked_at 은 DB 시계(func.now())다. SQLite 는 시간대 없는 UTC 로, Postgres 는 시간대를 붙여
+    # 돌려준다. 시간대 없는 값을 그대로 지금 시각과 빼면 TypeError 가 나거나 9시간이 틀어진다.
+    if asked_at.tzinfo is None:
+        asked_at = asked_at.replace(tzinfo=UTC)
+    age = (datetime.now(UTC) - asked_at).total_seconds()
+    return label if age <= PREV_TARGET_SEC else None
 
 
 def resolve(state: JarviseoState, deps: GraphDeps) -> dict:
@@ -61,6 +111,8 @@ def resolve(state: JarviseoState, deps: GraphDeps) -> dict:
         replies=state.get("clarify_replies", []),
         # 말 단서의 색("노란 캔")을 보려고 사진도 넘긴다. 말 단서가 꺼져 있으면 쓰이지 않는다.
         image=state["frame"].image,
+        # 이어 묻기 단서가 "그거"를 읽을 직전 대상. 이어 묻기 단서가 꺼져 있으면 쓰이지 않는다.
+        prev_target_label=state.get("prev_target_label"),
     )
     return {"target": target}
 
