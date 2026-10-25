@@ -11,7 +11,8 @@ scripts/run_ablation.py 가 이 파일로 v1~v5 를 채점한다. 정답은 이�
     python tools/label_targets.py --session 3 --split test  # test 세션 (최종 측정 때만 채점)
 
 키 (발화·라벨을 터미널에 입력한 뒤에는 그림 창을 한 번 클릭해야 키가 다시 먹는다):
-    1~9  그 번호 후보가 정답          d  후보에 없으면 직접 박스 그리기(끌고 Enter)
+    1~9  그 번호 후보가 정답 → 터미널에서 정답 이름 확인(Enter = YOLO 이름)
+    d    후보에 없으면 직접 박스 그리기(끌고 Enter)
     h    손 보임 켜고 끄기            a  사람이 봐도 모호함 켜고 끄기(되묻는 게 정답)
     p    앞 질문의 대상 라벨 입력(v5)  x  쓸 수 없는 사진으로 빼기
     q    끝내기 (다음에 이어서 한다. 이미 표시한 사진은 다시 묻지 않는다)
@@ -51,6 +52,7 @@ WINDOW_NAME = "label_targets"
 # 사진마다 터미널에 찍는 키 안내. 파일 머리말에만 두면 쓰는 중에 못 찾는다.
 KEY_HELP = (
     "  키: 1~9 정답 · d 직접 박스 · h 손 · a 모호 · p 앞 대상 · x 제외 · q 끝\n"
+    "  1~9: 터미널에 정답 이름 — YOLO 이름이 맞으면 Enter, 틀리면 입력 → 그림 창 다시 클릭\n"
     "  d: 그림 창에서 끌고 Enter(취소 c) → 터미널에 라벨 입력 → 그림 창 다시 클릭\n"
     "  라벨: 영어 소문자 · 띄어쓰기, COCO 이름 그대로 (cell phone, air conditioner)"
 )
@@ -95,6 +97,15 @@ def pending(manifest_rows: list[dict[str, str]], labeled: set[str], session: int
 def left_to_right(detections: list[Detection]) -> list[Detection]:
     """화면 왼쪽부터 번호를 매기려고 정렬한다. YOLO 순서는 신뢰도 순이라 위치와 상관없다."""
     return sorted(detections, key=lambda d: d.bbox.x1)
+
+
+def chosen_label(yolo_label: str, typed: str) -> str:
+    """후보 번호로 고른 정답의 이름. 입력이 비면 YOLO 이름, 아니면 입력한 이름(앞뒤 공백 제거).
+
+    박스는 맞아도 YOLO 이름은 틀릴 수 있다. 안경 케이스를 remote, 텀블러를 parking meter,
+    모니터를 laptop 으로 불렀고, 그 이름이 그대로 정답표에 들어가 학습 종류까지 잘못 정했다(10/23).
+    """
+    return typed.strip() or yolo_label
 
 
 def roi_to_box(roi: tuple[float, float, float, float], scale: float) -> BBox | None:
@@ -213,13 +224,14 @@ def main() -> None:
                 return
             if ord("1") <= key <= ord("9") and key - ord("0") <= len(candidates):
                 chosen = candidates[key - ord("1")]
+                typed = input(f"정답 라벨 (영어, Enter = {chosen.label}): ")
                 row = make_row(
                     file,
                     args.session,
                     args.split,
                     item["utterance"],
                     chosen.bbox,
-                    chosen.label,
+                    chosen_label(chosen.label, typed),
                     **flags,
                 )
             elif key == ord("d"):
