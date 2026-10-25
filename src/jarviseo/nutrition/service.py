@@ -37,6 +37,7 @@ import numpy as np
 
 from jarviseo import config
 from jarviseo.nutrition.allergen import (
+    expand_allergens,
     judge_allergens,
     judge_product,
     load_synonyms,
@@ -72,6 +73,7 @@ from jarviseo.nutrition.response import (
     RETAKE_CLOSER,
     RETAKE_GLARE,
     RETAKE_OTHER_SIDE,
+    RETAKE_SHOW_INGREDIENTS,
     RETAKE_STEADY,
     RETAKE_UNCOVER,
     RETAKE_WHOLE,
@@ -296,6 +298,8 @@ class IngredientChecker:
             barcode_image: 크롭에서 바코드를 못 읽으면 이 사진(보통 사진 전체)에서 한 번 더 찾는다.
                 손에 든 제품은 크롭이 성분표만 잡아 바코드가 잘리는 일이 많다.
         """
+        # "모두"를 등록했으면 표시 대상 알레르기 전부를 본다(allergen.expand_allergens)
+        user_allergens = expand_allergens(user_allergens)
         timings: dict[str, int] = {}
 
         t0 = time.perf_counter()
@@ -542,6 +546,8 @@ class IngredientChecker:
             # 원재료명이 안 보이면 잘린 것이다. 신뢰도만 낮으면 멀거나 흐린 것이다.
             if reason != "no_ingredients":
                 result.retake = RETAKE_CLOSER
+            elif not sec.allergen_notice:
+                result.retake = RETAKE_SHOW_INGREDIENTS  # 원재료명도 함유 표시도 없다
             elif len(normalize_term(best.text)) >= _OTHER_SIDE_CHARS:
                 result.retake = RETAKE_OTHER_SIDE  # 글자는 읽었는데 원재료명이 없다 = 다른 면
             else:

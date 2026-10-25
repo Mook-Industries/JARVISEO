@@ -27,7 +27,9 @@ from jarviseo.types import AllergenJudgement, AllergenVerdict, ProductInfo
 
 __all__ = [
     "user_labels",
+    "ALL_KEYWORDS",
     "KNOWN_ALLERGENS",
+    "expand_allergens",
     "NOT_ALLERGEN",
     "Synonyms",
     "find_allergens",
@@ -60,6 +62,23 @@ KNOWN_ALLERGENS = [
     "조개류",
     "잣",
 ]
+
+# 알레르기 목록에 이 낱말을 넣으면 위 목록 전부를 확인한다(2026-10-23 결정: "모두").
+# "전체" · "테스트"는 성분 페이지에서 먼저 쓰던 말이라 같이 받는다.
+ALL_KEYWORDS = frozenset({"모두", "전체", "테스트"})
+
+
+def expand_allergens(names: list[str]) -> list[str]:
+    """'모두'가 있으면 표시 대상 알레르기 전부로 바꾼다. 같이 적은 다른 이름은 뒤에 그대로 둔다.
+
+    판정기(service.IngredientChecker.check)가 부르므로 성분 페이지 · 대시보드 · 음성 질문 어디서
+    물어도 같다. 사용자가 환경설정에서 "모두"를 등록하면 늘 전부 확인한다.
+    """
+    if not any(n.strip() in ALL_KEYWORDS for n in names):
+        return names
+    rest = [n for n in names if n.strip() not in ALL_KEYWORDS]
+    return list(dict.fromkeys([*KNOWN_ALLERGENS, *rest]))
+
 
 # 사전에서 "알레르겐 이름이 들어 있지만 알레르겐이 아닌 표기"를 적는 키.
 # 예: 로커스트콩검(콩과 식물의 씨앗에서 뽑은 증점제)은 '콩'을 포함하지만 대두가 아니다.

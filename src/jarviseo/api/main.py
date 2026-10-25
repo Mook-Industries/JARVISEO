@@ -71,9 +71,14 @@ from pydantic import BaseModel, Field
 from jarviseo import config
 from jarviseo.api.assistant_web import WebAssistant, draw_boxes
 from jarviseo.api.marks import jpeg_data_url, mark_findings
+from jarviseo.api.voice_loop import VoiceLoop
 from jarviseo.memory import MemoryStore, SessionTurn
 from jarviseo.memory.store import UPLOAD_TITLE
-from jarviseo.nutrition.allergen import KNOWN_ALLERGENS, find_allergens, normalize_term
+from jarviseo.nutrition.allergen import (
+    expand_allergens,
+    find_allergens,
+    normalize_term,
+)
 from jarviseo.nutrition.ocr import google_vision_key
 from jarviseo.nutrition.service import IngredientChecker, make_checker
 from jarviseo.types import IngredientSource
@@ -82,13 +87,13 @@ from jarviseo.types import IngredientSource
 API_DB = os.environ.get("JARVISEO_API_DB", "sqlite:///data/assistant.db")
 PAGES = Path(__file__).parent / "pages"
 STATIC = Path(__file__).parent / "static"  # 사용자 목업(디자인 원본). 읽기만 한다
+NO_CACHE = {"Cache-Control": "no-cache"}  # 고친 페이지가 새로고침 한 번에 보이게
 MAX_MORE_FRAMES = 4  # 말 시작 뒤 잇달아 찍는 장면 수 상한(대시보드는 2장을 더 보낸다)
 MAX_IMAGE_BYTES = 15 * 1024 * 1024  # 휴대폰 원본 사진도 들어가는 크기
 OCR_NOTEBOOK_URL = os.environ.get("JARVISEO_OCR_NOTEBOOK_URL", "")
 OCR_STATUS_TTL_SEC = 5.0  # 여러 탭이 동시에 물어봐도 Colab 에는 5초에 한 번만 묻는다
 SOURCE_NAMES = {"barcode": "바코드 · 푸드QR", "ocr": "성분표 OCR", "retake": "다시 찍기 안내"}
 # 알레르기 칸에 이 말을 넣으면 법정 알레르기 전체로 판정한다. 인식 성능을 볼 때 쓴다.
-ALL_KEYWORDS = {"모두", "테스트", "전체"}
 # 근거 구간 이름. 원재료·알레르기 표시에서 찾으면 함유, 혼입 문장에서만 찾으면 혼입 가능이다.
 SECTIONS = (("ingredients", "원재료"), ("notice", "알레르기 표시"), ("cross", "같은 제조시설"))
 # 노트북이 턴을 보낼 때 함께 보내는 토큰(#144). 비어 있으면 이 서버는 턴을 받지 않는다.
@@ -144,7 +149,11 @@ def create_app(
         app.state.assistant = assistant or WebAssistant(
             app.state.store, app.state.checker, app.state.user_id
         )
+        app.state.voice = VoiceLoop(
+            app.state.store, app.state.checker, app.state.user_id, app.state.lock, _voice_result
+        )
         yield
+        app.state.voice.stop()
         app.state.assistant.close()
         app.state.checker.close()
 
@@ -161,11 +170,11 @@ def create_app(
     @app.get("/", include_in_schema=False)
     def dashboard_page() -> FileResponse:
         """대시보드(모니터 · 관리자 · 환경설정). 목업 디자인에 실제 API 를 붙였다."""
-        return FileResponse(PAGES / "dashboard.html")
+        return FileResponse(PAGES / "dashboard.html", headers=NO_CACHE)
 
     @app.get("/dashboard.js", include_in_schema=False)
     def dashboard_js() -> FileResponse:
-        return FileResponse(PAGES / "dashboard.js", media_type="text/javascript")
+        return FileResponse(PAGES / "dashboard.js", media_type="text/javascript", headers=NO_CACHE)
 
     @app.get("/sounds/{name}", include_in_schema=False)
     def sound(name: str) -> FileResponse:
@@ -180,12 +189,12 @@ def create_app(
     @app.get("/ingredient", include_in_schema=False)
     def ingredient_page() -> FileResponse:
         """사진을 올려 성분을 확인하는 페이지."""
-        return FileResponse(PAGES / "ingredient.html")
+        return FileResponse(PAGES / "ingredient.html", headers=NO_CACHE)
 
     @app.get("/assistant", include_in_schema=False)
     def assistant_page() -> FileResponse:
         """사진과 질문으로 자비서 전체 흐름을 돌려 보는 페이지."""
-        return FileResponse(PAGES / "assistant.html")
+        return FileResponse(PAGES / "assistant.html", headers=NO_CACHE)
 
     @app.post("/api/ask")
     async def ask(body: Ask, request: Request) -> dict:
@@ -202,6 +211,9 @@ def create_app(
             (_decode_image(m), ms / 1000) for m, ms in zip(body.more, body.more_ms, strict=True)
         ]
         s = request.app.state
+        if s.voice.running:
+            # 팀 음성 모드: 입력 질문도 같은 팀 부품으로(서버 스피커로 읽고, 장면은 카메라 버퍼에서)
+            return await _run_in_thread(lambda: s.voice.ask_text(question, image))
         return await _run_in_thread(
             lambda: _ask(s, question, image, more if image is not None else [])
         )
@@ -228,6 +240,48 @@ def create_app(
         """
         limit = min(max(limit, 1), MAX_FEED_TURNS)
         return {"turns": [_feed_item(t) for t in request.app.state.store.turn_feed(after, limit)]}
+
+    # ---- 팀 음성 모드(voice_loop.py): 마이크 · 스피커 · 웹캠을 서버가 열고 팀 부품으로 돈다 ----
+
+    @app.post("/api/voice/start")
+    async def voice_start(request: Request) -> dict:
+        """팀 음성 모드를 켠다. 처음엔 모델을 읽느라 10~20초 걸린다. 못 켜면 on=False 와 이유."""
+        voice = request.app.state.voice
+        try:
+            await _run_in_thread(voice.start)
+        except Exception as e:  # 장치 · 모델 · 키가 없으면 브라우저 방식으로 돌아간다
+            voice.reason = str(e)
+            return {"on": False, "reason": voice.reason}
+        return {"on": True, "pointing": voice.pointing}
+
+    @app.post("/api/voice/stop")
+    async def voice_stop(request: Request) -> dict:
+        await _run_in_thread(request.app.state.voice.stop)
+        return {"on": False}
+
+    @app.post("/api/voice/call")
+    def voice_call(request: Request) -> dict:
+        """화면의 호출 버튼 = "자비서"라고 부른 것."""
+        request.app.state.voice.call()
+        return {"ok": True}
+
+    @app.get("/api/voice/events")
+    def voice_events(request: Request, after: int = 0) -> dict:
+        voice = request.app.state.voice
+        events, last = voice.events_after(after)
+        return {"on": voice.running, "events": events, "last": last}
+
+    @app.post("/api/voice/frame")
+    async def voice_frame(request: Request) -> dict:
+        """대시보드 카메라의 장면(JPEG 바이트)을 팀 음성 모드의 프레임 버퍼에 넣는다."""
+        data = await request.body()
+        if len(data) > MAX_IMAGE_BYTES:
+            raise HTTPException(413, "사진이 너무 큽니다")
+        image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise HTTPException(400, "사진을 읽지 못했습니다")
+        request.app.state.voice.push_frame(image)
+        return {"ok": True}
 
     @app.get("/api/ocr-status")
     def ocr_status(request: Request) -> dict:
@@ -355,10 +409,40 @@ def _decode_image(data: str) -> np.ndarray:
     return image
 
 
+def _voice_result(state, t0: float, loop) -> dict:
+    """팀 음성 모드의 턴 결과를 /api/ask 와 같은 모양으로. 대답은 서버 스피커가 이미 읽었다."""
+    from types import SimpleNamespace
+
+    crop, frame = state.get("crop"), state.get("frame")
+    shim = SimpleNamespace(
+        store=loop.store,
+        user_id=loop.user_id,
+        checker=loop.checker,
+        assistant=SimpleNamespace(
+            vlm_real=True,
+            pointing=loop.pointing,
+            retried_whole=False,
+            picked_index=0,
+            judged_image=crop if crop is not None else (frame.image if frame else None),
+        ),
+    )
+    response = state.get("response")
+    spoken = [response.text] if response is not None and response.text else []
+    result = _result(shim, state["utterance"].text, state, spoken, t0)
+    result["voice"] = True
+    result["filler"] = bool(state.get("filler_sent"))
+    result["interrupted"] = bool(state.get("interrupted"))
+    return result
+
+
 def _ask(s, question: str, image: np.ndarray | None, more=None) -> dict:
     t0 = time.perf_counter()
     with s.lock:  # 성분 판정기(OCR)를 성분 페이지와 같이 쓴다
         state, spoken = s.assistant.ask(question, image, more or None)
+    return _result(s, question, state, spoken, t0)
+
+
+def _result(s, question: str, state, spoken: list[str], t0: float) -> dict:
     response = state.get("response")
     target = state.get("target")
     chosen = target.chosen if target is not None else None
@@ -394,7 +478,7 @@ def _ask(s, question: str, image: np.ndarray | None, more=None) -> dict:
     }
     check = state.get("ingredient")
     if check is not None:
-        allergens = s.store.get_user_allergens(s.user_id)
+        allergens = expand_allergens(s.store.get_user_allergens(s.user_id))
         ev = evidence(check, allergens, getattr(s.checker, "synonyms", {}) or {})
         judged = s.assistant.judged_image  # 판정기에 실제로 들어간 사진(크롭 또는 사진 전체)
         result["ingredient"] = {
@@ -417,14 +501,6 @@ def where_image(image: np.ndarray, r, ev: list[dict]) -> np.ndarray | None:
         barcode=read.bbox if read is not None else None,
         barcode_code=read.code if read is not None else None,
     )
-
-
-def expand_allergens(names: list[str]) -> list[str]:
-    """'모두' · '테스트'가 있으면 법정 알레르기 전체를 더한다. 나머지 이름은 그대로 둔다."""
-    if not any(n.strip() in ALL_KEYWORDS for n in names):
-        return names
-    rest = [n for n in names if n.strip() not in ALL_KEYWORDS]
-    return list(dict.fromkeys([*KNOWN_ALLERGENS, *rest]))
 
 
 def evidence(r, allergens: list[str], synonyms: dict[str, list[str]]) -> list[dict]:
