@@ -235,6 +235,13 @@ FILLER_AFTER_SEC = _get_float("JARVISEO_FILLER_AFTER_SEC", 1.5)
 # 10초 × 재시도 1번이라 그대로 두면 최악 20초를 기다린다. spike 3 에서 45번 중 1번(6.5초)만 넘었다.
 VLM_DEADLINE_SEC = _get_float("JARVISEO_VLM_DEADLINE_SEC", 5.0)
 
+# --- 클라우드 대시보드로 보내기 (#144) -------------------------------------
+# assistant.py 가 끝난 턴을 이 서버(https://….duckdns.org)로 보낸다(memory/uploader.py).
+# 둘 중 하나라도 비면 보내지 않는다.
+# 토큰은 서버의 같은 이름 값(Parameter Store /jarviseo/JARVISEO_CLOUD_TOKEN)과 같아야 받는다.
+CLOUD_URL = _get("JARVISEO_CLOUD_URL")
+CLOUD_TOKEN = _get("JARVISEO_CLOUD_TOKEN")
+
 # --- 켜기 (scripts/start.py) ---------------------------------------------
 # 켤 때 main 의 새 버전을 받는다(git pull). 확인한 버전 그대로 쓰려면 false 로 고정한다.
 # 누가 main 에 막 머지한 코드를 모르고 받아 잘 되던 노트북이 갑자기 안 켜지는 일을 막는다.

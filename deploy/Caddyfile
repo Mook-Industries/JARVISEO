@@ -8,11 +8,21 @@
 # 우리 키를 쓸 수 있다. 웹 담당과 정한 로그인이 들어오기 전까지 브라우저 기본 로그인 창으로 막는다.
 # /health 만 열어 둔다(배포 확인 · CI). 비밀번호는 Parameter Store /jarviseo/BASIC_AUTH_PASSWORD 에
 # 있고, update.sh 가 해시로 바꿔 BASIC_AUTH_HASH 로 넘긴다.
+#
+# 노트북이 턴을 보내는 POST /api/turns(#144)도 비밀번호 없이 넘긴다. 대신 팀 웹이 토큰
+# (JARVISEO_CLOUD_TOKEN)을 확인하고, 서버에 토큰이 없으면 아무것도 받지 않는다. 비밀번호 로그인은
+# 임시라 웹 담당의 로그인으로 바뀌어도 노트북 쪽은 그대로 두려는 것이다. 읽기(GET)는 비밀번호를 거친다.
 
 {$DOMAIN} {
 	encode zstd gzip
 
-	@private not path /health
+	@private {
+		not path /health
+		not {
+			method POST
+			path /api/turns
+		}
+	}
 	basic_auth @private {
 		{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
 	}

@@ -4,6 +4,10 @@
 키는 이 노트북의 .env 에서 읽어 SecureString(암호화)으로 넣는다. Git · GitHub · SSM 명령 기록에
 남지 않고, 화면에도 이름만 찍는다.
 
+노트북이 턴을 보낼 때 쓰는 토큰(JARVISEO_CLOUD_TOKEN, #144)은 .env 에 없으면 새로 만들어
+.env 에 적고 같은 값을 넣는다. 화면에는 찍지 않는다. 노트북과 서버가 같은 값을 가져야
+서버가 턴을 받는다.
+
 접속 비밀번호(Caddy 임시 로그인, #179)는 없으면 새로 만들어 넣고 **이 화면에 한 번만** 보여 준다.
 이미 있으면 그대로 둔다(--new-password 면 새로 만든다). 다시 보려면 AWS 콘솔 → Systems Manager →
 Parameter Store → /jarviseo/BASIC_AUTH_PASSWORD → Show decrypted value.
@@ -22,20 +26,28 @@ import subprocess
 import sys
 from pathlib import Path
 
-from dotenv import dotenv_values
+from dotenv import dotenv_values, set_key
 
 ROOT = Path(__file__).resolve().parents[1]
 PREFIX = "/jarviseo/"
 # 서버의 팀 웹이 쓰는 키. 이름은 .env 와 같게 둔다(update.sh 가 그대로 환경변수로 넘긴다).
 KEYS = ["OPENAI_API_KEY", "GOOGLE_VISION_API_KEY", "JARVISEO_FOOD_QR_API_KEY"]
 PASSWORD = "BASIC_AUTH_PASSWORD"
+CLOUD_TOKEN = "JARVISEO_CLOUD_TOKEN"
 WINDOWS_AWS = Path(r"C:\Program Files\Amazon\AWSCLIV2\aws.exe")
 
 
 def aws(*args: str, profile: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     exe = shutil.which("aws") or (str(WINDOWS_AWS) if WINDOWS_AWS.is_file() else "aws")
     cmd = [exe, *args, "--profile", profile, "--region", "ap-northeast-2"]
-    return subprocess.run(cmd, capture_output=True, text=True, check=check)
+    # check=True 로 맡기면 CalledProcessError 가 명령 전체(--value 의 키 값까지)를 찍는다.
+    # 실패하면 무슨 명령이었는지와 AWS 의 오류 문장만 보여 주고 끝낸다.
+    done = subprocess.run(cmd, capture_output=True, text=True)
+    if check and done.returncode != 0:
+        lines = (done.stderr or done.stdout).strip().splitlines()
+        reason = lines[-1] if lines else ""
+        sys.exit(f"aws {' '.join(args[:2])} 실패 (프로필 {profile}): {reason}")
+    return done
 
 
 def put(name: str, value: str, profile: str) -> None:
@@ -60,6 +72,14 @@ def main() -> None:
     for key in KEYS:
         put(key, env[key].strip(), args.profile)
         print(f"넣음 {PREFIX}{key}")
+
+    token = (env.get(CLOUD_TOKEN) or "").strip()
+    if not token:
+        token = secrets.token_urlsafe(32)
+        set_key(args.env_file, CLOUD_TOKEN, token, quote_mode="never")
+        print(f"만듦 {CLOUD_TOKEN} → {args.env_file} 에 적음")
+    put(CLOUD_TOKEN, token, args.profile)
+    print(f"넣음 {PREFIX}{CLOUD_TOKEN}")
 
     exists = aws("ssm", "get-parameter", "--name", PREFIX + PASSWORD,
                  profile=args.profile, check=False).returncode == 0  # fmt: skip
