@@ -5,7 +5,7 @@
 
 | 파일 | 하는 일 | 책임 지표 |
 |---|---|---|
-| `detector.py` | 물체 후보 검출 (기본 사전학습 COCO `yolov8n.pt`, `.env` 로 학습한 11종 가중치) | 후보 재현율 (식품 장면 따로) |
+| `detector.py` | 물체 후보 검출 (기본 사전학습 COCO `yolov8n.pt`, `.env` 로 학습한 10종 가중치) | 후보 재현율 (식품 장면 따로) |
 | `labels.py` | 검출 라벨의 한글 이름(COCO 80종 + `product` = "식품"). 되묻기 문장 · 대답 찾기 · VLM 맥락 문장에 쓴다 | — |
 | `hands.py` | 손 관절 21점(MediaPipe `HandLandmarker`) → 가리키는 손인지 · 검지 방향(5 → 8) | 손 검출률 · 가리킴 판정 · 방향 오차 (`scripts/check_hands.py`) |
 | `cues.py` | 후보별 단서 점수 — v1 center(가운데 · 크기), v2 point(검지 끝 선 ↔ 후보 중심 각도, 가우시안 σ 15°). v3~v5 는 아직 | — |
@@ -54,4 +54,5 @@ curl.exe -fL -o data/models/hand_landmarker.task https://storage.googleapis.com/
 - 회차 비교는 `.env` 를 바꿔 가며 재지 않고, `scripts/run_ablation.py --weights yolov8n.pt data/models/detector_r1.pt` 로 한 실행에서 잰다.
   같은 코드 · 같은 사진 · 같은 손 결과로 재야 표의 차이가 가중치 몫이 된다.
 - 기본값(`yolov8n.pt`)을 학습한 가중치로 바꾸는 것은 회차 비교로 나아진 것을 확인한 뒤에 한다. 그 전까지는 시험할 때만 `.env` 로 바꾼다.
-- 학습한 가중치는 11종(`FINETUNE_CLASSES`)만 찾는다. COCO 의 나머지(의자 · 가방 등)는 후보에서 사라진다.
+- 학습한 가중치는 10종(`FINETUNE_CLASSES`)만 찾는다. COCO 의 나머지(의자 · 가방 · 리모컨 등)는 후보에서 사라진다.
+  R1(`detector_r1.pt`)만 `remote` 를 넣은 11종이다. `ObjectDetector` 는 가중치 안에 저장된 이름을 쓰므로 R1 도 그대로 잴 수 있다.
