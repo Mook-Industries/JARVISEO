@@ -15,12 +15,39 @@ import numpy as np
 
 from jarviseo.types import BBox
 
-__all__ = ["MARGIN_RATIO", "VLM_MAX_SIDE", "VLM_MIN_SIDE", "crop_target", "fit_for_vlm"]
+__all__ = [
+    "MARGIN_RATIO",
+    "VLM_MAX_SIDE",
+    "VLM_MIN_SIDE",
+    "crop_region",
+    "crop_target",
+    "fit_for_vlm",
+]
 
 # 셋 다 크롭 효과 실험(여백 0/15/30%, 크롭 vs 전체 사진) 전의 출발점이다.
 MARGIN_RATIO = 0.15
 VLM_MIN_SIDE = 64
 VLM_MAX_SIDE = 768
+
+
+def crop_region(
+    bbox: BBox, frame_size: tuple[int, int], margin: float = MARGIN_RATIO
+) -> BBox | None:
+    """crop_target 이 잘라낼 사각형(픽셀 정수 좌표). 사진 안에 남는 부분이 없으면 None.
+
+    frame_size 는 (너비, 높이)다. 실제 크롭과 ablation 채점(크롭 담김)이 이 계산 하나를 같이 써서,
+    한쪽만 고쳐져 둘이 어긋나는 일을 막는다.
+    """
+    width, height = frame_size
+    dx, dy = bbox.width * margin, bbox.height * margin
+    # 넓힌 다음에 사진 안으로 자른다. 순서를 바꾸면 음수 좌표가 남는다.
+    # 시작은 내림·끝은 올림이라야 물체 가장자리가 잘리지 않는다.
+    # 음수 인덱스는 numpy 에서 '뒤에서부터'라서, 0 아래로 내려가지 않게 막는다.
+    x1, y1 = max(0, math.floor(bbox.x1 - dx)), max(0, math.floor(bbox.y1 - dy))
+    x2, y2 = min(width, math.ceil(bbox.x2 + dx)), min(height, math.ceil(bbox.y2 + dy))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return BBox(x1, y1, x2, y2)
 
 
 def crop_target(image: np.ndarray, bbox: BBox, margin: float = MARGIN_RATIO) -> np.ndarray:
@@ -29,15 +56,11 @@ def crop_target(image: np.ndarray, bbox: BBox, margin: float = MARGIN_RATIO) -> 
     사진 밖으로 나간 부분은 버리고, 아예 비면 원본을 준다.
     """
     height, width = image.shape[:2]
-    dx, dy = bbox.width * margin, bbox.height * margin
-    # 넓힌 다음에 사진 안으로 자른다. 순서를 바꾸면 음수 좌표가 남는다.
-    # 시작은 내림·끝은 올림이라야 물체 가장자리가 잘리지 않는다.
-    # 음수 인덱스는 numpy 에서 '뒤에서부터'라서, 0 아래로 내려가지 않게 막는다.
-    x1, y1 = max(0, math.floor(bbox.x1 - dx)), max(0, math.floor(bbox.y1 - dy))
-    x2, y2 = min(width, math.ceil(bbox.x2 + dx)), min(height, math.ceil(bbox.y2 + dy))
-    if x2 <= x1 or y2 <= y1:
+    region = crop_region(bbox, (width, height), margin)
+    if region is None:
         # 빈 사진을 VLM 에 보내면 API 오류로 턴 전체가 실패한다.
         return image
+    x1, y1, x2, y2 = (int(v) for v in (region.x1, region.y1, region.x2, region.y2))
     # 슬라이스는 원본과 메모리를 공유한다. 버퍼의 프레임이 바뀌어도 크롭이 그대로 있게 복사한다.
     return image[y1:y2, x1:x2].copy()
 

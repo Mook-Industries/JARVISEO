@@ -3,7 +3,8 @@
 tools/label_targets.py 가 만든 labels.csv 의 사진마다 한 번 검출하고, 버전마다 켤 단서만 켜서
 resolve_target 으로 고른 박스를 정답 박스와 비교한다(IoU 0.5 이상이면 맞음).
 결과는 DB eval_run(가중치 × 버전마다 한 줄, 지표 묶음) · eval_sample(사진마다 맞음/틀림)과
-사진별 CSV(실패 분류 · margin · 지연)에 남기고, 같은 조건의 이전 실행과 비교표를 찍는다.
+사진별 CSV(실패 분류 · margin · 크롭 담김 · 지연)에 남기고, 같은 조건의 이전 실행과 비교표를 찍는다.
+대표 지표는 정답률과 확신 오답률(되묻지 않고 골랐는데 틀림) 한 쌍이다.
 
 버전은 단서를 하나씩 쌓아 켠다(types.CueKind 순서). 아직 구현 안 된 단서가 든 버전은 건너뛴다.
 검출은 가중치마다 사진마다 한 번만 해서, 버전 차이가 단서에서만 나오게 한다.
@@ -37,6 +38,7 @@ from sqlalchemy import select
 
 from jarviseo import config
 from jarviseo.memory import EvalRun, EvalSample, MemoryStore
+from jarviseo.pointing.crop import crop_region
 from jarviseo.pointing.hands import HandDetector, HandPose, pick_pointing_hand
 from jarviseo.pointing.resolver import IMPLEMENTED_CUES, resolve_target
 from jarviseo.types import BBox, CueKind, Detection, TargetResolution
@@ -57,11 +59,19 @@ VARIANTS: dict[str, frozenset[CueKind]] = {
 IOU_MATCH = 0.5
 # 틀렸는데 margin 이 이 이상이면 "높은 확신으로 틀림". 되묻지 않고 단정한 오답이다.
 HIGH_CONFIDENCE = 0.5
-# 실패 6분류(멘토링 2차) + 정답. 위에서 먼저 걸리는 것으로 정한다(judge).
+# 고른 박스의 크롭(실제 비서와 같은 여백 15%)이 정답 박스를 이만큼 담으면 "크롭 담김".
+# 손 우선 크롭처럼 정답 박스와 딱 맞지 않아도 VLM 이 답할 수 있는 크롭을 IoU 와 따로 잰다.
+CROP_CONTAINED = 0.6
+# 크롭이 사진의 이만큼을 넘게 덮으면 담김으로 세지 않는다. 무엇이든 담기기 때문이다.
+# valid 에서 정답 크롭은 넓이 41% 이하, 냉장고 · 노트북 헛 박스 크롭은 53% 이상이었다.
+CROP_MAX_AREA = 0.5
+# 실패 분류(멘토링 2차의 6분류에서 "후보 없음"을 둘로 나눔) + 정답.
+# 위에서 먼저 걸리는 것으로 정한다(judge).
 OUTCOMES = (
     "정답",
     "되묻는 게 맞음",
-    "후보 없음",
+    "후보 없어 되물음",
+    "후보 없는데 답함",
     "불필요한 되묻기",
     "방향 오판",
     "높은 확신으로 틀림",
@@ -78,6 +88,9 @@ CSV_COLUMNS = [
     "hand_used",
     "ambiguous",
     "candidate_hit",
+    "crop_covered",
+    "crop_area",
+    "crop_contained",
     "detect_ms",
     "resolve_ms",
 ]
@@ -122,6 +135,9 @@ def judge(
 
     정답이 후보에 없으면 단서가 아무리 좋아도 못 맞히므로, 되묻기보다 "후보 없음"을 먼저 본다.
     검출기 몫의 실패를 단서 몫으로 세면 v2~v5 의 개선이 흐려진다.
+    그 안에서 되물었는지(안전)와 엉뚱한 물건을 단정했는지(위험)는 나눈다. 하나로 묶으면
+    단정한 오답이 "후보 없음"에 묻혀 높은 확신 오답이 0% 로 보인다.
+    resolver 는 되물을 때 chosen 이 늘 None 이다(후보 0개도 되물음).
     """
     chosen = resolution.chosen
     if chosen is not None and chosen.detection.bbox.iou(sample["gt"]) >= IOU_MATCH:
@@ -129,7 +145,7 @@ def judge(
     if resolution.needs_clarify and sample["ambiguous"]:
         return True, "되묻는 게 맞음"  # 사람도 못 고르는 장면에서는 묻는 게 정답
     if not candidate_hit:
-        return False, "후보 없음"
+        return False, "후보 없어 되물음" if resolution.needs_clarify else "후보 없는데 답함"
     if resolution.needs_clarify:
         return False, "불필요한 되묻기"
     if sample["has_hand"] and uses_point:
@@ -137,6 +153,29 @@ def judge(
     if resolution.margin >= HIGH_CONFIDENCE:
         return False, "높은 확신으로 틀림"
     return False, "다른 후보 1위"
+
+
+def crop_coverage(gt: BBox, region: BBox, frame_size: tuple[int, int]) -> tuple[float, float]:
+    """(정답 박스 중 크롭 안에 든 비율, 크롭 넓이 ÷ 사진 넓이). frame_size 는 (너비, 높이).
+
+    IoU 가 아니라 "정답이 얼마나 담겼나"를 본다. 크롭이 정답보다 커도 VLM 은 그 안에서 답할 수 있다.
+    겹친 넓이는 types.BBox 를 바꾸지 않고(세 사람의 계약) 여기서 계산한다.
+    """
+    inter_w = max(0.0, min(gt.x2, region.x2) - max(gt.x1, region.x1))
+    inter_h = max(0.0, min(gt.y2, region.y2) - max(gt.y1, region.y1))
+    covered = inter_w * inter_h / gt.area if gt.area > 0 else 0.0
+    width, height = frame_size
+    return covered, region.area / (width * height)
+
+
+def is_crop_contained(covered: float | None, area: float | None) -> bool:
+    """정답을 CROP_CONTAINED 이상 담고 크롭이 사진의 CROP_MAX_AREA 이하이면 담김.
+
+    되물어서 크롭이 없으면(None) 담김이 아니다.
+    """
+    if covered is None or area is None:
+        return False
+    return covered >= CROP_CONTAINED and area <= CROP_MAX_AREA
 
 
 def evaluate(
@@ -170,6 +209,12 @@ def evaluate(
         )
         correct, outcome = judge(s, resolution, hit, hand_used)
         chosen = resolution.chosen
+        # 되물었으면 VLM 에 보낼 크롭이 없다 → 못 담은 것으로 센다(비율 · 넓이는 비움).
+        covered = area = None
+        if chosen is not None:
+            region = crop_region(chosen.detection.bbox, frame_size[s["file"]])
+            if region is not None:
+                covered, area = crop_coverage(s["gt"], region, frame_size[s["file"]])
         rows.append(
             {
                 "file": s["file"],
@@ -182,8 +227,14 @@ def evaluate(
                 "hand_used": hand_used,
                 "ambiguous": s["ambiguous"],
                 "candidate_hit": hit,
+                "crop_covered": None if covered is None else round(covered, 3),
+                "crop_area": None if area is None else round(area, 3),
+                "crop_contained": is_crop_contained(covered, area),
                 "answered": chosen is not None,
                 "clarified": resolution.needs_clarify,
+                # 되묻지 않고 골랐는데 틀림. margin 은 안 본다 —
+                # 0.15 를 넘으면 비서는 똑같이 단정하는 말투로 답한다.
+                "confident_error": chosen is not None and not correct,
                 "detect_ms": round(detect_ms[s["file"]], 1),
                 "resolve_ms": round(resolve_ms, 3),
             }
@@ -299,15 +350,21 @@ def _rate(part: list[dict], key: str) -> float | None:
 
 
 def summarize(rows: list[dict]) -> dict:
-    """한 버전의 지표. eval_run.metrics 에 그대로 들어간다."""
+    """한 버전의 지표. eval_run.metrics 에 그대로 들어간다.
+
+    확신 오답률 · 크롭 담김률의 분모는 정답률처럼 전체 장수다. 되물은 사진을 빼면
+    많이 되묻는 버전일수록 비율이 부풀려진다. high_conf_error_rate 는 run 1~7 과 비교하려고 남긴다.
+    """
     counts = Counter(r["outcome"] for r in rows)
     detect_p50, detect_p95 = percentiles([r["detect_ms"] for r in rows])
     resolve_p50, resolve_p95 = percentiles([r["resolve_ms"] for r in rows])
     return {
         "accuracy": _rate(rows, "correct"),
+        "confident_error_rate": _rate(rows, "confident_error"),
         "answered_accuracy": _rate([r for r in rows if r["answered"]], "correct"),
         "reask_rate": _rate(rows, "clarified"),
         "candidate_recall": _rate(rows, "candidate_hit"),
+        "crop_contained_rate": _rate(rows, "crop_contained"),
         "accuracy_with_hand": _rate([r for r in rows if r["has_hand"]], "correct"),
         "accuracy_without_hand": _rate([r for r in rows if not r["has_hand"]], "correct"),
         "high_conf_error_rate": round(counts["높은 확신으로 틀림"] / len(rows), 3),
@@ -338,14 +395,14 @@ def save_run(store: MemoryStore, variant: str, rows: list[dict], metrics: dict, 
         return run.run_id
 
 
-def previous_accuracy(
+def previous_metrics(
     store: MemoryStore, variant: str, before: int, conditions: dict
-) -> float | None:
-    """같은 버전 · 같은 조건의 바로 이전 실행의 정답률. 없으면 None.
+) -> dict | None:
+    """같은 버전 · 같은 조건의 바로 이전 실행의 지표 묶음. 없으면 None.
 
     가중치가 다른 실행과 비교하면 그 차이가 코드 몫인지 가중치 몫인지 표만 보고 모른다.
     JSON 안의 값으로 거르는 SQL 은 SQLite 와 Postgres 문법이 달라서,
-    같은 버전을 다 가져와 여기서 거른다.
+    같은 버전을 다 가져와 여기서 거른다. 정답률 · 확신 오답률을 같이 비교하려고 묶음째 돌려준다.
     """
     with store.session() as db:
         stmt = (
@@ -356,7 +413,7 @@ def previous_accuracy(
         history = list(db.scalars(stmt))
     for metrics in history:
         if same_conditions((metrics or {}).get("conditions"), conditions):
-            return metrics.get("accuracy")
+            return metrics
     return None
 
 
@@ -375,15 +432,31 @@ def _pct(value: float | None) -> str:
     return "-" if value is None else f"{value * 100:.1f}"
 
 
-def format_row(weights: str, variant: str, metrics: dict, n: int, previous: float | None) -> str:
-    """비교표 한 줄. 같은 조건의 이전 실행이 있으면 정답률 옆에 차이(%p)를 붙인다."""
-    accuracy = _pct(metrics["accuracy"])
-    if previous is not None:
-        accuracy += f" ({(metrics['accuracy'] - previous) * 100:+.1f})"
+def _with_delta(metrics: dict, previous: dict | None, key: str) -> str:
+    """지표 하나를 %로, 이전 실행에도 그 값이 있으면 차이(%p)를 붙여서.
+
+    확신 오답률이 없던 옛 실행(run 4~7)과는 차이를 찍지 않는다.
+    없는 값을 0 으로 빼면 엉뚱한 차이가 된다.
+    """
+    text = _pct(metrics[key])
+    old = (previous or {}).get(key)
+    if old is not None and metrics[key] is not None:
+        text += f" ({(metrics[key] - old) * 100:+.1f})"
+    return text
+
+
+def format_row(weights: str, variant: str, metrics: dict, n: int, previous: dict | None) -> str:
+    """비교표 한 줄. 대표 지표 정답률 · 확신 오답률을 붙여 두고 이전 실행 대비 차이(%p)를 단다.
+
+    정답률만 보면 되묻기를 줄여 단정한 오답이 늘어도 개선처럼 보인다
+    (되묻기 기준 0.15 → 0.05: 정답 +1 · 확신 오답 +7).
+    """
     hand = f"{_pct(metrics['accuracy_with_hand'])}/{_pct(metrics['accuracy_without_hand'])}"
     return (
-        f"{weights} | {variant} | {n} | {accuracy} | {_pct(metrics['answered_accuracy'])} | "
-        f"{_pct(metrics['reask_rate'])} | {hand} | {_pct(metrics['candidate_recall'])} | "
+        f"{weights} | {variant} | {n} | {_with_delta(metrics, previous, 'accuracy')} | "
+        f"{_with_delta(metrics, previous, 'confident_error_rate')} | "
+        f"{_pct(metrics['answered_accuracy'])} | {_pct(metrics['reask_rate'])} | {hand} | "
+        f"{_pct(metrics['candidate_recall'])} | {_pct(metrics['crop_contained_rate'])} | "
         f"{metrics['resolve_p50_ms']:.2f}/{metrics['resolve_p95_ms']:.2f}"
     )
 
@@ -492,15 +565,15 @@ def main() -> None:
             found = sum(h is not None for h in hands.values())
             print(f"가리키는 손 {found}장 · 손 p50 {hand_p50:.1f}ms · p95 {hand_p95:.1f}ms")
         print(
-            "가중치 | 버전 | 장수 | 정답률 | 답한 것 정답률 | 되묻기율 | "
-            "손있음/손없음 | 후보재현율 | resolve p50/p95 ms"
+            "가중치 | 버전 | 장수 | 정답률 | 확신오답률 | 답한 것 정답률 | 되묻기율 | "
+            "손있음/손없음 | 후보재현율 | 크롭담김 | resolve p50/p95 ms"
         )
         for variant in ready:
             rows = evaluate(samples, candidates, detect_ms, variant, frame_size, hands)
             metrics = summarize(rows)
             metrics["conditions"] = conditions
             run_id = save_run(store, variant, rows, metrics, args.note)
-            previous = previous_accuracy(store, variant, run_id, conditions)
+            previous = previous_metrics(store, variant, run_id, conditions)
             print(format_row(label, variant, metrics, len(rows), previous))
             path = write_csv(args.out, run_id, variant, rows)
             failed = {k: v for k, v in metrics["outcomes"].items() if v and k not in OUTCOMES[:2]}

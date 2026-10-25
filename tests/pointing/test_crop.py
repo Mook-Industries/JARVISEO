@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from jarviseo.pointing import crop_target
-from jarviseo.pointing.crop import fit_for_vlm
+from jarviseo.pointing.crop import crop_region, fit_for_vlm
 from jarviseo.types import BBox
 
 
@@ -73,6 +73,38 @@ def test_margin_is_clipped_at_photo_edge():
     image = _image(1080, 1920)
     # 왼쪽 위 모서리 박스 200×100: 오른쪽·아래로만 30·15 px 넓어진다
     assert crop_target(image, BBox(0, 0, 200, 100)).shape == (115, 230, 3)
+
+
+# --- crop_region: 크롭 사각형 (채점과 같이 쓴다) -------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bbox",
+    [BBox(400, 500, 700, 900), BBox(0, 0, 200, 100), BBox(10.6, 10.6, 20.2, 20.2)],
+)
+def test_crop_region_is_the_area_crop_target_cuts(bbox):
+    """crop_region 의 사각형이 crop_target 이 실제로 자른 영역과 같다.
+
+    여백 · 사진 가장자리 · 소수 좌표 세 경우.
+    """
+    image = _image(1080, 1920)
+    image[:] = np.arange(1920, dtype=np.uint16)[None, :, None] % 251  # 열마다 다른 값
+
+    region = crop_region(bbox, (1920, 1080))
+    x1, y1, x2, y2 = (int(v) for v in (region.x1, region.y1, region.x2, region.y2))
+
+    assert np.array_equal(crop_target(image, bbox), image[y1:y2, x1:x2])
+
+
+def test_crop_region_uses_width_then_height():
+    """frame_size 는 (너비, 높이)다. 세로 사진(600×1000)에서 아래쪽 여백이 1000 까지 남는다."""
+    region = crop_region(BBox(100, 800, 300, 950), (600, 1000))
+    assert (region.x1, region.y1, region.x2, region.y2) == (70, 777, 330, 973)
+
+
+def test_crop_region_outside_photo_is_none():
+    """사진 안에 남는 부분이 없으면 None — crop_target 은 이때 원본을 준다."""
+    assert crop_region(BBox(200, 200, 300, 300), (100, 100)) is None
 
 
 # --- fit_for_vlm --------------------------------------------------------------------
