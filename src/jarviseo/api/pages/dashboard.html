@@ -22,6 +22,15 @@
     box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55);
   }
   .feed[data-cam="on"] .feed-shot.is-big { width: 72%; cursor: zoom-out; }
+  /* 작은 결과 창의 닫기(×). 자리는 dashboard.js 가 창 오른쪽 위에 맞춘다 */
+  .shot-close {
+    position: absolute; z-index: 5; width: 26px; height: 26px; padding: 0;
+    display: grid; place-items: center; border-radius: 50%;
+    border: 1px solid var(--accent-line); background: rgba(5, 10, 12, 0.85);
+    color: var(--text); font-size: 16px; line-height: 1; cursor: pointer;
+  }
+  .shot-close:hover { background: rgba(5, 10, 12, 1); }
+  .shot-close[hidden] { display: none; }
   .feed[data-cam="photo"] .no-signal { display: none; }
   .no-signal .row { display: flex; gap: 8px; }
   .ask-form { display: flex; gap: 8px; margin-top: 10px; width: 100%; }

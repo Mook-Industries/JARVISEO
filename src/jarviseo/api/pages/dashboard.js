@@ -461,9 +461,36 @@
     shot.classList.remove("is-big");
     if (url) shot.src = url;
     else shot.removeAttribute("src");
+    if (typeof placeShotClose === "function") placeShotClose();
   };
   // 작은 결과 창은 누르면 커지고, 다시 누르면 작아진다
   shot.addEventListener("click", () => shot.classList.toggle("is-big"));
+
+  // 결과 창 닫기(×). 보고 싶지 않으면 끈다. 다음 질문의 결과는 다시 뜬다.
+  // 카메라가 켜져 있어 작은 창일 때만 보인다(올린 사진은 화면 전체라 닫으면 볼 것이 없다).
+  const shotClose = document.createElement("button");
+  shotClose.type = "button";
+  shotClose.className = "shot-close";
+  shotClose.setAttribute("aria-label", "결과 그림 닫기");
+  shotClose.textContent = "×";
+  shotClose.hidden = true;
+  shot.after(shotClose);
+  const placeShotClose = () => {
+    const box = shot.parentElement;
+    shotClose.hidden = shot.hidden || box.dataset.cam !== "on";
+    if (shotClose.hidden) return;
+    const f = box.getBoundingClientRect();
+    const b = shot.getBoundingClientRect();
+    shotClose.style.left = `${b.right - f.left - 32}px`;
+    shotClose.style.top = `${b.top - f.top + 6}px`;
+  };
+  new ResizeObserver(placeShotClose).observe(shot);
+  shot.addEventListener("load", placeShotClose);
+  window.addEventListener("resize", placeShotClose);
+  shotClose.addEventListener("click", (e) => {
+    e.stopPropagation();
+    showShot(null);
+  });
 
   function clearPhoto() {
     photo = null;
