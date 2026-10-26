@@ -23,7 +23,8 @@
 resolve 의 chosen 에는 손 우선 크롭도 든다(가리키는 손이 있는데 손가락 선 근처에 후보가 없음).
 그때 crop_target 은 고른 박스 대신 손끝 방향 사각형을 자른다. ingredient_no_target 은 성분 질문인데
 고를 후보가 없을 때(0개 · 후보 하나의 총점 미달)다. 크롭이 없어서 check_ingredient 가 사진 전체로
-판정한다(#215).
+판정한다(#215). route 의 needs_target 에는 글자로는 GENERAL 이지만 가리키는 손이 보인 질문도
+든다(장면 · 찾기 · 영역 질문은 빼고, #217).
 노드가 하는 일은 nodes/ 의 각 파일 머리말에 있다.
 호출어 기다리기와 끼어들기는 그래프 밖(scripts/assistant.py)에서 한다.
 """

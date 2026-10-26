@@ -1,6 +1,7 @@
 """가리킴 노드 — 검출 · 대상 결정 · 되묻기 · 크롭.  담당: 최홍묵
 
 detect      : 사진에서 물체 후보와 가리키는 손을 찾는다 (pointing/detector.py · hands.py).
+              route 가 손 신호로 가리킴을 정했으면 그때 찾은 손을 쓴다.
               이어 묻기 단서가 쓸 직전 대상(같은 세션 바로 전 가리킴 턴)도 DB 에서 한 번 읽는다
 resolve     : 후보 중 가리킨 대상을 고른다 (pointing/resolver.py). 가리키는 손이 있는데 손가락 선
               근처에 후보가 없으면 되묻지 않고 손끝 방향을 자르기로 정한다 (pointing/crop.py).
@@ -59,7 +60,12 @@ PREV_TARGET_SEC = 60
 def detect(state: JarviseoState, deps: GraphDeps) -> dict:
     image = state["frame"].image
     # 손도 여기서 한 번만 찾는다. resolve 는 되묻기 대답마다 다시 돌지만 사진은 그대로다.
-    hand = pick_pointing_hand(deps.hands.detect(image)) if deps.hands is not None else None
+    # route 가 손 신호로 가리킴을 정했으면 그때 찾은 손을 그대로 쓴다(#217). 값이 아니라 키로
+    # 본다 — route 는 손을 찾았을 때만 이 키를 넣어서, 키가 없다는 건 아직 안 찾았다는 뜻이다.
+    if "hand" in state:
+        hand = state["hand"]
+    else:
+        hand = pick_pointing_hand(deps.hands.detect(image)) if deps.hands is not None else None
     return {
         "detections": deps.detector.detect(image),
         "hand": hand,
