@@ -454,3 +454,39 @@ def test_header_aligned_with_first_line_stays():
     text = join_lines(_group_lines(boxes))
     assert "(스낵과자) 원재료명 소맥분" in text
     assert "스낵과자" not in split_sections(text).ingredients
+
+
+# 델몬트 오렌지를 돌려 찍은 사진의 실제 OCR 결과. "이 제품은 ~ 같은 제조시설" 이 깨져서
+# 혼입 목록이 원재료 바로 뒤에 붙었다. 예전에는 목록이 원재료에 남아 '들어 있어요'로 말했다.
+DELMONTE = (
+    "원재료명 오렌지과즙, 천연향료, 비타민C, 스테비올배당체(감미료) 우유, 메밀,땅콩,대두, 밀, "
+    "복 숭대 토마토, 아황산류, 호두 주입니다 조혼입가능 직사광선을 피해 보관"
+)
+
+
+def test_cross_list_glued_to_ingredients_goes_to_cross():
+    sec = split_sections(DELMONTE)
+    for name in ("우유", "메밀", "땅콩", "대두", "밀", "토마토", "아황산류", "호두"):
+        assert name in sec.cross_contamination
+        assert name not in sec.ingredients
+    assert "스테비올배당체(감미료)" in sec.ingredients
+    assert "스테비올배당체" not in sec.cross_contamination
+
+
+def test_cross_needs_three_bare_names_before_cue():
+    # 이름이 2개뿐이면 예전처럼 원재료에 남긴다 (낮춰 말하는 것보다 '함유'가 안전).
+    sec = split_sections("원재료명 설탕, 정제소금, 우유, 대두 혼입가능")
+    assert "우유" in sec.ingredients
+
+
+def test_cross_list_across_period_from_other_column():
+    # 델몬트를 바로 찍은 사진: 옆 칸 "입니다." 가 목록 사이에 끼어 마침표에서 끊겼다.
+    text = (
+        "원재료명 정제수, 구연산, 비타민C, 스테비올배당체(감미료) •우유, 메밀,땅콩,대두,밀,복 숭아,"
+        "토마토,아황산류,호두, 입니다. 잣 혼입가능..직사광선을 피해 보관"
+    )
+    sec = split_sections(text)
+    for name in ("우유", "메밀", "땅콩", "대두", "밀", "토마토", "아황산류", "호두", "잣"):
+        assert name in sec.cross_contamination
+        assert name not in sec.ingredients
+    assert "스테비올배당체" in sec.ingredients
