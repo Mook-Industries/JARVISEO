@@ -136,3 +136,17 @@ def test_read_image_handles_missing_and_hangul_path(tmp_path):
 
     assert label_targets.read_image(path).shape == (10, 20, 3)
     assert label_targets.read_image(empty) is None
+
+
+# --- 후보 번호로 고른 정답의 이름 ---------------------------------------------------
+
+
+def test_chosen_label_uses_yolo_name_when_input_is_blank():
+    """Enter 만 치면 YOLO 이름 그대로. 공백만 친 것도 빈칸이다."""
+    assert label_targets.chosen_label("bottle", "") == "bottle"
+    assert label_targets.chosen_label("bottle", "   ") == "bottle"
+
+
+def test_chosen_label_prefers_typed_name_and_strips_spaces():
+    """박스는 맞고 이름이 틀린 후보(안경 케이스를 remote 로 부름)는 입력한 이름으로 남긴다."""
+    assert label_targets.chosen_label("remote", "  glasses case ") == "glasses case"

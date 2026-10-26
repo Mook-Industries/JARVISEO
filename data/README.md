@@ -62,28 +62,31 @@ datasets/detector/
 ├── excluded/
 │   └── d04/            frames/ 에서 뺀 사진(알아볼 수 없음 · 얼굴). label · build 는 frames/ 만 읽는다
 ├── auto/               자동 라벨(R1) — labels/*.txt · tasks.json(Label Studio) · label_config.xml
-├── reviewed/           Label Studio 에서 검수하고 YOLO 로 내보낸 것(R2) — labels/ · classes.txt
-└── yolo_r1/            회차 하나 = 폴더 하나 — images/{train,val} · labels/{train,val} · data.yaml
+├── review/             사람 검수(R2) — tasks.json · label_config.xml(review) · labels/(검수 결과) · auto_labels/(대조군, import)
+└── yolo_r1/            회차 하나 = 폴더 하나 — images/{train,val} · labels/{train,val} · data.yaml. R2 는 yolo_r2 · yolo_r2auto
 ```
 
-**종류 11개** (`src/jarviseo/pointing/detector.py` 의 `FINETUNE_CLASSES`, 순서 = 라벨 번호. 바꾸지 않고 새 종류는 맨 뒤에만)
+**종류 10개** (`src/jarviseo/pointing/detector.py` 의 `FINETUNE_CLASSES`, 순서 = 라벨 번호. 바꾸지 않고 새 종류는 맨 뒤에만)
+
+R1 은 `remote`(7번)를 넣은 11종이었다. 리모컨은 찍은 적이 없고, 정답표의 `remote` 1장은 YOLO 가 안경 케이스를 잘못 부른 이름이라
+R2 부터 뺐다. 그래서 R1 묶음(`yolo_r1`)과 R2 부터의 묶음은 번호가 다르다(book 8 → 7 · tv 9 → 8 · product 10 → 9). R1 묶음은 보관만 한다.
 
 | 번호 | 종류 | 경계 사례 |
 |---|---|---|
 | 0 | bottle | 병 모양이면 내용물과 상관없이(물병 · 텀블러 · 소스병) |
-| 1 | cup | 마시는 컵 · 머그. 컵라면은 product |
-| 2 | bowl | 그릇 · 접시 모양 용기 |
+| 1 | cup | 마시는 컵 · 머그 · 종이컵. 컵라면은 product |
+| 2 | bowl | 그릇 · 접시 모양 용기 · 햇반 용기(이름은 내용물이 아니라 모양) |
 | 3 | laptop | 화면과 붙은 키보드까지 하나로 |
 | 4 | mouse | 컴퓨터 마우스 |
 | 5 | keyboard | 따로 놓인 키보드만 |
 | 6 | cell phone | 휴대폰(COCO 이름 그대로 띄어쓰기) |
-| 7 | remote | 리모컨 |
-| 8 | book | 책 · 공책 |
-| 9 | tv | TV · 모니터(COCO 관례) |
-| 10 | product | COCO 에 없는 포장 식품 — 과자 봉지 · 컵라면 · 캔 · 햇반 · 병조림(잼 병) · 상자 포장 |
+| 7 | book | 책 · 공책 |
+| 8 | tv | TV · 모니터(COCO 관례) |
+| 9 | product | COCO 에 없는 포장 식품 — 캔(참치 · 감자칩 통 · 음료) · 과자 봉지 · 컵라면 · 병조림(잼 병) · 파우치 · 상자 포장 |
 
-- **학습 사진에 보이는 11종은 전부 라벨한다.** 일부 종류만 라벨하면 나머지가 "배경"으로 학습돼 사라진다. 11종 밖 물건(안경 · 시계 등)은 라벨하지 않는다 → 학습한 가중치로는 안 잡힌다.
+- **학습 사진에 보이는 10종은 전부 라벨한다.** 일부 종류만 라벨하면 나머지가 "배경"으로 학습돼 사라진다. 10종 밖 물건(안경 · 시계 · 리모컨 등)은 라벨하지 않는다 → 학습한 가중치로는 안 잡힌다.
 - 묶음(햇반 더미 · 책 여러 권)은 한 개씩. 절반 이상 보이면 라벨, 유리 · 화면에 비친 것은 안 한다. 손에 쥔 물건은 보이는 만큼.
+  짧은 변이 40px(1280×720 기준) 미만인 것도 안 한다. 검수 규칙 전체는 `tools/README.md` "R2 사람 검수".
 - **학습 / 검증은 영상 단위로 나눈다**(`build --val d05`). 같은 영상에서 몇 초 차이로 뽑은 사진은 배경이 같아서, 사진 단위로 섞으면 검증 점수가 부풀려진다.
   이 "검증"은 학습 중 best.pt 를 고르는 데만 쓴다. 회차 비교는 가리킴 valid(세션 1 · 2)의 후보 재현율로 한다.
 - **가리킴 test 장소(라운지)와 valid 배치(s01 책상 · s02 선반 · s04 강의실 의자)는 영상에 넣지 않는다.** 평가에 쓰는 장면을 학습하면 회차 비교와 최종 test 숫자가 부풀려진다.
