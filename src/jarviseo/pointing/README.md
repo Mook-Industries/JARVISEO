@@ -37,6 +37,10 @@
   손끝에서 0.2H 앞을 중심으로 한 변 0.6H(H = 사진 높이)를 자른다(`crop.hand_crop_region`). 정답이 YOLO 후보에 없는데 손가락은 그쪽을
   가리킨 경우를 위한 것이다. 선 위에 후보가 있으면 평소처럼 고르거나 되묻는다. 기본으로 켜져 있고, ablation 은 임시 버전 `v2+C` 로 잰다.
 - 1위와 2위 점수차(`margin`)가 임계값 미만이면 답하지 않고 되묻는다.
+- **점수 규칙**(#215): 사진 넓이의 절반을 넘게 덮는 박스(냉장고 · 노트북 헛 박스)는 `detector.filter_detections` 가 후보에서 뺀다
+  (`MAX_AREA_RATIO` 0.5 — 가운데 단서에서 늘 1위라 정답이 후보에 없을 때 그 박스를 확신했다). 원래 후보가 하나뿐이면 margin 이 1.0 이라,
+  그 후보의 총점이 `resolver.MIN_SINGLE_SCORE`(0.3) 미만이면 되물을 문장 없이 단정하지 않는다(화면 구석 물건 하나). 손끝이 박스 안이면
+  손 점수를 1.0 으로 주는 규칙은 재 보니 나빠져서(valid 정답 13 → 12) 넣지 않았다.
 - 실험 기록은 `docs/experiments.md`, 결과 적재는 `memory/models.py` 의
   `Detection` · `TargetResolution`.
 

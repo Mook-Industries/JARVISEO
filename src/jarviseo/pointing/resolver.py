@@ -15,6 +15,9 @@ cues.py 가 매긴 단서별 점수를 가중치로 합쳐 후보 순위를 정�
 이어 묻기 단서(v5)는 직전 대상이 없거나, 되가리키는 말("그거")이 없거나, 후보를 못 가르면 기권한다.
 두 단서는 config.ENABLE_LANGUAGE_CUE · ENABLE_CONTEXT_CUE 가 켜져 있을 때만 기본으로 켠다
 (말 · 맥락 세션 s04 로 잰 뒤 켬).
+
+후보가 하나뿐이면 비교 상대가 없어 margin 이 1.0 이다. 그래서 1위 총점 자체가 낮으면(화면 가장자리
+물건 하나뿐) 단정하지 않는다(#215).
 """
 
 from __future__ import annotations
@@ -36,7 +39,7 @@ from jarviseo.types import (
     TargetResolution,
 )
 
-__all__ = ["IMPLEMENTED_CUES", "WEIGHTS", "resolve_target"]
+__all__ = ["IMPLEMENTED_CUES", "MIN_SINGLE_SCORE", "WEIGHTS", "resolve_target"]
 
 # 단서별 가중치. 이 값이 곧 "무엇을 얼마나 믿는가"이고, ablation 의 비교 대상이다.
 # 켜진 단서의 가중치 합으로 나누므로 몇 개를 켜든 점수는 0~1 이다.
@@ -50,6 +53,12 @@ WEIGHTS: dict[CueKind, float] = {
 
 # 단서를 구현하면 여기와 _scorers 에 넣는다. ablation 은 여기 있는 단서를 직접 골라 켠다.
 IMPLEMENTED_CUES = frozenset({CueKind.CENTER, CueKind.POINT, CueKind.LANG, CueKind.CTX})
+
+# 원래 후보가 하나인데 1위 총점이 이보다 낮으면 단정하지 않는다(되물을 문장 없이 다시 가리켜
+# 달라고). 개발 DB 의 후보 1개 12턴은 모두 margin 1.0 으로 단정했고, 확인된 오답이 0.219(천장을
+# 가리켰는데 구석 모니터)였다. 나머지는 0.31 이상. 가운데 단서만 있을 때 0.3 미만은 화면 가장자리
+# 쪽 물건이다.
+MIN_SINGLE_SCORE = 0.3
 
 # 후보 목록만 받아 단서 점수를 돌려주는 함수. 사진 크기 · 손 방향은 _scorers 가 미리 묶는다.
 Scorer = Callable[[list[Detection]], list[CueScore]]
@@ -88,7 +97,9 @@ def resolve_target(
 
     후보가 0개면 chosen=None, needs_clarify=True, 되물을 문장 없음(그래프가 "다시 가리켜
     주세요"로 끝낸다). 켜진 단서가 모두 기권해도(손 단서만 켰는데 손이 없음) 같다.
-    후보가 1개면 margin 은 1.0(비교 상대가 없으므로 확신)이다.
+    후보가 1개면 margin 은 1.0(비교 상대가 없음)이다. 그 후보의 총점이 MIN_SINGLE_SCORE 미만이면
+    chosen=None, needs_clarify=True, 되물을 문장 없음(후보 0개와 같이 끝낸다). 되묻기 대답으로
+    하나로 좁혀진 경우는 사용자가 고른 것이라 하한을 보지 않는다.
     candidates 칸에는 걸러낸 뒤의 순위를 담는다. chosen 이 그 안에 있어야 DB 기록이 맞는다.
     """
     if enabled_cues is None:
@@ -129,6 +140,10 @@ def resolve_target(
     narrowed = _narrow_by_replies(candidates, replies, kinds, scorers, frame_size[0])
     ranked = _rank(narrowed, kinds, scorers)
     margin = 1.0 if len(ranked) == 1 else ranked[0].total_score - ranked[1].total_score
+    # 처음부터 하나였을 때만 본다(len(ranked) 가 아니다). 대답으로 좁혀 하나가 됐으면
+    # 사용자가 고른 것이다.
+    if len(candidates) == 1 and ranked[0].total_score < MIN_SINGLE_SCORE:
+        return TargetResolution(ranked, None, margin, True)
     if margin < margin_threshold:
         question = _build_clarify_question(ranked[0], ranked[1])
         return TargetResolution(ranked, None, margin, True, question)
