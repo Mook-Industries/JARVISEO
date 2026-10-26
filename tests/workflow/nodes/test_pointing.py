@@ -300,6 +300,24 @@ def test_no_candidates_gives_notice_without_asking():
     assert deps.tts.spoken == [CLARIFY_GIVE_UP]
 
 
+def test_lone_corner_candidate_gives_notice_without_listening():
+    """후보가 구석 컵 하나뿐이라 단정하지 않으면, "다시 가리켜 주세요"만 읽고 대답은 안 기다린다.
+
+    되물을 문장이 없는데 들으면 대답 뒤 같은 판단이 또 나와 MAX_CLARIFY 까지 헛돈다(#215).
+    """
+    corner = Detection("cup", 0.9, BBox(0, 0, 200, 200))  # 가운데 단서 총점 0.14
+    deps = _deps([], detections=[corner])
+    deps.stt = _ReplySTT(["저거 뭐야?", "왼쪽 거"])  # 듣기 횟수를 센다
+    deps.resolve = resolve_target
+
+    result = build_graph(deps).invoke({})
+
+    assert deps.tts.spoken == [CLARIFY_GIVE_UP]
+    assert deps.stt.calls == 1  # 질문만 듣고 대답은 기다리지 않았다
+    assert result["target"].chosen is None
+    assert deps.vlm.asked == []
+
+
 def test_clarify_plays_start_chime_before_reply():
     """되묻는 말을 다 읽은 뒤, 대답을 듣기 전에 시작음을 낸다."""
     deps = _deps([], margins=[0.05, 0.5])

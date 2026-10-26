@@ -9,9 +9,10 @@
     route ◀────────────────────┘
       ├─(recall)───────▶ recall ───────────────────────────────────────────────▶ generate
       ├─(needs_target)─▶ detect ─▶ resolve ⇄(ambiguous/replied) clarify ─(gave_up)▶ speak
-      │                              └─(chosen)─▶ crop_target
-      │                                             ├─(ingredient)─▶ check_ingredient
-      │                                             └─(answer)─────▶ generate
+      │                              ├─(chosen)─▶ crop_target
+      │                              │              ├─(ingredient)─▶ check_ingredient
+      │                              │              └─(answer)─────▶ generate
+      │                              └─(ingredient_no_target)─▶ check_ingredient (사진 전체)
       ├─(ingredient: 가리킬 부품 없음)───────────────────────────────▶ check_ingredient
       └─(answer)──────────────────────────────────────────────────────▶ generate
 
@@ -20,7 +21,9 @@
     clarify ─(called_again: 되묻는 중이나 대답을 기다리는 중에 다시 불림)─▶ log
 
 resolve 의 chosen 에는 손 우선 크롭도 든다(가리키는 손이 있는데 손가락 선 근처에 후보가 없음).
-그때 crop_target 은 고른 박스 대신 손끝 방향 사각형을 자른다.
+그때 crop_target 은 고른 박스 대신 손끝 방향 사각형을 자른다. ingredient_no_target 은 성분 질문인데
+고를 후보가 없을 때(0개 · 후보 하나의 총점 미달)다. 크롭이 없어서 check_ingredient 가 사진 전체로
+판정한다(#215).
 노드가 하는 일은 nodes/ 의 각 파일 머리말에 있다.
 호출어 기다리기와 끼어들기는 그래프 밖(scripts/assistant.py)에서 한다.
 """
@@ -98,7 +101,13 @@ def build_graph(deps: GraphDeps):  # -> CompiledStateGraph
     graph.add_edge("recall", "generate")
     graph.add_edge("detect", "resolve")
     graph.add_conditional_edges(
-        "resolve", pointing.after_resolve, {"ambiguous": "clarify", "chosen": "crop_target"}
+        "resolve",
+        pointing.after_resolve,
+        {
+            "ambiguous": "clarify",
+            "chosen": "crop_target",
+            "ingredient_no_target": "check_ingredient",
+        },
     )
     graph.add_conditional_edges(
         "clarify",

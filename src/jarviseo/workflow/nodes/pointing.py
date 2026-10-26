@@ -3,10 +3,11 @@
 detect      : 사진에서 물체 후보와 가리키는 손을 찾는다 (pointing/detector.py · hands.py).
               이어 묻기 단서가 쓸 직전 대상(같은 세션 바로 전 가리킴 턴)도 DB 에서 한 번 읽는다
 resolve     : 후보 중 가리킨 대상을 고른다 (pointing/resolver.py). 가리키는 손이 있는데 손가락 선
-              근처에 후보가 없으면 되묻지 않고 손끝 방향을 자르기로 정한다 (pointing/crop.py)
+              근처에 후보가 없으면 되묻지 않고 손끝 방향을 자르기로 정한다 (pointing/crop.py).
+              성분 질문인데 고를 후보가 없으면(0개 · 후보 하나의 총점 미달) 사진 전체로 판정한다
 clarify     : 1·2위가 비슷하면 되묻고 대답을 듣는다. 사진은 다시 고르지 않는다.
               되묻는 말 뒤에 시작음, 대답이 끝나면 종료음을 낸다(처음 질문할 때와 같다)
-              2번 넘거나 대답이 없거나 후보가 없으면 "다시 가리켜 주세요"로 끝낸다.
+              2번 넘거나 대답이 없거나 후보 · 되물을 문장이 없으면 "다시 가리켜 주세요"로 끝낸다.
               되묻는 중이나 대답을 기다리는 중에 "자비서"라고 다시 부르면 그 말은 대답이 아니라
               새 질문이다. 빈 대답으로 기록만 하고 끝내서, 새 질문은 다음 턴(BARGE_IN)이 받는다.
               되묻는 말을 합성하지 못해 소리가 안 났으면 대답을 기다리지 않고 바로 끝낸다
@@ -29,6 +30,7 @@ from jarviseo.pointing.crop import crop_target as cut_target
 from jarviseo.pointing.crop import hand_crop_region
 from jarviseo.pointing.hands import pick_pointing_hand
 from jarviseo.pointing.labels import korean_name
+from jarviseo.types import Intent
 from jarviseo.workflow.deps import GraphDeps
 from jarviseo.workflow.messages import CLARIFY_GIVE_UP, canned_response
 from jarviseo.workflow.nodes.voice import REPLY_SEC
@@ -129,15 +131,29 @@ def resolve(state: JarviseoState, deps: GraphDeps) -> dict:
     return {"target": target, "hand_crop": region}
 
 
-def after_resolve(state: JarviseoState) -> Literal["ambiguous", "chosen"]:
-    return "ambiguous" if state["target"].needs_clarify else "chosen"
+def after_resolve(
+    state: JarviseoState,
+) -> Literal["ambiguous", "chosen", "ingredient_no_target"]:
+    target = state["target"]
+    # 손 우선 크롭도 needs_clarify=False 라 여기서 끝난다. 손으로 가리켰으면 사진 전체보다
+    # 좁고 정확하다.
+    if not target.needs_clarify:
+        return "chosen"
+    # 성분 판정은 규칙(OCR)이라 사진 전체에서도 성분표를 찾는다. 봉지를 눈앞에 꽉 채우면 큰 박스가
+    # 빠져 후보가 0개가 되는데, 그때는 사진 전체가 곧 그 봉지다(모의 루프 턴 26 · 27, #14).
+    # 가리킴 질문은 사진 전체를 VLM 에 보내면 아무 물건이나 고르므로 그대로 되묻기 · 포기로 간다.
+    if state["intent"] is Intent.INGREDIENT and target.clarify_question is None:
+        return "ingredient_no_target"
+    return "ambiguous"
 
 
 def clarify(state: JarviseoState, deps: GraphDeps) -> dict:
     target, count = state["target"], state.get("clarify_count", 0)
-    if not target.candidates or count >= MAX_CLARIFY:
+    # 되물을 문장이 없으면(후보 0개 · 후보 하나의 총점 미달) 듣지 않고 끝낸다. 들으면 대답 뒤
+    # 같은 판단이 또 나와 MAX_CLARIFY 까지 헛돈다.
+    if target.clarify_question is None or count >= MAX_CLARIFY:
         return {"response": canned_response(state, CLARIFY_GIVE_UP)}
-    took = deps.tts.speak(target.clarify_question or CLARIFY_GIVE_UP)
+    took = deps.tts.speak(target.clarify_question)
     # 질문을 다 말한 뒤에 들린 호출어는 새로 부른 것이다. 질문 첫머리의 호출어가
     # 한 번 더 잡힌 것은 이보다 이르다.
     question_end = state["utterance"].ended_at

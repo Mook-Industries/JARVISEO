@@ -1,12 +1,12 @@
-"""대상 결정 — 순위·margin·되묻기 문장, 되묻기 대답으로 후보 좁히기, 단서 스위치,
-손 · 말 · 이어 묻기 단서 기권, 말 · 이어 묻기 단서 플래그."""
+"""대상 결정 — 순위·margin·되묻기 문장, 후보 하나의 총점 하한, 되묻기 대답으로 후보 좁히기,
+단서 스위치, 손 · 말 · 이어 묻기 단서 기권, 말 · 이어 묻기 단서 플래그."""
 
 import numpy as np
 import pytest
 
 from jarviseo import config
 from jarviseo.pointing.hands import HandPose
-from jarviseo.pointing.resolver import resolve_target
+from jarviseo.pointing.resolver import MIN_SINGLE_SCORE, resolve_target
 from jarviseo.types import BBox, CueKind, Detection
 
 FRAME = (1920, 1080)
@@ -59,14 +59,54 @@ def test_no_candidates_asks_without_question():
 
 
 def test_single_candidate_is_chosen_with_full_margin():
-    """후보가 하나면 비교 상대가 없으므로 margin 1.0 으로 바로 고른다."""
-    cup = _det("cup", CORNER)
+    """후보가 하나면 비교 상대가 없으므로 margin 1.0 으로 바로 고른다(총점이 하한 이상일 때)."""
+    cup = _det("cup", MIDDLE)
 
     result = _resolve([cup])
 
     assert result.chosen.detection is cup
     assert result.margin == 1.0
     assert not result.needs_clarify
+
+
+def test_lone_corner_candidate_is_not_asserted():
+    """후보가 구석 컵 하나뿐이면(총점 0.14 < 0.3) 단정하지 않는다. 되물을 문장도 없다(#215).
+
+    천장을 가리켰는데 구석 모니터를 답한 턴 23 과 같은 장면. 후보 순위는 기록용으로 남는다.
+    """
+    cup = _det("cup", CORNER)
+
+    result = _resolve([cup])
+
+    assert result.chosen is None
+    assert result.needs_clarify
+    assert result.clarify_question is None
+    assert [c.detection for c in result.candidates] == [cup]
+    assert result.candidates[0].total_score < MIN_SINGLE_SCORE
+
+
+def test_lone_corner_candidate_pointed_at_is_chosen():
+    """구석 컵 하나라도 손이 그 컵을 가리키면 손 점수가 총점을 올려 고른다.
+
+    하한은 손 없는 사진에서만 일한다.
+    """
+    cup = _det("cup", CORNER)  # 중심 (100, 100)
+    to_corner = _hand(base=(340.0, 340.0), tip=(300.0, 300.0))  # 왼쪽 위로 똑바로
+
+    result = _resolve([cup], hand=to_corner)
+
+    assert result.chosen.detection is cup
+    assert result.chosen.total_score >= MIN_SINGLE_SCORE
+
+
+def test_reply_narrowed_to_one_skips_the_floor():
+    """대답으로 구석 컵 하나로 좁혀졌으면 사용자가 고른 것이라 하한을 보지 않고 고른다."""
+    cup, apple = _det("cup", CORNER), _det("apple", MIDDLE)
+
+    result = _resolve([cup, apple], replies=["컵"])
+
+    assert result.chosen.detection is cup
+    assert result.chosen.total_score < MIN_SINGLE_SCORE  # 처음부터 하나였다면 단정 안 했을 점수
 
 
 def test_clear_winner_is_chosen_and_ranked_first():

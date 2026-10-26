@@ -68,6 +68,9 @@ listen(STT + 말을 시작한 순간의 사진) ─▶ (recapture ↺) ─▶ ro
   가리키는 손이 있는데 손가락 선 근처에 후보가 없으면 `resolve` 가 되묻지 않고 손 우선 크롭(상태 `hand_crop`)을 정하고,
   `crop_target` 이 그 사각형을 자른다. 이때 VLM 맥락 문장에는 검출 이름이 없고(`HAND_CONTEXT`), 기록은 `resolved_by=MODEL` 에
   `target_label` 이 빈 턴으로 남는다(#205).
+  성분 질문인데 고를 후보가 없으면(0개 · 후보 하나의 총점 미달) `after_resolve` 가 `ingredient_no_target` 을 돌려주고,
+  `check_ingredient` 가 크롭 대신 사진 전체로 판정한다. 가리킴 질문은 그대로 "다시 가리켜 주세요"로 끝나고, 되물을 문장이 없으면
+  `clarify` 는 대답을 기다리지 않는다(#215).
 - **성분 질문은 VLM 을 부르지 않는다.** 판정은 규칙(`nutrition/`)이 내리고 그 문장을 그대로 읽는다.
   재촬영 안내가 와도 그 문장을 읽고 턴을 끝낸다.
 - 지연은 단계 이름(`route` `detect` `resolve` `crop` `ingredient` `stt` `recall` `vlm` `tts` `total`)으로 모은다.
