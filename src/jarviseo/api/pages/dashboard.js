@@ -817,12 +817,23 @@
     setText("#feed-tag", "CONNECTING");
     syncCamToggle();
 
+    // 휴대폰은 뒤 카메라(가리키는 물건 쪽). 노트북 웹캠은 하나라 facingMode 를 무시한다
+    const video1080 = { width: { ideal: 1920 }, height: { ideal: 1080 } };
     try {
-      camStream = await navigator.mediaDevices.getUserMedia({
-        // 휴대폰은 뒤 카메라(가리키는 물건 쪽). 노트북 웹캠은 하나라 이 값을 무시한다
-        video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: { ideal: "environment" } },
-        audio: false,
-      });
+      try {
+        // ideal 로만 주면 해상도 조건과 겨뤄 휴대폰이 앞 카메라를 고르기도 했다(10/26). 휴대폰은 꼭 뒤로
+        if (!isPhone) throw new Error("not phone");
+        camStream = await navigator.mediaDevices.getUserMedia({
+          video: { ...video1080, facingMode: { exact: "environment" } },
+          audio: false,
+        });
+      } catch (err) {
+        if (err.name === "NotAllowedError") throw err;
+        camStream = await navigator.mediaDevices.getUserMedia({
+          video: { ...video1080, facingMode: { ideal: "environment" } },
+          audio: false,
+        });
+      }
     } catch (err) {
       camStream = null;
       const reasons = {
