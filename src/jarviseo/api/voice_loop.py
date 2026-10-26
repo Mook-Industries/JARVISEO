@@ -159,6 +159,13 @@ class VoiceLoop:
         except ValueError as e:
             raise RuntimeError(str(e)) from None
         p = self._parts
+        # 마이크를 무거운 부품보다 먼저 연다. 클라우드 서버처럼 마이크가 없으면 검출기 · 손 모델을
+        # 만들지 않고 끝난다. 예전에는 손 모델을 만든 뒤 마이크에서 실패해 그 모델이 닫히지 않고
+        # 남았고, 나중에 다른 질문이 torch 를 불러오는 도중 정리(__del__)되면서 그 질문이 영영
+        # 멈췄다(10/26 휴대폰 "대상 검출"에서 멈춤).
+        mic = MicStream(mic_device)
+        mic.__enter__()
+        p["mic"] = mic  # 연 것만 _close 가 닫는다
         p["vlm"] = VLMClient()
         p["dialog"] = DialogMemory(VectorMemory(self.store))
         p["tts"] = TextToSpeech(device=speaker_device)
@@ -170,14 +177,11 @@ class VoiceLoop:
         try:
             from jarviseo.pointing.hands import HandDetector
 
-            hands = HandDetector()
+            hands = p["hands"] = HandDetector()
         except (FileNotFoundError, ImportError) as e:
             log.warning("손 단서 꺼짐(가리킴 v1): %s", e)
             hands = None
         self.pointing = "v2" if hands is not None else "v1"
-
-        p["mic"] = mic = MicStream(mic_device)
-        mic.__enter__()
 
         def speech_end() -> None:
             chime.end()  # 질문 말이 끝나면 종료음(assistant.py 와 같다)
@@ -230,6 +234,9 @@ class VoiceLoop:
         for name in ("collector", "dialog"):
             if name in p:
                 p[name].close()
+        if "hands" in p:
+            # 손 모델은 여기서 닫는다. 가비지 수집에 맡기면 아무 스레드에서나 닫히다가 멈출 수 있다
+            p["hands"].landmarker.close()
         self._parts = {}
 
     # ---- 스레드 ----
