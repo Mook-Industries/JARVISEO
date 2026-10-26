@@ -247,13 +247,16 @@
 
   // 듣는 동안 마이크 소리 크기로 파형을 그린다. 목소리가 없으면(문턱 아래) 납작하게 둔다.
   // 받아쓰기(브라우저)와 같은 마이크를 따로 한 번 더 연다. 권한은 받아쓰기와 같이 묻는다.
+  // 휴대폰(손가락 화면)에서는 열지 않는다. 안드로이드 · 아이폰은 마이크를 한 곳만 쓰게 해서,
+  // 파형용으로 한 번 더 열면 받아쓰기가 소리를 못 받아 "말씀을 듣지 못했어요"로 끝났다(10/26).
   const VOICE_FLOOR = 0.02; // RMS 문턱. 방 소음은 이 아래, 말소리는 0.05~0.3
+  const isPhone = window.matchMedia("(pointer: coarse)").matches;
   const meter = { ctx: null, stream: null, raf: 0 };
   const flatWave = () => waveBars.forEach((b) => (b.style.height = "2px"));
   const startMeter = async () => {
     stopMeter();
     flatWave();
-    if (!navigator.mediaDevices?.getUserMedia) return;
+    if (isPhone || !navigator.mediaDevices?.getUserMedia) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -816,7 +819,8 @@
 
     try {
       camStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
+        // 휴대폰은 뒤 카메라(가리키는 물건 쪽). 노트북 웹캠은 하나라 이 값을 무시한다
+        video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: { ideal: "environment" } },
         audio: false,
       });
     } catch (err) {

@@ -63,6 +63,17 @@ compose() { docker compose --env-file "$ENV_FILE" --env-file "$SECRETS" "$@"; }
 compose pull --quiet api
 compose up -d --remove-orphans
 
+# Caddyfile 은 파일 하나를 컨테이너에 붙인다. git 이 그 파일을 새로 쓰면 컨테이너는 옛 파일을 계속 보고,
+# compose up 도 caddy 설정(compose.yml)이 그대로라 다시 만들지 않는다. 그래서 Caddyfile 을 고쳐도
+# 반영되지 않았다(10/25, #144 의 POST /api/turns 가 계속 접속 비밀번호에 막힘).
+# 컨테이너 안의 파일과 내용이 다르면 caddy 만 다시 만든다(몇 초 끊긴다. 인증서는 볼륨에 남는다).
+want=$(sha256sum < Caddyfile | cut -d' ' -f1)
+have=$(compose exec -T caddy sha256sum /etc/caddy/Caddyfile 2>/dev/null | cut -d' ' -f1 || true)
+if [ "$want" != "$have" ]; then
+  echo "== Caddyfile 이 바뀌어 caddy 를 다시 띄운다"
+  compose up -d --force-recreate --no-deps caddy
+fi
+
 echo "== 스키마 (없는 테이블 · 인덱스만 만든다)"
 for _ in $(seq 1 30); do
   compose exec -T db pg_isready -U jarviseo -d jarviseo >/dev/null 2>&1 && break
