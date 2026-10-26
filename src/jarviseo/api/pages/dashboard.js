@@ -250,9 +250,14 @@
   const VOICE_FLOOR = 0.02; // RMS 문턱. 방 소음은 이 아래, 말소리는 0.05~0.3
   const meter = { ctx: null, stream: null, raf: 0 };
   const flatWave = () => waveBars.forEach((b) => (b.style.height = "2px"));
+  // 휴대폰은 마이크를 한 곳만 쓸 수 있다. 받아쓰기(SpeechRecognition)가 듣는 동안 파형용으로 마이크를
+  // 한 번 더 열면 받아쓰기가 소리를 못 받아 호출 뒤에 멈춘다(안드로이드 크롬 · iOS 사파리). 휴대폰에서는 파형을 쉰다.
+  const IS_MOBILE =
+    /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.matchMedia("(pointer: coarse)").matches;
   const startMeter = async () => {
     stopMeter();
     flatWave();
+    if (IS_MOBILE) return;
     if (!navigator.mediaDevices?.getUserMedia) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
