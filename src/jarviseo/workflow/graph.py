@@ -19,6 +19,8 @@
     generate ─(answered)─▶ speak ─▶ log ─▶ END,  generate ─(dropped: 다시 불러 답을 버림)─▶ log
     clarify ─(called_again: 되묻는 중이나 대답을 기다리는 중에 다시 불림)─▶ log
 
+resolve 의 chosen 에는 손 우선 크롭도 든다(가리키는 손이 있는데 손가락 선 근처에 후보가 없음).
+그때 crop_target 은 고른 박스 대신 손끝 방향 사각형을 자른다.
 노드가 하는 일은 nodes/ 의 각 파일 머리말에 있다.
 호출어 기다리기와 끼어들기는 그래프 밖(scripts/assistant.py)에서 한다.
 """
