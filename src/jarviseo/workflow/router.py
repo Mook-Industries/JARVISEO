@@ -10,6 +10,10 @@
                위치 말 바로 뒤의 거(왼쪽꺼·위에 있는 거), "가리키", 아무것도 안 붙은 "뭐야?"
 - GENERAL    : 그 밖의 전부. 찾기("어떤 게 X야?")·장면("뭐가 보여?")·영역("왼쪽에는 뭐가 있지?")
                질문은 VLM 이 전체 사진을 봐야 풀려서 일부러 여기 둔다
+
+글자로 GENERAL 이어도 가리키는 손이 보이면 intent 노드가 가리킴으로 보낸다(#217). 사진을 봐야
+하는 판단이라 여기서는 하지 않고, 그때 그대로 둘 장면 · 찾기 · 영역 질문만 asks_whole_scene 으로
+가려 준다.
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ import re
 
 from jarviseo.types import Intent
 
-__all__ = ["classify_intent"]
+__all__ = ["asks_whole_scene", "classify_intent"]
 
 # 띄어쓰기를 지운 글자와 맞춰 보므로 낱말도 띄어쓰기 없이 적는다.
 # "들어있"은 "나트륨 얼마나 들어 있어?"도 성분 길로 보낸다.
@@ -71,6 +75,27 @@ _POSITION_ONE = re.compile(r"(왼쪽|오른쪽|가운데|위|아래|옆|앞|뒤)
 _THERE = re.compile(r"저기(?!요)")
 # 앞에 아무 말도 없는 질문은 보고 있는 물건을 묻는다.
 _BARE = ("뭐야", "뭐지", "뭐예요", "뭐에요", "뭐냐")
+# 사진 전체를 봐야 풀리는 말. 손이 보여도 GENERAL 로 둔다(#217).
+# 찾기 · 비교("어떤 게 X야?" · "가장 큰 물건") — 여러 물건을 견줘야 해서 손끝 크롭에 다 안 들어간다.
+# 장면("뭐가 보여?" · "여기 어디야?") — 물건 하나가 아니라 둘러싼 장면을 묻는다.
+_WHOLE_SCENE = (
+    "어떤게",
+    "어떤거",
+    "어떤것",
+    "어느게",
+    "어느거",
+    "어느것",
+    "둘중",
+    "가장",
+    "제일",
+    "뭐가보여",
+    "뭐가있어",
+    "뭐가있지",
+    "뭐있어",
+    "여기어디",
+)
+# 영역 — 위치 말 뒤에 "에는 · 엔"이 붙으면 그 자리에 있는 것들을 묻는다("왼쪽에는 뭐가 있지?").
+_AREA = re.compile(r"(왼쪽|오른쪽|가운데|위|아래|옆|앞|뒤)(칸)?(에는|엔)")
 
 
 def classify_intent(text: str) -> Intent:
@@ -84,6 +109,12 @@ def classify_intent(text: str) -> Intent:
     if _points_at_one(compact):
         return Intent.POINTING
     return Intent.GENERAL
+
+
+def asks_whole_scene(text: str) -> bool:
+    """찾기 · 비교 · 장면 · 영역 질문처럼 사진 전체를 봐야 풀리는 말인지."""
+    compact = "".join(text.split())
+    return any(word in compact for word in _WHOLE_SCENE) or bool(_AREA.search(compact))
 
 
 def _points_at_one(compact: str) -> bool:
