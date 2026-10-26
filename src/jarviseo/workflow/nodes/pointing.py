@@ -2,20 +2,22 @@
 
 detect      : 사진에서 물체 후보와 가리키는 손을 찾는다 (pointing/detector.py · hands.py).
               이어 묻기 단서가 쓸 직전 대상(같은 세션 바로 전 가리킴 턴)도 DB 에서 한 번 읽는다
-resolve     : 후보 중 가리킨 대상을 고른다 (pointing/resolver.py)
+resolve     : 후보 중 가리킨 대상을 고른다 (pointing/resolver.py). 가리키는 손이 있는데 손가락 선
+              근처에 후보가 없으면 되묻지 않고 손끝 방향을 자르기로 정한다 (pointing/crop.py)
 clarify     : 1·2위가 비슷하면 되묻고 대답을 듣는다. 사진은 다시 고르지 않는다.
               되묻는 말 뒤에 시작음, 대답이 끝나면 종료음을 낸다(처음 질문할 때와 같다)
               2번 넘거나 대답이 없거나 후보가 없으면 "다시 가리켜 주세요"로 끝낸다.
               되묻는 중이나 대답을 기다리는 중에 "자비서"라고 다시 부르면 그 말은 대답이 아니라
               새 질문이다. 빈 대답으로 기록만 하고 끝내서, 새 질문은 다음 턴(BARGE_IN)이 받는다.
               되묻는 말을 합성하지 못해 소리가 안 났으면 대답을 기다리지 않고 바로 끝낸다
-crop_target : 고른 대상을 여백 15% 넣어 잘라낸다 (pointing/crop.py). 성분 판정은 이 크롭 그대로,
-              VLM 에는 generate 가 크기를 맞춰 보낸다
+crop_target : 고른 대상을 여백 15% 넣어 잘라낸다 (pointing/crop.py). 손 우선 크롭이면 그 사각형을
+              그대로 자른다. 성분 판정은 이 크롭 그대로, VLM 에는 generate 가 크기를 맞춰 보낸다
 """
 
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -24,6 +26,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from jarviseo.memory import SessionTurn, TurnInference
 from jarviseo.pointing.crop import crop_target as cut_target
+from jarviseo.pointing.crop import hand_crop_region
 from jarviseo.pointing.hands import pick_pointing_hand
 from jarviseo.pointing.labels import korean_name
 from jarviseo.workflow.deps import GraphDeps
@@ -114,7 +117,16 @@ def resolve(state: JarviseoState, deps: GraphDeps) -> dict:
         # 이어 묻기 단서가 "그거"를 읽을 직전 대상. 이어 묻기 단서가 꺼져 있으면 쓰이지 않는다.
         prev_target_label=state.get("prev_target_label"),
     )
-    return {"target": target}
+    # 손 크롭 판단은 후보 · 손 · 사진 크기만 본다. 셋 다 턴 안에서 안 바뀌어서, 선 위에 후보가 있어
+    # 되물었다면 대답 뒤에 다시 돌아도 손 크롭이 걸리지 않는다(사용자가 고른 후보를 덮지 않는다).
+    region = hand_crop_region(state["detections"], state.get("hand"), state["frame"].size)
+    if region is None:
+        return {"target": target, "hand_crop": None}
+    # 손가락 선에서 벗어난 후보를 고른 것으로 남기면 target_label 에 틀린 이름이 기록되고
+    # 이어 묻기(v5)가 다음 턴에 그 이름을 읽는다. 후보 순위는 기록용으로 그대로 둔다.
+    # needs_clarify=False 라 after_resolve 가 그대로 crop_target 으로 보낸다(그래프 선은 그대로).
+    target = replace(target, chosen=None, needs_clarify=False, clarify_question=None)
+    return {"target": target, "hand_crop": region}
 
 
 def after_resolve(state: JarviseoState) -> Literal["ambiguous", "chosen"]:
@@ -184,5 +196,10 @@ def _called_again(state: JarviseoState) -> dict:
 
 
 def crop_target(state: JarviseoState, deps: GraphDeps) -> dict:
-    bbox = state["target"].chosen.detection.bbox
-    return {"crop": cut_target(state["frame"].image, bbox)}
+    image = state["frame"].image
+    # 손 우선 크롭이면 chosen 이 None 이라 먼저 본다.
+    region = state.get("hand_crop")
+    if region is not None:
+        # 사각형이 이미 최종 크기(한 변 0.6H)다. 여백 15% 를 또 더하면 잰 크롭과 달라진다.
+        return {"crop": cut_target(image, region, margin=0.0)}
+    return {"crop": cut_target(image, state["target"].chosen.detection.bbox)}

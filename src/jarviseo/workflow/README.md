@@ -65,6 +65,9 @@ listen(STT + 말을 시작한 순간의 사진) ─▶ (recapture ↺) ─▶ ro
 - 턴이 끝나면 질문·대답을 대화 기억(`DialogMemory`)에 맡긴다. 빈 대답, 미리 정한 안내 문장(`CANNED`),
   기억을 물은 턴은 넣지 않는다. 새 내용이 없고, 넣으면 다음 기억 검색에서 원래 기록보다 먼저 찾힌다.
 - VLM 과 성분 판정에는 가리킨 대상의 **크롭**이 간다. 기록(`used_frame`)에는 원본 장면이 남는다.
+  가리키는 손이 있는데 손가락 선 근처에 후보가 없으면 `resolve` 가 되묻지 않고 손 우선 크롭(상태 `hand_crop`)을 정하고,
+  `crop_target` 이 그 사각형을 자른다. 이때 VLM 맥락 문장에는 검출 이름이 없고(`HAND_CONTEXT`), 기록은 `resolved_by=MODEL` 에
+  `target_label` 이 빈 턴으로 남는다(#205).
 - **성분 질문은 VLM 을 부르지 않는다.** 판정은 규칙(`nutrition/`)이 내리고 그 문장을 그대로 읽는다.
   재촬영 안내가 와도 그 문장을 읽고 턴을 끝낸다.
 - 지연은 단계 이름(`route` `detect` `resolve` `crop` `ingredient` `stt` `recall` `vlm` `tts` `total`)으로 모은다.
