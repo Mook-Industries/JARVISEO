@@ -265,15 +265,22 @@ def draw_boxes(state: JarviseoState) -> np.ndarray | None:
 
 
 def save_photos(state: JarviseoState, folder: Path = PHOTO_DIR) -> None:
-    """턴의 원본 · 후보 박스 · 크롭을 jpg 로 남긴다. 이름은 turn 번호."""
+    """턴의 원본 · 후보 박스 · 크롭을 jpg 로 남긴다. 이름은 turn 번호.
+
+    못 쓰면(서버 tmpfs 200MB 가 꽉 참 등) 경고만 남긴다. 대답은 이미 나왔으니
+    질문을 실패로 돌리지 않는다.
+    """
     frame = state.get("frame")
     if frame is None:
         return
     name = f"turn{state.get('turn_id', 'x')}"
-    folder.mkdir(parents=True, exist_ok=True)
     shots = (("", frame.image), ("_boxes", draw_boxes(state)), ("_crop", state.get("crop")))
-    for suffix, image in shots:
-        if image is not None:
-            ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
-            if ok:  # cv2.imwrite 는 윈도우 한글 경로를 못 쓴다
-                (folder / f"{name}{suffix}.jpg").write_bytes(buf.tobytes())
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        for suffix, image in shots:
+            if image is not None:
+                ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                if ok:  # cv2.imwrite 는 윈도우 한글 경로를 못 쓴다
+                    (folder / f"{name}{suffix}.jpg").write_bytes(buf.tobytes())
+    except OSError as err:
+        log.warning("턴 사진을 못 남김 (%s): %s", folder, err)

@@ -166,6 +166,20 @@ class SeesBarcodeImage(PanelOnlyInWholePhoto):
         return super().check(image, allergens)
 
 
+def test_answer_survives_full_photo_folder(tmp_path, monkeypatch):
+    """사진 폴더가 꽉 차도(서버 tmpfs 200MB) 대답은 그대로 돌려준다. 사진만 못 남긴다."""
+    import errno
+    from pathlib import Path
+
+    def full(self, data):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(Path, "write_bytes", full)
+    web = web_with(tmp_path, CupOnTheLeft(), PanelOnlyInWholePhoto(IMAGE.shape))
+    state, spoken = web.ask("이거 먹어도 돼?", IMAGE)
+    assert spoken == ["해당 제품에는 밀이 들어 있어요."] and state.get("turn_id")
+
+
 def test_crop_check_gets_whole_photo_for_barcode(tmp_path):
     """크롭을 읽을 때 사진 전체를 바코드용으로 같이 넘긴다. 전체를 다시 읽을 때는 안 넘긴다."""
     checker = SeesBarcodeImage(IMAGE.shape)
