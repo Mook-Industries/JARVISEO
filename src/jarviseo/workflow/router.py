@@ -7,9 +7,14 @@
 - INGREDIENT : 먹어도·성분·알레르기·알러지. "이거 먹어도 돼?"에 지시어도 있어서 가리킴보다 먼저 본다
 - RECALL     : 지난 일을 묻는 말. "아까 본 그거"에 지시어도 있어서 가리킴보다 먼저 본다
 - POINTING   : 물건 하나를 집는 말 — 지시어(이거·이건·쟤), "저기"(저기요는 빼고),
-               위치 말 바로 뒤의 거(왼쪽꺼·위에 있는 거), "가리키", 아무것도 안 붙은 "뭐야?"
+               위치 말 바로 뒤의 거(왼쪽꺼·위에 있는 거), "가리키", 아무것도 안 붙은 "뭐야?",
+               고르는 말(이 병 · 왼쪽 컵 · 빨간 거 · 보라색 뭐야?, #166)
 - GENERAL    : 그 밖의 전부. 찾기("어떤 게 X야?")·장면("뭐가 보여?")·영역("왼쪽에는 뭐가 있지?")
                질문은 VLM 이 전체 사진을 봐야 풀려서 일부러 여기 둔다
+
+고르는 말은 띄어쓰기를 지우지 않고 낱말로 본다. 지우면 "이 병원"이 "이 병"에 걸린다.
+낱말표는 말 단서(pointing/cues.py · labels.py)의 것을 그대로 써서, 여기서 가리킴으로 보낸 말을
+말 단서도 읽는다.
 
 글자로 GENERAL 이어도 가리키는 손이 보이면 intent 노드가 가리킴으로 보낸다(#217). 사진을 봐야
 하는 판단이라 여기서는 하지 않고, 그때 그대로 둘 장면 · 찾기 · 영역 질문만 asks_whole_scene 으로
@@ -20,6 +25,7 @@ from __future__ import annotations
 
 import re
 
+from jarviseo.pointing.cues import lang_role
 from jarviseo.types import Intent
 
 __all__ = ["asks_whole_scene", "classify_intent"]
@@ -97,6 +103,18 @@ _WHOLE_SCENE = (
 # 영역 — 위치 말 뒤에 "에는 · 엔"이 붙으면 그 자리에 있는 것들을 묻는다("왼쪽에는 뭐가 있지?").
 _AREA = re.compile(r"(왼쪽|오른쪽|가운데|위|아래|옆|앞|뒤)(칸)?(에는|엔)")
 
+# --- 고르는 말(#166) — 띄어쓴 낱말로 본다 ---------------------------------------------
+# cues.parse_lang 과 같은 낱말 나누기
+_WORD = re.compile(r"[^\s?!.,~]+")
+# 뒤에 오는 종류 이름을 꾸미는 말("이 병" · "그 컵")
+_DETERMINERS = ("이", "그", "저")
+# 물건을 받는 말. 게 · 걸 · 건은 거가 · 거를 · 거는이 줄어든 꼴이라 조사 떼기로 안 잡혀 따로 적는다.
+_THING = ("거", "꺼", "것", "게", "걸", "건")
+# 위치 말과 물건 사이에 끼는 말("위에 있는 병")
+_LINKS = ("있는", "놓인", "보이는")
+# 물건을 고르는 속성 말
+_ATTRIBUTES = ("color", "position", "size")
+
 
 def classify_intent(text: str) -> Intent:
     """질문 글자로 의도를 정한다."""
@@ -107,6 +125,11 @@ def classify_intent(text: str) -> Intent:
     if any(word in compact for word in _RECALL):
         return Intent.RECALL
     if _points_at_one(compact):
+        return Intent.POINTING
+    # 말 단서가 "왼쪽" · "노란"을 읽어 고르므로 가리킴으로 보낸다. 말 단서 없이 보내면
+    # 가운데 · 손으로만 골라 사진 전체를 VLM 이 보는 것보다 나빠서, 말 단서를 켤 때 같이 켰다
+    # (10/22 결정 ③, #166).
+    if _names_one(text):
         return Intent.POINTING
     return Intent.GENERAL
 
@@ -124,3 +147,33 @@ def _points_at_one(compact: str) -> bool:
     if _POSITION_ONE.search(compact) or _THERE.search(compact):
         return True
     return compact.rstrip("?!.~") in _BARE
+
+
+def _names_one(text: str) -> bool:
+    """띄어쓴 원문이 고르는 말로 물건 하나를 집는지.
+
+    "이 병" · "왼쪽 컵" · "빨간 거" · "위에 있는 병" · "보라색 뭐야?" 꼴이다.
+
+    이웃한 낱말끼리 본다. 고르는 말이 있어도 "책 추천해 줘" · "작은 방 정리"처럼 물건을 집지 않으면
+    일반 질문이다. 붙여 쓴 "왼쪽컵"은 못 잡는다 — 말 단서도 똑같이 못 읽어서 둘이 어긋나지 않는다.
+    """
+    words = _WORD.findall(text)
+    roles = [lang_role(w) for w in words]
+
+    def is_thing(i: int) -> bool:
+        return i < len(words) and (roles[i] == "kind" or words[i] in _THING)
+
+    for i, (word, role) in enumerate(zip(words, roles, strict=True)):
+        if word in _DETERMINERS and i + 1 < len(words) and roles[i + 1] == "kind":
+            return True  # 이 병 · 그 컵
+        if role in _ATTRIBUTES and is_thing(i + 1):
+            return True  # 흰색 컵 · 왼쪽 컵 · 빨간 거 · 작은 거
+        if role == "position" and i + 1 < len(words) and words[i + 1] in _LINKS and is_thing(i + 2):
+            return True  # 위에 있는 병
+    # 고르는 말만 있고 끝이 단독 질문: "보라색 뭐야?" · "컵 뭐야?"
+    if len(words) < 2 or words[-1] not in _BARE:
+        return False
+    return all(
+        w in _DETERMINERS or r in ("kind", *_ATTRIBUTES)
+        for w, r in zip(words[:-1], roles[:-1], strict=True)
+    )

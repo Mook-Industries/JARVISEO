@@ -631,14 +631,16 @@ def test_resolve_passes_the_photo_for_color_words():
     assert seen["image"].shape == FULL
 
 
-def test_real_resolver_uses_language_cue_when_switched_on(monkeypatch):
-    """말 단서 플래그를 켜면 실제 resolve_target 이 "왼쪽 컵"으로 되묻지 않고 왼쪽 컵을 고른다."""
-    monkeypatch.setattr(config, "ENABLE_LANGUAGE_CUE", True)
-    deps = _deps(["저거 왼쪽 컵 뭐야?"])
+def test_picking_words_reach_language_cue_without_demonstrative():
+    """지시어 없이 "왼쪽 컵 뭐야?"만 해도 라우터가 가리킴으로 보내고(#166),
+    실제 resolve_target 이 말 단서로 되묻지 않고 왼쪽 컵을 고른다.
+    """
+    deps = _deps(["왼쪽 컵 뭐야?"])
     deps.resolve = resolve_target
 
     result = build_graph(deps).invoke({})
 
+    assert result["intent"] is Intent.POINTING
     assert deps.tts.spoken == ["컵이에요."]  # 되묻는 말 없이 바로 답
     assert result["target"].chosen.detection is TWO_CUPS[0]
     assert [s.kind.value for s in result["target"].chosen.cue_scores] == ["center", "lang"]

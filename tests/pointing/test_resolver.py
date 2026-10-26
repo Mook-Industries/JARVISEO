@@ -352,31 +352,28 @@ def _kinds(candidate) -> list[str]:
     return [s.kind.value for s in candidate.cue_scores]
 
 
-def test_language_cue_is_off_by_default(monkeypatch):
-    """플래그가 꺼져 있으면(기본) "왼쪽 컵"이어도 말 단서를 안 쓴다 — 지금 실제 비서 동작 그대로."""
-    monkeypatch.setattr(config, "ENABLE_LANGUAGE_CUE", False)
-    result = _ask([_det("cup", LEFT), _det("cup", RIGHT)], "왼쪽 컵 뭐야?")
+def test_language_cue_is_on_by_default():
+    """기본값에 말 단서가 들어 있다(s04 측정으로 켬, #166).
 
-    assert result.needs_clarify  # 대칭 컵 둘이라 v1 처럼 되묻는다
-    assert all(_kinds(c) == ["center"] for c in result.candidates)
-
-
-def test_language_cue_on_picks_left_cup_without_asking(monkeypatch):
-    """플래그를 켜면 "왼쪽 컵"이 대칭 컵 둘의 되묻기를 없애고 왼쪽을 고른다."""
-    monkeypatch.setattr(config, "ENABLE_LANGUAGE_CUE", True)
+    "왼쪽 컵"이 대칭 컵 둘의 되묻기를 없앤다.
+    """
     result = _ask([_det("cup", LEFT), _det("cup", RIGHT)], "왼쪽 컵 뭐야?")
 
     assert result.chosen.detection.bbox == LEFT
     assert _kinds(result.chosen) == ["center", "lang"]
 
 
-def test_ablation_switch_turns_language_cue_on_regardless_of_flag(monkeypatch):
-    """ablation 은 단서를 직접 골라 켠다. 플래그는 실제 비서의 기본값만 정한다."""
-    monkeypatch.setattr(config, "ENABLE_LANGUAGE_CUE", False)
-    cups = [_det("cup", LEFT), _det("cup", RIGHT)]
-    result = _ask(cups, "오른쪽 컵 뭐야?", enabled_cues={CueKind.CENTER, CueKind.LANG})
+def test_ablation_switch_leaves_language_cue_out():
+    """ablation 은 단서를 직접 골라 켠다.
 
-    assert result.chosen.detection.bbox == RIGHT
+    말 단서를 빼면(v1) "왼쪽 컵"이어도 대칭 컵 둘을 되묻는다.
+    """
+    result = _ask(
+        [_det("cup", LEFT), _det("cup", RIGHT)], "왼쪽 컵 뭐야?", enabled_cues={CueKind.CENTER}
+    )
+
+    assert result.needs_clarify
+    assert all(_kinds(c) == ["center"] for c in result.candidates)
 
 
 def test_language_cue_abstains_without_words():

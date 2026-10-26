@@ -1,7 +1,8 @@
 """키워드 라우터가 성분 → 기억 → 가리킴 → 나머지 순으로 의도를 정하는지 확인한다.
 손이 보여도 GENERAL 로 둘 장면 · 찾기 · 영역 질문을 가려내는지도 본다(#217).
+"왼쪽 컵 뭐야?"처럼 고르는 말도 가리킴으로 보내는지 본다(#166).
 
-새 사례는 가리킴 평가셋을 찍으며 적은 실제 발화(#147)에서 뽑았다.
+새 사례는 가리킴 평가셋을 찍으며 적은 실제 발화(#147 · 말 · 맥락 세션 s04)에서 뽑았다.
 """
 
 import pytest
@@ -169,3 +170,65 @@ def test_whole_scene_questions_are_flagged(text):
 def test_single_object_questions_are_not_flagged(text):
     """물건 하나를 묻거나 사진과 상관없는 질문은 걸리지 않는다. 손이 있을 때만 가리킴으로 간다."""
     assert not asks_whole_scene(text)
+
+
+# --- 고르는 말 (#166) -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "이 병 뭐야?",  # 이 · 그 · 저 + 종류
+        "이 텀블러 뭐야?",  # 별칭(bottle)
+        "그 컵 씻어야 돼?",
+        "흰색 컵 뭐야?",  # 색 · 위치 · 크기 + 종류
+        "왼쪽 컵 뭐야?",
+        "큰 병 뭐야?",
+        "작은 거 뭐야?",  # 속성 + 거
+        "위에 있는 병 뭐야?",  # 위치 + 있는 + 종류
+        "보라색 뭐야?",  # 고르는 말만 + 단독 질문
+        "컵 뭐야?",
+    ],
+)
+def test_picking_words_are_pointing(text):
+    """고르는 말로 물건 하나를 집는 질문은 가리킴이다(s04 에서 뽑은 꼴).
+
+    말 단서가 그 말을 읽는다.
+    """
+    assert classify_intent(text) is Intent.POINTING
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "책 추천해 줘",  # 종류 낱말이 있어도 물건을 집지 않는다
+        "컵라면 맛있게 끓이는 법 알려줘",
+        "작은 방 정리하는 법 알려줘",  # 크기 말 뒤가 종류 · 거가 아님
+        "오늘 큰 비 와?",
+        "왼쪽으로 가야 돼?",
+        "이 근처 맛집 알려줘",  # 근처는 관계 말
+        "이 병원 몇 시까지 해?",  # 띄어쓰기를 지우면 "이병"에 걸린다
+        "가장 큰 물건이 뭐야?",  # 비교 질문
+        "오른쪽 칸에는 뭐가 있지?",  # 영역 질문
+    ],
+)
+def test_words_that_do_not_pick_one_stay_general(text):
+    """고르는 말이 섞여도 물건 하나를 집지 않는 질문은 GENERAL 이다."""
+    assert classify_intent(text) is Intent.GENERAL
+
+
+def test_joined_words_are_not_read():
+    """붙여 쓴 "왼쪽컵"은 못 잡는다. 말 단서(parse_lang)도 낱말로 읽어서 둘이 어긋나지 않는다."""
+    assert classify_intent("왼쪽컵 뭐야?") is Intent.GENERAL
+
+
+@pytest.mark.parametrize(
+    ("text", "intent"),
+    [
+        ("노란 봉지 먹어도 돼?", Intent.INGREDIENT),
+        ("아까 본 노란 컵 뭐였지?", Intent.RECALL),
+    ],
+)
+def test_ingredient_and_recall_still_come_first(text, intent):
+    """고르는 말이 있어도 성분 · 기억 낱말이 먼저다."""
+    assert classify_intent(text) is intent
