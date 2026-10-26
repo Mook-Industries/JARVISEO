@@ -78,6 +78,7 @@ class JarviseoState(TypedDict, total=False):
     # --- 가리킴 ---
     detections: list[Detection]
     # 가리키는 손. detect 가 YOLO 와 같이 한 번 찾는다. 없으면 None(손 단서 기권).
+    # 글자로 GENERAL 인 질문은 route 가 먼저 찾아, 가리키는 손이면 가리킴으로 보내며 넣는다(#217).
     hand: HandPose | None
     # 같은 세션에서 바로 전 가리킴 턴(60초 안)에 고른 대상의 검출 이름("cup"). 이어 묻기 단서(v5)가
     # "그거 씻어야 돼?"의 "그거"를 이 대상으로 읽는다. detect 가 턴마다 한 번 DB 에서 채운다.

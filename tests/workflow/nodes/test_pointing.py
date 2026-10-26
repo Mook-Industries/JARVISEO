@@ -828,3 +828,66 @@ def test_hand_crop_turn_is_recorded_as_model_without_label(store):
         row = db.get(TurnInference, result["turn_id"])
         assert (row.resolved_by, row.target_label, row.is_reask) == ("MODEL", None, False)
         assert row.detected_count == 2
+
+
+# --- 라우터 손 신호 (#217) -------------------------------------------------------------
+
+
+def test_general_question_with_pointing_hand_goes_pointing():
+    """지시어가 없는 물건 질문도 가리키는 손이 보이면 가리킴 길로 간다.
+
+    손이 가리킨 오른쪽 컵을 고르고, 손은 route 에서 한 번만 찾아 detect 가 다시 찾지 않는다.
+    """
+    hands = _Hands([_hand(pointing=True)])  # 오른쪽 컵을 가리키는 손
+    deps = _deps(["이 약 하루에 몇 번 먹어야 돼?"], hands=hands)
+    deps.resolve = resolve_target
+
+    result = build_graph(deps).invoke({})
+
+    assert result["intent"] is Intent.POINTING
+    assert hands.calls == 1  # route 에서 찾은 손을 detect 가 그대로 썼다
+    assert result["target"].chosen.detection is TWO_CUPS[1]
+    ((sent, question, _),) = deps.vlm.asked
+    assert sent.image.shape == CROP  # 사진 전체가 아니라 고른 컵의 크롭
+    assert question == POINTING_CONTEXT.format(name="컵", question="이 약 하루에 몇 번 먹어야 돼?")
+
+
+@pytest.mark.parametrize("seen", [[], [_hand(pointing=False)]], ids=["no_hand", "resting_hand"])
+def test_general_question_without_pointing_hand_stays_general(seen):
+    """손이 없거나 키보드에 얹은 손뿐이면 지금처럼 GENERAL · 사진 전체다.
+
+    손은 route 에서 한 번 본다.
+    """
+    hands = _Hands(seen)
+    deps = _deps(["이 약 하루에 몇 번 먹어야 돼?"], hands=hands)
+
+    result = build_graph(deps).invoke({})
+
+    assert result["intent"] is Intent.GENERAL
+    assert hands.calls == 1
+    assert deps.vlm.asked[0][0].image.shape == FULL
+    assert deps.resolve.calls == []  # 가리킴 길을 안 탔다
+
+
+def test_whole_scene_question_skips_hand_signal():
+    """장면 질문("뭐가 보여?")은 가리키는 손이 보여도 GENERAL 이고, 손을 찾지도 않는다."""
+    hands = _Hands([_hand(pointing=True)])
+    deps = _deps(["뭐가 보여?"], hands=hands)
+
+    result = build_graph(deps).invoke({})
+
+    assert result["intent"] is Intent.GENERAL
+    assert hands.calls == 0
+    assert deps.vlm.asked[0][0].image.shape == FULL
+
+
+def test_hand_signal_needs_pointing_parts():
+    """검출기가 없으면(가리킬 수 없음) 손을 찾지 않고 GENERAL 이다."""
+    hands = _Hands([_hand(pointing=True)])
+    deps = _deps(["이 약 하루에 몇 번 먹어야 돼?"], hands=hands)
+    deps.detector = None
+
+    result = build_graph(deps).invoke({})
+
+    assert result["intent"] is Intent.GENERAL
+    assert hands.calls == 0
