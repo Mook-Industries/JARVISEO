@@ -48,16 +48,21 @@ def speech_span(audio: np.ndarray) -> tuple[float, float]:
     return loud[0] * LEVEL_BLOCK / SAMPLE_RATE, (loud[-1] + 1) * LEVEL_BLOCK / SAMPLE_RATE
 
 
-def real_wakes(speech: str | None = None) -> list[dict]:
-    """평가용 실제 "자비서" 녹음 행. speech 를 주면 그 말투(정상·끊음·늘임)만, 잘림은 늘 뺀다."""
-    with (EVAL / "speech.csv").open(encoding="utf-8") as f:
-        kinds = {r["file"]: r["speech"] for r in csv.DictReader(f)}
-    with (EVAL / "metadata.csv").open(encoding="utf-8") as f:
+def real_wakes(speech: str | None = None, folder: Path = EVAL) -> list[dict]:
+    """평가용 실제 "자비서" 녹음 행. speech 를 주면 그 말투(정상·끊음·늘임)만, 잘림은 늘 뺀다.
+
+    folder 는 eval 이나 최종 평가용 test 폴더다. speech.csv(말투)가 없으면 말투는 "?" 다.
+    """
+    kinds = {}
+    if (folder / "speech.csv").exists():
+        with (folder / "speech.csv").open(encoding="utf-8") as f:
+            kinds = {r["file"]: r["speech"] for r in csv.DictReader(f)}
+    with (folder / "metadata.csv").open(encoding="utf-8") as f:
         rows = [r for r in csv.DictReader(f) if r["label"] == "wake" and r["source"] != "tts"]
     rows = [
         {**r, "speech": kinds.get(r["file"], "?")}
         for r in rows
-        if (EVAL / r["file"]).exists() and kinds.get(r["file"]) != "잘림"
+        if (folder / r["file"]).exists() and kinds.get(r["file"]) != "잘림"
     ]
     return [r for r in rows if speech is None or r["speech"] == speech]
 

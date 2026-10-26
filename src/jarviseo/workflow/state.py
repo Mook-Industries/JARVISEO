@@ -20,6 +20,7 @@ from jarviseo.nutrition.service import IngredientCheck
 from jarviseo.pointing.hands import HandPose
 from jarviseo.types import (
     AssistantResponse,
+    BBox,
     Detection,
     Frame,
     Intent,
@@ -63,6 +64,11 @@ class JarviseoState(TypedDict, total=False):
     # 호출어·필러를 빼기 전 받아쓴 원문 (turn_voice.stt_raw_text)
     stt_raw_text: str | None
     frame: Frame | None
+    # 호출어 2단계 확인(voice/wakecheck.py)에서 호출어가 아니라고 본 턴이면 True.
+    # 되묻기·대답·기록 없이 끝난다. 확인에서 받아쓴 글자는 통과한 턴에도 wake_check_text 에
+    # 남는다(받아쓰지 못했으면 None).
+    wake_rejected: bool
+    wake_check_text: str | None
 
     # --- 의도 · 기억 ---
     intent: Intent
@@ -73,7 +79,15 @@ class JarviseoState(TypedDict, total=False):
     detections: list[Detection]
     # 가리키는 손. detect 가 YOLO 와 같이 한 번 찾는다. 없으면 None(손 단서 기권).
     hand: HandPose | None
+    # 같은 세션에서 바로 전 가리킴 턴(60초 안)에 고른 대상의 검출 이름("cup"). 이어 묻기 단서(v5)가
+    # "그거 씻어야 돼?"의 "그거"를 이 대상으로 읽는다. detect 가 턴마다 한 번 DB 에서 채운다.
+    # 턴마다 그래프를 새로 불러 상태가 남지 않아서다. 없으면 None(이어 묻기 단서 기권).
+    prev_target_label: str | None
     target: TargetResolution
+    # 손 우선 크롭 사각형(픽셀). 가리키는 손이 있는데 손가락 선 근처에 후보가 없으면 resolve 가
+    # 채우고, crop_target 이 고른 박스 대신 이 사각형을 자른다. None 이면 고른 박스로 자른다.
+    # TargetResolution(types.py)은 세 사람의 계약이라 "박스 없는 선택"을 여기에 따로 둔다.
+    hand_crop: BBox | None
     # 고른 대상만 잘라낸 사진. VLM 과 성분 판정에는 전체 프레임 대신 이것이 간다.
     crop: np.ndarray
     # 성분 판정 결과. log 노드가 store.log_ingredient 로 turn_ingredient 에 남긴다.

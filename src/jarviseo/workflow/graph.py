@@ -3,15 +3,16 @@
 이 파일은 노드(nodes/)를 잇기만 한다. 질문 한 번이 graph.invoke() 한 번이다.
 분기 함수는 "무슨 일이 있었나"(결과 이름)만 돌려주고, 어느 노드로 갈지는 아래 매핑이 정한다.
 
-    listen ─(no_question)─▶ END
+    listen ─(no_question · wake_rejected: 호출어 2단계 확인에서 걸러짐)─▶ END
       │ └─(bad_frame)─▶ recapture ↺(still_bad) ─(gave_up)──────────────────────▶ speak
       ▼                        │(good)
     route ◀────────────────────┘
       ├─(recall)───────▶ recall ───────────────────────────────────────────────▶ generate
       ├─(needs_target)─▶ detect ─▶ resolve ⇄(ambiguous/replied) clarify ─(gave_up)▶ speak
-      │                              └─(chosen)─▶ crop_target
-      │                                             ├─(ingredient)─▶ check_ingredient
-      │                                             └─(answer)─────▶ generate
+      │                              ├─(chosen)─▶ crop_target
+      │                              │              ├─(ingredient)─▶ check_ingredient
+      │                              │              └─(answer)─────▶ generate
+      │                              └─(ingredient_no_target)─▶ check_ingredient (사진 전체)
       ├─(ingredient: 가리킬 부품 없음)───────────────────────────────▶ check_ingredient
       └─(answer)──────────────────────────────────────────────────────▶ generate
 
@@ -19,6 +20,10 @@
     generate ─(answered)─▶ speak ─▶ log ─▶ END,  generate ─(dropped: 다시 불러 답을 버림)─▶ log
     clarify ─(called_again: 되묻는 중이나 대답을 기다리는 중에 다시 불림)─▶ log
 
+resolve 의 chosen 에는 손 우선 크롭도 든다(가리키는 손이 있는데 손가락 선 근처에 후보가 없음).
+그때 crop_target 은 고른 박스 대신 손끝 방향 사각형을 자른다. ingredient_no_target 은 성분 질문인데
+고를 후보가 없을 때(0개 · 후보 하나의 총점 미달)다. 크롭이 없어서 check_ingredient 가 사진 전체로
+판정한다(#215).
 노드가 하는 일은 nodes/ 의 각 파일 머리말에 있다.
 호출어 기다리기와 끼어들기는 그래프 밖(scripts/assistant.py)에서 한다.
 """
@@ -76,7 +81,7 @@ def build_graph(deps: GraphDeps):  # -> CompiledStateGraph
     graph.add_conditional_edges(
         "listen",
         bind(voice.after_listen),
-        {"no_question": END, "bad_frame": "recapture", "heard": "route"},
+        {"wake_rejected": END, "no_question": END, "bad_frame": "recapture", "heard": "route"},
     )
     graph.add_conditional_edges(
         "recapture",
@@ -96,7 +101,13 @@ def build_graph(deps: GraphDeps):  # -> CompiledStateGraph
     graph.add_edge("recall", "generate")
     graph.add_edge("detect", "resolve")
     graph.add_conditional_edges(
-        "resolve", pointing.after_resolve, {"ambiguous": "clarify", "chosen": "crop_target"}
+        "resolve",
+        pointing.after_resolve,
+        {
+            "ambiguous": "clarify",
+            "chosen": "crop_target",
+            "ingredient_no_target": "check_ingredient",
+        },
     )
     graph.add_conditional_edges(
         "clarify",

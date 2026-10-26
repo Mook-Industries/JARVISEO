@@ -1,5 +1,6 @@
-"""가리킴 ablation — 정답 표시 읽기(세션 고르기), 7분류 채점, v1 · v2 채점, 지표, DB 기록,
-실행 조건(커밋 · 가중치 지문 · 세션) 기록과 같은 조건끼리만 비교, 가중치끼리 후보 적중 변화.
+"""가리킴 ablation — 정답 표시 읽기(세션 고르기), 8분류 채점, v1 · v2 채점, v2+C(손 우선 크롭),
+확신 오답 · 크롭 담김, 지표, DB 기록, 실행 조건(커밋 · 가중치 지문 · 세션) 기록과
+같은 조건끼리만 비교, 가중치끼리 후보 적중 변화.
 
 YOLO · MediaPipe 없이 정해 둔 후보와 손으로 채점한다. DB 기록은 store fixture 로 SQLite 와
 실제 Postgres 에서 돈다.
@@ -73,8 +74,13 @@ def _row(**overrides) -> dict:
         "hand_used": False,
         "ambiguous": False,
         "candidate_hit": True,
+        "crop_covered": 1.0,
+        "crop_area": 0.05,
+        "crop_contained": True,
+        "hand_crop": False,
         "answered": True,
         "clarified": False,
+        "confident_error": False,
         "detect_ms": 40.0,
         "resolve_ms": 0.2,
     }
@@ -132,7 +138,7 @@ def test_unimplemented_variants_are_skipped():
     assert (ready, skipped) == (["v1", "v2"], ["v5"])
 
 
-# --- 7분류 채점 ---------------------------------------------------------------------
+# --- 8분류 채점 ---------------------------------------------------------------------
 
 
 def test_judge_correct_when_iou_over_half():
@@ -147,9 +153,26 @@ def test_judge_clarify_on_ambiguous_is_correct():
 
 
 def test_judge_no_candidate_comes_before_clarify():
-    """정답이 후보에 없으면 되물었어도 '후보 없음'(검출기 몫)이다."""
+    """정답이 후보에 없으면 '불필요한 되묻기'가 아니라 후보 쪽(검출기 몫)으로 센다.
+
+    되물었으면 안전한 쪽이다.
+    """
     result = run_ablation.judge(_sample(), _resolution(None, clarify=True), False, False)
-    assert result == (False, "후보 없음")
+    assert result == (False, "후보 없어 되물음")
+
+
+def test_judge_no_candidate_but_answered_is_separate():
+    """정답이 후보에 없는데 엉뚱한 물건을 단정했으면 '후보 없는데 답함'(위험한 쪽)으로 따로 센다."""
+    high = run_ablation.judge(_sample(), _resolution(LEFT, margin=1.0), False, False)
+    low = run_ablation.judge(_sample(), _resolution(LEFT, margin=0.2), False, False)
+    assert high == low == (False, "후보 없는데 답함")
+
+
+def test_outcomes_split_no_candidate_into_two():
+    """결과 분류는 judge 의 8가지 + 손 방향 크롭이다. 옛 '후보 없음' 하나는 없다."""
+    assert len(run_ablation.OUTCOMES) == 9
+    assert run_ablation.OUTCOMES[-1] == run_ablation.HAND_CROP
+    assert "후보 없음" not in run_ablation.OUTCOMES
 
 
 def test_judge_needless_clarify():
@@ -243,6 +266,137 @@ def test_evaluate_v2_without_hand_is_not_direction_miss():
     assert row["outcome"] != "방향 오판"
 
 
+# --- 확신 오답 · 크롭 담김 ------------------------------------------------------------
+
+
+def test_crop_coverage_is_share_of_answer_inside_crop():
+    """정답 박스 중 크롭 안에 든 비율과 크롭이 사진에서 차지하는 비율. IoU 가 아니다."""
+    gt = BBox(0, 0, 100, 100)
+    assert run_ablation.crop_coverage(gt, BBox(0, 0, 200, 100), (400, 250)) == (1.0, 0.2)
+    assert run_ablation.crop_coverage(gt, BBox(50, 0, 200, 100), (400, 250))[0] == 0.5
+    assert run_ablation.crop_coverage(gt, BBox(300, 0, 400, 100), (400, 250))[0] == 0.0
+
+
+def test_crop_coverage_with_empty_answer_box_is_zero():
+    """정답 박스 넓이가 0 이면 0 으로 나누지 않고 0.0 이다."""
+    assert run_ablation.crop_coverage(BBox(5, 5, 5, 5), BBox(0, 0, 10, 10), (10, 10))[0] == 0.0
+
+
+@pytest.mark.parametrize(
+    ("covered", "area", "expected"),
+    [
+        (0.6, 0.5, True),  # 경계는 담김
+        (0.599, 0.1, False),  # 정답을 60% 못 담음
+        (1.0, 0.501, False),  # 사진 절반을 넘게 덮으면 무엇이든 담겨서 세지 않는다
+        (None, None, False),  # 되물어서 크롭이 없음
+    ],
+)
+def test_is_crop_contained_boundaries(covered, area, expected):
+    assert run_ablation.is_crop_contained(covered, area) is expected
+
+
+def test_evaluate_records_crop_for_chosen_target():
+    """고른 박스에 실제 비서와 같은 여백 15% 를 붙여 잰다. 200×200 컵 → 260×260 크롭."""
+    row = _evaluate_one("v1", _sample(), [_det(GT)], None)
+
+    assert (row["crop_covered"], row["crop_contained"]) == (1.0, True)
+    assert row["crop_area"] == round(260 * 260 / (1920 * 1080), 3)
+    assert row["confident_error"] is False
+
+
+def test_evaluate_clarified_photo_has_no_crop():
+    """되물었으면 VLM 에 보낼 크롭이 없다 — 비율 · 넓이는 비우고 담김 아님, 확신 오답도 아님."""
+    row = _evaluate_one("v1", _sample(gt=LEFT), [_det(LEFT), _det(RIGHT)], None)
+
+    assert row["clarified"] is True
+    assert (row["crop_covered"], row["crop_area"], row["crop_contained"]) == (None, None, False)
+    assert row["confident_error"] is False
+
+
+def test_evaluate_screen_covering_box_is_confident_error_not_contained():
+    """화면을 다 덮는 헛 박스(냉장고) 하나뿐이면 단정한다. 정답을 다 담아도 크롭 담김이 아니다."""
+    fridge = _det(BBox(0, 0, 1920, 1080), "refrigerator")
+
+    row = _evaluate_one("v1", _sample(), [fridge], None)
+
+    assert row["outcome"] == "후보 없는데 답함"
+    assert row["confident_error"] is True
+    assert (row["crop_covered"], row["crop_area"], row["crop_contained"]) == (1.0, 1.0, False)
+
+
+# --- 손 우선 크롭 (v2+C) ----------------------------------------------------------------
+
+# 화면 아래 가운데에서 똑바로 위를 가리키는 손. LEFT · RIGHT 는 선에서 45° 벗어나 손 점수가 0.3 미만
+TO_UP = _hand(base=(960.0, 1040.0), tip=(960.0, 1000.0))
+# 손끝 위쪽 물건. 후보에는 없다(검출기가 놓친 물건)
+ABOVE = BBox(860, 600, 1060, 800)
+
+
+def test_hand_crop_variant_is_ready_and_separate():
+    """v2+C 는 단서가 v2 와 같아 바로 돌고, 손 크롭을 켜는 버전은 v2+C 하나다."""
+    assert run_ablation.implemented_variants(["v2", "v2+C"]) == (["v2", "v2+C"], [])
+    assert run_ablation.VARIANTS["v2+C"] == run_ablation.VARIANTS["v2"]
+    assert run_ablation.HAND_CROP_VARIANTS == {"v2+C"}
+
+
+def test_evaluate_v2c_crops_fingertip_when_no_candidate_on_line():
+    """선 위에 후보가 없으면 v2 는 되묻고(후보 없어 되물음), v2+C 는 손끝 방향을 잘라 정답을 담는다.
+
+    손 크롭은 IoU 로 맞을 수 없어 정답 · 답함 · 확신 오답에 넣지 않고 크롭 담김으로만 센다.
+    """
+    sample = _sample(gt=ABOVE, has_hand=True)
+    candidates = [_det(LEFT), _det(RIGHT)]
+
+    v2 = _evaluate_one("v2", sample, candidates, TO_UP)
+    v2c = _evaluate_one("v2+C", sample, candidates, TO_UP)
+
+    assert (v2["outcome"], v2["clarified"], v2["hand_crop"]) == ("후보 없어 되물음", True, False)
+    assert (v2c["outcome"], v2c["hand_crop"], v2c["crop_contained"]) == ("손 방향 크롭", True, True)
+    assert (v2c["correct"], v2c["answered"], v2c["clarified"]) == (False, False, False)
+    assert (v2c["confident_error"], v2c["pred_label"]) == (False, None)
+    # 사각형 (636, 460)-(1284, 1080) 이 정답을 다 담고 사진의 약 19% 를 덮는다
+    assert (v2c["crop_covered"], v2c["crop_area"]) == (1.0, round(648 * 620 / (1920 * 1080), 3))
+
+
+def test_evaluate_v2c_keeps_box_answer_when_hand_points_at_candidate():
+    """손이 후보를 가리키면 v2+C 도 v2 와 똑같이 그 박스를 고른다(손 크롭 없음)."""
+    sample = _sample(gt=RIGHT, has_hand=True)
+    candidates = [_det(LEFT), _det(RIGHT)]
+
+    v2 = _evaluate_one("v2", sample, candidates, TO_RIGHT)
+    v2c = _evaluate_one("v2+C", sample, candidates, TO_RIGHT)
+
+    assert (v2c["outcome"], v2c["hand_crop"]) == ("정답", False)
+    del v2["resolve_ms"], v2c["resolve_ms"]
+    assert v2c == v2
+
+
+def test_evaluate_v2c_without_hand_still_asks():
+    """손을 못 찾은 사진에서는 손 크롭이 없다. 후보가 0개면 되묻는다(손 없이는 자를 곳이 없다)."""
+    row = _evaluate_one("v2+C", _sample(has_hand=True), [], None)
+    assert (row["outcome"], row["hand_crop"], row["clarified"]) == ("후보 없어 되물음", False, True)
+
+
+def test_summarize_counts_hand_crops_apart_from_accuracy():
+    """손 크롭 장수 · 그중 담긴 장수를 따로 세고, 정답률 · 확신 오답률에는 넣지 않는다."""
+    hand = {"outcome": "손 방향 크롭", "correct": False, "answered": False, "pred_label": None}
+    rows = [
+        _row(),
+        _row(**hand, hand_crop=True),  # 정답을 담음
+        _row(**hand, hand_crop=True, crop_contained=False),  # 빗나감
+    ]
+
+    m = run_ablation.summarize(rows)
+
+    assert (m["hand_crop_count"], m["hand_crop_contained"]) == (2, 1)
+    assert m["outcomes"]["손 방향 크롭"] == 2
+    assert m["accuracy"] == round(1 / 3, 3)
+    assert m["answered_accuracy"] == 1.0  # 박스로 답한 1장만
+    assert m["confident_error_rate"] == 0.0
+    assert m["crop_contained_rate"] == round(2 / 3, 3)  # 크롭 담김에는 손 크롭도 들어간다
+    assert "| 2(1) |" in run_ablation.format_row("w", "v2+C", m, 3, None)
+
+
 # --- 지표 ---------------------------------------------------------------------------
 
 
@@ -252,7 +406,7 @@ def test_summarize_rates_and_outcome_counts():
         _row(),
         _row(has_hand=True, correct=False, outcome="다른 후보 1위", pred_label="bottle"),
         _row(answered=False, clarified=True, correct=False, outcome="불필요한 되묻기"),
-        _row(candidate_hit=False, correct=False, outcome="후보 없음"),
+        _row(candidate_hit=False, correct=False, outcome="후보 없는데 답함"),
     ]
 
     m = run_ablation.summarize(rows)
@@ -262,7 +416,7 @@ def test_summarize_rates_and_outcome_counts():
     assert m["reask_rate"] == 0.25
     assert m["candidate_recall"] == 0.75
     assert (m["accuracy_with_hand"], m["accuracy_without_hand"]) == (0.0, round(1 / 3, 3))
-    assert m["outcomes"]["후보 없음"] == 1
+    assert m["outcomes"]["후보 없는데 답함"] == 1
     assert set(m["outcomes"]) == set(run_ablation.OUTCOMES)
 
 
@@ -272,12 +426,36 @@ def test_summarize_without_hand_photos_is_none():
     assert m["accuracy_without_hand"] is None
 
 
+def test_summarize_confident_error_and_crop_contained_use_all_photos():
+    """확신 오답률 · 크롭 담김률의 분모는 전체 장수다. 되물은 사진도 분모에 들어간다."""
+    rows = [
+        _row(),
+        _row(correct=False, confident_error=True, crop_contained=False, outcome="다른 후보 1위"),
+        _row(
+            answered=False,
+            clarified=True,
+            correct=False,
+            crop_covered=None,
+            crop_area=None,
+            crop_contained=False,
+            outcome="불필요한 되묻기",
+        ),
+        _row(candidate_hit=False, correct=False, confident_error=True, outcome="후보 없는데 답함"),
+    ]
+
+    m = run_ablation.summarize(rows)
+
+    assert m["confident_error_rate"] == 0.5  # 4장 중 2장(되물은 1장도 분모)
+    assert m["crop_contained_rate"] == 0.5  # 맞힌 1장 + 후보 없는데 담은 1장
+    assert m["high_conf_error_rate"] == 0.0  # 옛 지표는 그대로 남는다
+
+
 # --- DB 기록 · 비교 -----------------------------------------------------------------
 
 
 def test_save_run_writes_run_and_samples(store):
     """eval_run 한 줄과 사진 수만큼의 eval_sample 이 남는다."""
-    rows = [_row(), _row(correct=False, pred_label=None, outcome="후보 없음")]
+    rows = [_row(), _row(correct=False, pred_label=None, outcome="후보 없어 되물음")]
     metrics = run_ablation.summarize(rows)
 
     run_id = run_ablation.save_run(store, "v1", rows, metrics, "기준선")
@@ -306,52 +484,78 @@ def _save(store, variant: str, accuracy: float, conditions: dict | None) -> int:
     return run_ablation.save_run(store, variant, [_row()], metrics, "")
 
 
-def test_previous_accuracy_is_same_variant_before(store):
-    """같은 버전 · 같은 조건의 바로 이전 실행 정답률을 찾는다. 다른 버전 · 첫 실행이면 None."""
+def test_previous_metrics_is_same_variant_before(store):
+    """같은 버전 · 같은 조건의 바로 이전 실행 지표를 찾는다. 다른 버전 · 첫 실행이면 None."""
     first = _save(store, "v1", 0.6, _conditions())
     _save(store, "v2", 0.9, _conditions())
     second = _save(store, "v1", 0.7, _conditions())
 
-    assert run_ablation.previous_accuracy(store, "v1", second, _conditions()) == 0.6
-    assert run_ablation.previous_accuracy(store, "v1", first, _conditions()) is None
+    assert run_ablation.previous_metrics(store, "v1", second, _conditions())["accuracy"] == 0.6
+    assert run_ablation.previous_metrics(store, "v1", first, _conditions()) is None
 
 
-def test_previous_accuracy_skips_other_weights(store):
+def test_previous_metrics_skips_other_weights(store):
     """가중치가 다른 실행과는 비교하지 않는다. 그 차이는 코드 몫인지 가중치 몫인지 모른다."""
     _save(store, "v1", 0.6, _conditions(sha="r0r0r0r0r0r0"))
     _save(store, "v1", 0.8, _conditions(sha="r1r1r1r1r1r1"))
     latest = _save(store, "v1", 0.65, _conditions(sha="r0r0r0r0r0r0"))
 
-    previous = run_ablation.previous_accuracy(store, "v1", latest, _conditions(sha="r0r0r0r0r0r0"))
+    previous = run_ablation.previous_metrics(store, "v1", latest, _conditions(sha="r0r0r0r0r0r0"))
 
-    assert previous == 0.6  # 바로 앞(R1, 0.8)을 건너뛰고 같은 R0 실행
+    assert previous["accuracy"] == 0.6  # 바로 앞(R1, 0.8)을 건너뛰고 같은 R0 실행
 
 
-def test_previous_accuracy_skips_other_sessions_and_old_runs(store):
+def test_previous_metrics_skips_other_sessions_and_old_runs(store):
     """세션이 다르거나, 조건 기록이 없는 옛 실행(run 1~3)과는 비교하지 않는다."""
     _save(store, "v1", 0.5, None)  # 옛 실행
     _save(store, "v1", 0.9, _conditions(sessions=(4,)))  # 말 · 맥락 세션
     latest = _save(store, "v1", 0.6, _conditions())
 
-    assert run_ablation.previous_accuracy(store, "v1", latest, _conditions()) is None
+    assert run_ablation.previous_metrics(store, "v1", latest, _conditions()) is None
 
 
-def test_previous_accuracy_ignores_commit(store):
+def test_previous_metrics_ignores_commit(store):
     """커밋이 달라도 같은 가중치 · 세션이면 비교한다. 코드를 고친 효과를 보려는 비교다."""
     _save(store, "v1", 0.6, _conditions(commit="old"))
     latest = _save(store, "v1", 0.7, _conditions(commit="new+dirty"))
 
-    assert run_ablation.previous_accuracy(store, "v1", latest, _conditions(commit="new")) == 0.6
+    previous = run_ablation.previous_metrics(store, "v1", latest, _conditions(commit="new"))
+    assert previous["accuracy"] == 0.6
 
 
-def test_format_row_shows_delta_from_previous():
-    """맨 앞에 가중치, 이전 실행이 있으면 정답률 옆에 차이(%p), 끝에 대상 결정 p50/p95 를 둔다."""
-    m = run_ablation.summarize([_row(), _row(correct=False, outcome="다른 후보 1위")])
+def _two_rows_metrics() -> dict:
+    """맞힌 1장(크롭 담김) + 골랐는데 틀린 1장(크롭 못 담음).
 
-    line = run_ablation.format_row("yolov8n.pt(abc123)", "v1", m, 2, previous=0.4)
+    정답률 · 확신 오답률 · 크롭 담김이 모두 50% 다.
+    """
+    wrong = _row(correct=False, outcome="다른 후보 1위", confident_error=True, crop_contained=False)
+    return run_ablation.summarize([_row(), wrong])
 
-    assert line.startswith("yolov8n.pt(abc123) | v1 | 2 | 50.0 (+10.0) |")
-    assert line.endswith("| 0.20/0.20")  # 대상 결정 p50/p95
+
+def test_format_row_shows_delta_for_accuracy_and_confident_error():
+    """맨 앞에 가중치, 정답률 · 확신 오답률을 붙여 두고 각각 이전 실행 대비 차이(%p),
+    후보 재현율 뒤에 크롭 담김 · 손 크롭(담김), 끝에 대상 결정 p50/p95."""
+    previous = {"accuracy": 0.4, "confident_error_rate": 0.6}
+
+    line = run_ablation.format_row("yolov8n.pt(abc123)", "v1", _two_rows_metrics(), 2, previous)
+
+    assert line.startswith("yolov8n.pt(abc123) | v1 | 2 | 50.0 (+10.0) | 50.0 (-10.0) |")
+    # 후보 재현율 · 크롭 담김 · 손 크롭(담김) · p50/p95
+    assert line.endswith("| 100.0 | 50.0 | 0(0) | 0.20/0.20")
+
+
+def test_format_row_skips_delta_missing_in_old_run():
+    """확신 오답률이 없던 옛 실행(run 4~7)과는 그 칸의 차이를 찍지 않는다.
+
+    없는 값을 0 으로 빼면 엉뚱한 +50.0 이 된다.
+    """
+    line = run_ablation.format_row("w", "v1", _two_rows_metrics(), 2, {"accuracy": 0.4})
+    assert "| 50.0 (+10.0) | 50.0 | " in line
+
+
+def test_format_row_without_previous_has_no_delta():
+    line = run_ablation.format_row("w", "v1", _two_rows_metrics(), 2, None)
+    assert line.startswith("w | v1 | 2 | 50.0 | 50.0 |")
 
 
 # --- 실행 조건 · 가중치 ----------------------------------------------------------------

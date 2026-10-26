@@ -1,9 +1,12 @@
-"""대상 결정 — 순위·margin·되묻기 문장, 되묻기 대답으로 후보 좁히기, 단서 스위치, 손 단서 기권."""
+"""대상 결정 — 순위·margin·되묻기 문장, 후보 하나의 총점 하한, 되묻기 대답으로 후보 좁히기,
+단서 스위치, 손 · 말 · 이어 묻기 단서 기권, 말 · 이어 묻기 단서 플래그."""
 
+import numpy as np
 import pytest
 
+from jarviseo import config
 from jarviseo.pointing.hands import HandPose
-from jarviseo.pointing.resolver import resolve_target
+from jarviseo.pointing.resolver import MIN_SINGLE_SCORE, resolve_target
 from jarviseo.types import BBox, CueKind, Detection
 
 FRAME = (1920, 1080)
@@ -56,14 +59,54 @@ def test_no_candidates_asks_without_question():
 
 
 def test_single_candidate_is_chosen_with_full_margin():
-    """후보가 하나면 비교 상대가 없으므로 margin 1.0 으로 바로 고른다."""
-    cup = _det("cup", CORNER)
+    """후보가 하나면 비교 상대가 없으므로 margin 1.0 으로 바로 고른다(총점이 하한 이상일 때)."""
+    cup = _det("cup", MIDDLE)
 
     result = _resolve([cup])
 
     assert result.chosen.detection is cup
     assert result.margin == 1.0
     assert not result.needs_clarify
+
+
+def test_lone_corner_candidate_is_not_asserted():
+    """후보가 구석 컵 하나뿐이면(총점 0.14 < 0.3) 단정하지 않는다. 되물을 문장도 없다(#215).
+
+    천장을 가리켰는데 구석 모니터를 답한 턴 23 과 같은 장면. 후보 순위는 기록용으로 남는다.
+    """
+    cup = _det("cup", CORNER)
+
+    result = _resolve([cup])
+
+    assert result.chosen is None
+    assert result.needs_clarify
+    assert result.clarify_question is None
+    assert [c.detection for c in result.candidates] == [cup]
+    assert result.candidates[0].total_score < MIN_SINGLE_SCORE
+
+
+def test_lone_corner_candidate_pointed_at_is_chosen():
+    """구석 컵 하나라도 손이 그 컵을 가리키면 손 점수가 총점을 올려 고른다.
+
+    하한은 손 없는 사진에서만 일한다.
+    """
+    cup = _det("cup", CORNER)  # 중심 (100, 100)
+    to_corner = _hand(base=(340.0, 340.0), tip=(300.0, 300.0))  # 왼쪽 위로 똑바로
+
+    result = _resolve([cup], hand=to_corner)
+
+    assert result.chosen.detection is cup
+    assert result.chosen.total_score >= MIN_SINGLE_SCORE
+
+
+def test_reply_narrowed_to_one_skips_the_floor():
+    """대답으로 구석 컵 하나로 좁혀졌으면 사용자가 고른 것이라 하한을 보지 않고 고른다."""
+    cup, apple = _det("cup", CORNER), _det("apple", MIDDLE)
+
+    result = _resolve([cup, apple], replies=["컵"])
+
+    assert result.chosen.detection is cup
+    assert result.chosen.total_score < MIN_SINGLE_SCORE  # 처음부터 하나였다면 단정 안 했을 점수
 
 
 def test_clear_winner_is_chosen_and_ranked_first():
@@ -277,3 +320,146 @@ def test_reply_narrowing_keeps_hand():
 
     assert result.chosen.detection is right
     assert result.chosen.score_of(CueKind.POINT) > 0.9
+
+
+# --- 종류 낱말 대답 (labels.KIND_WORDS) -------------------------------------------------
+
+
+def test_alias_reply_picks_that_kind():
+    """ "텀블러" 대답이 병 후보에 걸린다(모의 루프 턴 35 에서 안 걸렸다)."""
+    candidates = [_det("bottle", LEFT), _det("cup", RIGHT)]
+    result = _resolve(candidates, replies=["텀블러"])
+    assert result.chosen.detection.label == "bottle"
+
+
+def test_reply_prefers_longest_kind_word():
+    """ "컵라면"은 "컵"을 품고 있지만 긴 낱말이 이겨 식품을 고른다."""
+    candidates = [_det("product", LEFT), _det("cup", RIGHT)]
+    result = _resolve(candidates, replies=["컵라면"])
+    assert result.chosen.detection.label == "product"
+
+
+# --- 말 단서 (v4) -------------------------------------------------------------------
+
+
+def _ask(candidates, text, **kwargs):
+    return resolve_target(
+        candidates=candidates, hand=None, gaze_vector=None, text=text, frame_size=FRAME, **kwargs
+    )
+
+
+def _kinds(candidate) -> list[str]:
+    return [s.kind.value for s in candidate.cue_scores]
+
+
+def test_language_cue_is_off_by_default(monkeypatch):
+    """플래그가 꺼져 있으면(기본) "왼쪽 컵"이어도 말 단서를 안 쓴다 — 지금 실제 비서 동작 그대로."""
+    monkeypatch.setattr(config, "ENABLE_LANGUAGE_CUE", False)
+    result = _ask([_det("cup", LEFT), _det("cup", RIGHT)], "왼쪽 컵 뭐야?")
+
+    assert result.needs_clarify  # 대칭 컵 둘이라 v1 처럼 되묻는다
+    assert all(_kinds(c) == ["center"] for c in result.candidates)
+
+
+def test_language_cue_on_picks_left_cup_without_asking(monkeypatch):
+    """플래그를 켜면 "왼쪽 컵"이 대칭 컵 둘의 되묻기를 없애고 왼쪽을 고른다."""
+    monkeypatch.setattr(config, "ENABLE_LANGUAGE_CUE", True)
+    result = _ask([_det("cup", LEFT), _det("cup", RIGHT)], "왼쪽 컵 뭐야?")
+
+    assert result.chosen.detection.bbox == LEFT
+    assert _kinds(result.chosen) == ["center", "lang"]
+
+
+def test_ablation_switch_turns_language_cue_on_regardless_of_flag(monkeypatch):
+    """ablation 은 단서를 직접 골라 켠다. 플래그는 실제 비서의 기본값만 정한다."""
+    monkeypatch.setattr(config, "ENABLE_LANGUAGE_CUE", False)
+    cups = [_det("cup", LEFT), _det("cup", RIGHT)]
+    result = _ask(cups, "오른쪽 컵 뭐야?", enabled_cues={CueKind.CENTER, CueKind.LANG})
+
+    assert result.chosen.detection.bbox == RIGHT
+
+
+def test_language_cue_abstains_without_words():
+    """쓸 말이 없으면 기권해서 v1(가운데만)과 점수 · margin 이 같다."""
+    candidates = [_det("bottle", CORNER), _det("cup", MIDDLE)]
+    center = _ask(candidates, "저거 뭐야?", enabled_cues={CueKind.CENTER})
+    with_lang = _ask(candidates, "저거 뭐야?", enabled_cues={CueKind.CENTER, CueKind.LANG})
+
+    assert with_lang.margin == pytest.approx(center.margin)
+    assert _kinds(with_lang.chosen) == ["center"]
+
+
+def test_color_word_needs_the_photo():
+    """색 말은 사진이 있어야 쓴다. 사진이 없으면 기권(되묻기 그대로), 있으면 노란 쪽을 고른다."""
+    cans = [_det("product", LEFT), _det("product", RIGHT)]
+    lang_on = {CueKind.CENTER, CueKind.LANG}
+    image = np.zeros((1080, 1920, 3), np.uint8)
+    image[440:640, 1320:1520] = (0, 255, 255)  # 오른쪽 캔만 노랗게(BGR)
+
+    without_photo = _ask(cans, "노란 캔 뭐야?", enabled_cues=lang_on)
+    with_photo = _ask(cans, "노란 캔 뭐야?", enabled_cues=lang_on, image=image)
+
+    assert without_photo.needs_clarify
+    assert with_photo.chosen.detection.bbox == RIGHT
+
+
+def test_reply_narrowing_keeps_language_scores_from_question():
+    """말 점수는 되묻기로 좁히기 전에 매긴다. "왼쪽 거"의 위치는 처음 장면 전체 기준으로 남는다."""
+    candidates = [_det("bottle", LEFT), _det("cup", MIDDLE), _det("cup", RIGHT)]
+    lang_on = {CueKind.CENTER, CueKind.LANG}
+
+    result = _ask(candidates, "왼쪽 거 뭐야?", enabled_cues=lang_on, replies=["컵"])
+
+    assert result.chosen.detection.bbox == MIDDLE  # 남은 컵 중 왼쪽
+    lang = next(s for s in result.chosen.cue_scores if s.kind is CueKind.LANG)
+    assert lang.score == pytest.approx(0.5)  # 좁힌 뒤 다시 매겼다면 1.0
+
+
+# --- 이어 묻기 단서 (v5) ---------------------------------------------------------------
+
+
+def test_context_cue_is_off_by_default(monkeypatch):
+    """플래그가 꺼져 있으면(기본) 앞 대상이 있고 "그거"라고 해도 이어 묻기 단서를 안 쓴다."""
+    monkeypatch.setattr(config, "ENABLE_CONTEXT_CUE", False)
+    candidates = [_det("bottle", LEFT), _det("cup", RIGHT)]
+
+    result = _ask(candidates, "그거 씻어야 돼?", prev_target_label="cup")
+
+    assert result.needs_clarify  # 대칭이라 v1 처럼 되묻는다
+    assert all(_kinds(c) == ["center"] for c in result.candidates)
+
+
+def test_context_cue_on_picks_previous_target_without_asking(monkeypatch):
+    """플래그를 켜면 "그거"가 앞에서 고른 컵을 가리킨다.
+
+    대칭인 병 · 컵에서 되묻지 않고 컵을 고른다.
+    """
+    monkeypatch.setattr(config, "ENABLE_CONTEXT_CUE", True)
+    candidates = [_det("bottle", LEFT), _det("cup", RIGHT)]
+
+    result = _ask(candidates, "그거 씻어야 돼?", prev_target_label="cup")
+
+    assert result.chosen.detection.label == "cup"
+    assert _kinds(result.chosen) == ["center", "ctx"]
+
+
+def test_ablation_switch_turns_context_cue_on_regardless_of_flag(monkeypatch):
+    """ablation 은 단서를 직접 골라 켠다(정답표의 prev_label 로 잰다)."""
+    monkeypatch.setattr(config, "ENABLE_CONTEXT_CUE", False)
+    candidates = [_det("bottle", LEFT), _det("cup", RIGHT)]
+    ctx_on = {CueKind.CENTER, CueKind.CTX}
+
+    result = _ask(candidates, "그거 뭐야?", prev_target_label="bottle", enabled_cues=ctx_on)
+
+    assert result.chosen.detection.label == "bottle"
+
+
+def test_context_cue_abstains_without_back_reference():
+    """되가리키는 말이 없으면 앞 대상이 있어도 기권해서 v1 과 margin 이 같다."""
+    candidates = [_det("bottle", CORNER), _det("cup", MIDDLE)]
+    ctx_on = {CueKind.CENTER, CueKind.CTX}
+    center = _ask(candidates, "이 병 뭐야?", enabled_cues={CueKind.CENTER})
+    with_ctx = _ask(candidates, "이 병 뭐야?", prev_target_label="cup", enabled_cues=ctx_on)
+
+    assert with_ctx.margin == pytest.approx(center.margin)
+    assert _kinds(with_ctx.chosen) == ["center"]

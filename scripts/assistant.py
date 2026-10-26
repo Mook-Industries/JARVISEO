@@ -15,12 +15,16 @@ OpenAI 키와 호출어 모델(data/models/jarviseo.onnx, data/README.md)이 필
     python scripts/assistant.py --db postgresql+psycopg://jarviseo:jarviseo@localhost:5432/jarviseo
 
 턴은 data/assistant.db(SQLite)에 남는다. --db 로 Postgres 를 줄 수 있다.
+.env 에 JARVISEO_CLOUD_URL · JARVISEO_CLOUD_TOKEN 이 있으면 끝난 턴을 클라우드 대시보드로도 보낸다
+(다른 스레드에서, 사진은 빼고. memory/uploader.py). 못 보낸 턴은 연결되면 · 다음에 켤 때 보낸다.
 턴마다 고른 사진을 data/captures/session_<번호>/ 에 남긴다(--no-photos 로 끔).
     <턴>.jpg        말을 시작한 순간 고른 사진(VLM·가리킴이 받은 원본)
     <턴>_boxes.jpg  가리킴 후보 박스. 초록 = 고른 대상, 노랑 = 나머지(순위·이름·점수), 십자 = 가운데
     <턴>_crop.jpg   VLM·성분 판정에 실제로 간 크롭(대상을 고른 턴만)
 기억 검색("아까 본 거 뭐였지?")은 .env 에 JARVISEO_ENABLE_RECALL=true 가 있을 때만 한다.
-Ctrl+C 로 끝내면 단계별 지연 중앙값을 찍는다.
+호출어 모델이 깨어나면 감지 직전 구간을 한 번 더 받아써서 "자비서"가 없으면 대답하지 않는다
+(2단계 확인, #149). 시작음은 이미 울린 뒤다. JARVISEO_WAKE_CHECK=false 면 끈다.
+Ctrl+C 로 끝내면 단계별 지연 중앙값과 호출어 감지·거른 수를 찍는다.
 
 찍는 값 (ms)
     stt     받아쓰기 왕복
@@ -45,6 +49,7 @@ from sqlalchemy.exc import OperationalError
 from jarviseo import config
 from jarviseo.capture import FrameBuffer, FrameSource, WebcamSource
 from jarviseo.memory import DialogMemory, MemoryStore, SessionTurn, VectorMemory
+from jarviseo.memory.uploader import TurnUploader
 from jarviseo.memory.when import time_range
 from jarviseo.nutrition.barcode import make_food_qr_client
 from jarviseo.nutrition.service import IngredientChecker
@@ -59,6 +64,7 @@ from jarviseo.voice import (
     ResponseCollector,
     SpeechToText,
     TextToSpeech,
+    WakeCheck,
     WakeWordDetector,
 )
 from jarviseo.voice.devices import device_name, find_device
@@ -203,8 +209,13 @@ def run(
     turns: list,
     store: MemoryStore,
     photo_dir: Path | None,
+    wakes: dict[str, int],
+    uploader: TurnUploader | None = None,
 ) -> None:
-    """호출을 기다렸다가 그래프로 질문 한 번씩 돌린다. Ctrl+C 로 끝난다."""
+    """호출을 기다렸다가 그래프로 질문 한 번씩 돌린다. Ctrl+C 로 끝난다.
+
+    wakes 에 호출어 감지 수("detected")와 2단계 확인에서 거른 수("rejected")를 센다.
+    """
     trigger = "WAKEWORD"
     number = 0
     while True:
@@ -220,12 +231,23 @@ def run(
             "trigger_type": trigger,
         }
         state = graph.invoke(turn)
-        show(state)
-        number += 1
-        if photo_dir is not None:
-            save_photos(state, photo_dir, number, store)
+        wakes["detected"] += 1
+        if state.get("wake_rejected"):
+            wakes["rejected"] += 1
+            print(f"  호출어 아님 (2단계 확인 받아쓰기 {state.get('wake_check_text')!r}) → 무시")
+        else:
+            if "wake_check_text" in state:
+                text = state["wake_check_text"]
+                shown = "받아쓰지 못함" if text is None else f"받아쓰기 {text!r}"
+                print(f"  2단계 확인 통과 ({shown})")
+            show(state)
+            number += 1
+            if photo_dir is not None:
+                save_photos(state, photo_dir, number, store)
         if "turn_id" in state:
             turns.append(state.get("latency_ms", {}))
+            if uploader is not None:
+                uploader.notify()  # 바로 돌아온다. 보내기는 다른 스레드가 한다
         # 대답을 읽다 끊겼거나 기다리는 동안(되묻는 중도) 다시 불렀으면 그 호출이 쌓여 있고,
         # 다음 턴이 된다.
         # 끝까지 읽었으면 질문하는 동안 다시 잡힌 호출어 같은 지난 감지는 버린다.
@@ -304,6 +326,10 @@ def main() -> None:
     # 성분표 OCR 은 .env 에 JARVISEO_OCR_REMOTE_URL 이 있으면 Colab GPU 서버에서 돈다(#82).
     qr = make_food_qr_client()
     checker = IngredientChecker(store=store, food_qr=qr)
+    uploader = None
+    if config.CLOUD_URL and config.CLOUD_TOKEN:
+        uploader = TurnUploader(store, config.CLOUD_URL, config.CLOUD_TOKEN)
+        uploader.start()
 
     with MicStream(mic_device) as mic, Camera(WebcamSource(args.camera), frames):
         deps = GraphDeps(
@@ -321,6 +347,7 @@ def main() -> None:
             hands=hand_detector,
             resolve=resolve_target,
             checker=checker,
+            wake_check=WakeCheck(mic) if config.WAKE_CHECK else None,
         )
         graph = build_graph(deps)
         detector = WakeWordDetector(mic, on_detect=barge.on_detect)
@@ -338,9 +365,16 @@ def main() -> None:
         qr_state = "푸드QR" if qr else "푸드QR 꺼짐(JARVISEO_FOOD_QR_API_KEY 없음)"
         ocr_state = "Colab GPU" if config.OCR_REMOTE_URL else "이 PC CPU"
         print(f"성분 판정: 캐시 → {qr_state} → 성분표 OCR({ocr_state})")
+        check_state = f"켜짐({config.WAKE_CHECK_SEC}초)" if deps.wake_check else "꺼짐"
+        print(f"호출어 2단계 확인 {check_state}")
+        if uploader is not None:
+            print(f"클라우드로 보내기 켜짐: {uploader.url} (사진은 안 보냄)")
+        else:
+            print("클라우드로 보내기 꺼짐 (JARVISEO_CLOUD_URL · JARVISEO_CLOUD_TOKEN)")
         print("\n'자비서'를 부르고 이어서 말하세요. 끝내려면 Ctrl+C")
+        wakes = {"detected": 0, "rejected": 0}
         try:
-            run(graph, barge, chime, session_id, user_id, turns, store, photo_dir)
+            run(graph, barge, chime, session_id, user_id, turns, store, photo_dir, wakes, uploader)
         except KeyboardInterrupt:
             pass
         finally:
@@ -352,6 +386,15 @@ def main() -> None:
     if qr is not None:
         qr.close()
     store.end_session(session_id)
+    if uploader is not None:
+        uploader.close()  # 한 번 더 보내 본다
+        left = uploader.pending()
+        line = f"못 보낸 턴 {left}개(다음에 켤 때 보냄)" if left else "다 보냄"
+        if uploader.delays_ms:
+            line += f", 턴 끝 → 서버가 받기까지 중앙 {statistics.median(uploader.delays_ms):.0f}ms"
+        print(f"클라우드 보내기: {line}")
+    if wakes["detected"]:
+        print(f"\n호출어 감지 {wakes['detected']}번, 2단계 확인에서 거른 것 {wakes['rejected']}번")
     if turns:
         print(f"\n중앙값 ({len(turns)}턴, ms)")
         for stage in STAGES:

@@ -62,6 +62,7 @@ class VoiceLoop:
         self._ev_lock = threading.Lock()
         self._stop = threading.Event()
         self._parts: dict = {}
+        self._failed: str | None = None  # 못 켠 이유(다시 시도하지 않는다)
 
     # ---- 화면에 알리기 ----
 
@@ -115,9 +116,24 @@ class VoiceLoop:
     # ---- 켜고 끄기 ----
 
     def start(self) -> None:
-        """부품을 만들고 마이크 · 카메라를 연다. 못 열면 RuntimeError(이유)."""
+        """부품을 만들고 마이크를 연다. 못 열면 RuntimeError(이유).
+
+        한 번 못 켜면(키 · 마이크 · 스피커 · 호출어 모델 없음) 이유를 기억하고 다시 시도하지 않는다.
+        클라우드 서버(장치 없음)는 페이지를 열 때마다 켜 보느라 검출 모델을 매번 다시 읽었다.
+        장치를 꽂았으면 서버를 다시 켠다.
+        """
         if self.running:
             return
+        if self._failed:
+            raise RuntimeError(self._failed)
+        try:
+            self._start()
+        except Exception as e:
+            self._close()
+            self._failed = str(e) if isinstance(e, RuntimeError) else f"{type(e).__name__}: {e}"
+            raise RuntimeError(self._failed) from e
+
+    def _start(self) -> None:
         if not config.OPENAI_API_KEY:
             raise RuntimeError("OPENAI_API_KEY 가 없어 받아쓰기 · 읽기 · VLM 을 못 쓴다")
         from jarviseo.capture import FrameBuffer
@@ -143,6 +159,13 @@ class VoiceLoop:
         except ValueError as e:
             raise RuntimeError(str(e)) from None
         p = self._parts
+        # 마이크를 무거운 부품보다 먼저 연다. 클라우드 서버처럼 마이크가 없으면 검출기 · 손 모델을
+        # 만들지 않고 끝난다. 예전에는 손 모델을 만든 뒤 마이크에서 실패해 그 모델이 닫히지 않고
+        # 남았고, 나중에 다른 질문이 torch 를 불러오는 도중 정리(__del__)되면서 그 질문이 영영
+        # 멈췄다(10/26 휴대폰 "대상 검출"에서 멈춤).
+        mic = MicStream(mic_device)
+        mic.__enter__()
+        p["mic"] = mic  # 연 것만 _close 가 닫는다
         p["vlm"] = VLMClient()
         p["dialog"] = DialogMemory(VectorMemory(self.store))
         p["tts"] = TextToSpeech(device=speaker_device)
@@ -154,14 +177,11 @@ class VoiceLoop:
         try:
             from jarviseo.pointing.hands import HandDetector
 
-            hands = HandDetector()
+            hands = p["hands"] = HandDetector()
         except (FileNotFoundError, ImportError) as e:
             log.warning("손 단서 꺼짐(가리킴 v1): %s", e)
             hands = None
         self.pointing = "v2" if hands is not None else "v1"
-
-        p["mic"] = mic = MicStream(mic_device)
-        mic.__enter__()
 
         def speech_end() -> None:
             chime.end()  # 질문 말이 끝나면 종료음(assistant.py 와 같다)
@@ -214,6 +234,9 @@ class VoiceLoop:
         for name in ("collector", "dialog"):
             if name in p:
                 p[name].close()
+        if "hands" in p:
+            # 손 모델은 여기서 닫는다. 가비지 수집에 맡기면 아무 스레드에서나 닫히다가 멈출 수 있다
+            p["hands"].landmarker.close()
         self._parts = {}
 
     # ---- 스레드 ----

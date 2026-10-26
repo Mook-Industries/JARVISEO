@@ -1,17 +1,20 @@
 """성분 질문이 VLM 을 거치지 않고 성분 판정 문장으로 끝나는지.
 
 판정 자체(바코드·OCR·동의어)는 nutrition 쪽 테스트가 본다. 여기서는 그래프가 크롭과
-사용자 알레르기를 넘기고, 돌아온 문장을 그대로 읽고 기록하는지만 본다.
+사용자 알레르기를 넘기고, 돌아온 문장을 그대로 읽고 기록하는지만 본다. 고를 후보가 없으면
+사진 전체를 넘기는지도 본다.
 CI 에는 EasyOCR 가 없어서 판정기는 이 파일 안의 작은 가짜로 바꿔 끼운다.
 """
 
 import time
 
 import numpy as np
+import pytest
 
 from jarviseo.capture import FrameBuffer
 from jarviseo.memory import TurnIngredient
 from jarviseo.nutrition.service import IngredientCheck
+from jarviseo.pointing import resolve_target
 from jarviseo.types import (
     AllergenJudgement,
     AllergenVerdict,
@@ -32,11 +35,16 @@ FULL = (1080, 1920, 3)
 CROP = (520, 390, 3)
 MESSAGE = "땅콩이 들어 있어요. 땅콩 알레르기가 있으면 드시지 마세요."
 SNACK = Detection("bottle", 0.9, BBox(400, 500, 700, 900))
+# 화면 구석의 작은 컵. 후보가 이것 하나면 가운데 단서 총점 0.14 라 단정하지 않는다
+CORNER_CUP = Detection("cup", 0.9, BBox(0, 0, 200, 200))
 
 
 class _Detector:
+    def __init__(self, detections=(SNACK,)) -> None:
+        self.detections = list(detections)
+
     def detect(self, image: np.ndarray) -> list[Detection]:
-        return [SNACK]
+        return list(self.detections)
 
 
 def _resolve(candidates, **kwargs) -> TargetResolution:
@@ -140,3 +148,21 @@ def test_retake_notice_is_read_and_ends_turn():
     assert deps.tts.spoken == [retake]
     assert len(deps.checker.calls) == 1
     assert "recapture_count" not in result
+
+
+@pytest.mark.parametrize("detections", [[], [CORNER_CUP]], ids=["no_candidate", "lone_corner"])
+def test_no_target_judges_whole_photo(detections):
+    """고를 후보가 없으면(0개 · 구석 후보 하나의 총점 미달) "다시 가리켜 주세요" 대신
+    사진 전체로 판정한다. VLM 은 여전히 부르지 않는다.
+
+    봉지를 눈앞에 꽉 채우면 사진 절반 넘는 박스가 빠져 후보가 0개가 된다
+    (모의 루프 턴 26 · 27, #215).
+    """
+    deps = _deps(detector=_Detector(detections), resolve=resolve_target)
+
+    result = build_graph(deps).invoke({})
+
+    assert result["intent"] is Intent.INGREDIENT
+    assert deps.checker.calls == [(FULL, [])]  # 크롭이 아니라 사진 전체
+    assert deps.vlm.asked == []
+    assert deps.tts.spoken == [MESSAGE]

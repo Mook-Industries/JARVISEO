@@ -29,6 +29,13 @@ HTTP/WebSocket 으로 잇는다. 이 파일은 후자에 해당한다.
     POST /api/ingredient     본문 = 사진 바이트(JPEG/PNG). ?allergens=계란,땅콩 이 없으면 등록된 것
                              알레르기에 '모두' · '테스트'를 넣으면 법정 알레르기 전체(시험용)
 
+노트북 대화 기록 (#144)
+----------------------
+    POST /api/turns          노트북 assistant.py 가 끝난 턴을 보낸다(memory/uploader.py).
+                             Authorization: Bearer <JARVISEO_CLOUD_TOKEN>.
+                             서버에 토큰이 없으면 안 받는다
+    GET  /api/turns          대시보드 채팅 이력. ?after=<turn_id> 면 그 뒤 턴만(3초마다 묻는다)
+
 자비서 전체 흐름 (팀 그래프를 웹으로)
 -----------------------------------
     http://localhost:8000/assistant                 # 사진 + 질문 → 자비서 대답
@@ -44,26 +51,30 @@ JARVISEO_OCR_NOTEBOOK_URL(서버 노트북 주소)을 여는 버튼을 보여 �
 from __future__ import annotations
 
 import base64
+import hmac
 import os
 import threading
 import time
 from contextlib import asynccontextmanager
+from datetime import UTC
 from pathlib import Path
 
 import anyio
 import cv2
 import httpx
 import numpy as np
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from jarviseo import config
 from jarviseo.api.assistant_web import WebAssistant, draw_boxes
 from jarviseo.api.marks import jpeg_data_url, mark_findings
+from jarviseo.api.report import report
 from jarviseo.api.voice_loop import VoiceLoop
-from jarviseo.memory import MemoryStore
+from jarviseo.memory import MemoryStore, SessionTurn
+from jarviseo.memory.store import UPLOAD_TITLE
 from jarviseo.nutrition.allergen import (
     expand_allergens,
     find_allergens,
@@ -86,6 +97,10 @@ SOURCE_NAMES = {"barcode": "바코드 · 푸드QR", "ocr": "성분표 OCR", "ret
 # 알레르기 칸에 이 말을 넣으면 법정 알레르기 전체로 판정한다. 인식 성능을 볼 때 쓴다.
 # 근거 구간 이름. 원재료·알레르기 표시에서 찾으면 함유, 혼입 문장에서만 찾으면 혼입 가능이다.
 SECTIONS = (("ingredients", "원재료"), ("notice", "알레르기 표시"), ("cross", "같은 제조시설"))
+# 노트북이 턴을 보낼 때 함께 보내는 토큰(#144). 비어 있으면 이 서버는 턴을 받지 않는다.
+CLOUD_TOKEN = os.environ.get("JARVISEO_CLOUD_TOKEN", "").strip()
+MAX_UPLOAD_TURNS = 100  # 노트북은 20개씩 보낸다(memory/uploader.BATCH)
+MAX_FEED_TURNS = 50
 
 
 class Allergens(BaseModel):
@@ -100,12 +115,29 @@ class Ask(BaseModel):
     more_ms: list[int] = []
 
 
+class UploadedTurn(BaseModel):
+    """노트북이 보낸 턴 하나(memory/store.turn_payload). 열 이름은 ERD 그대로다."""
+
+    local_turn_id: int
+    local_session_id: int
+    turn: dict
+    voice: dict | None = None
+    inference: dict | None = None
+
+
+class TurnBatch(BaseModel):
+    source: str = Field(min_length=1, max_length=40)  # 노트북마다 정한 임의 이름
+    turns: list[UploadedTurn] = Field(max_length=MAX_UPLOAD_TURNS)
+
+
 def create_app(
     store: MemoryStore | None = None,
     checker: IngredientChecker | None = None,
     assistant: WebAssistant | None = None,
+    cloud_token: str | None = None,
 ) -> FastAPI:
-    """앱을 만든다. 테스트에서는 가짜 store · checker 를 넣는다."""
+    """앱을 만든다. 테스트에서는 가짜 store · checker 와 토큰을 넣는다."""
+    token = CLOUD_TOKEN if cloud_token is None else cloud_token
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -187,7 +219,35 @@ def create_app(
             lambda: _ask(s, question, image, more if image is not None else [])
         )
 
+    @app.post("/api/turns")
+    def receive_turns(body: TurnBatch, request: Request, authorization: str = Header("")) -> dict:
+        """노트북(assistant.py)이 보낸 끝난 턴을 이 서버 DB 에 남긴다. 토큰이 맞아야 받는다.
+
+        이 길은 Caddy 접속 비밀번호를 거치지 않는다(deploy/Caddyfile). 토큰이 그 대신이다.
+        같은 턴을 다시 보내면 건너뛴다(store.import_turns).
+        """
+        if not token:
+            raise HTTPException(503, "이 서버는 턴을 받지 않습니다 (JARVISEO_CLOUD_TOKEN 없음)")
+        if not hmac.compare_digest(authorization.encode(), f"Bearer {token}".encode()):
+            raise HTTPException(401, "토큰이 틀립니다")
+        turns = [t.model_dump() for t in body.turns]
+        return request.app.state.store.import_turns(body.source, turns)
+
+    @app.get("/api/turns")
+    def turn_feed(request: Request, after: int | None = None, limit: int = 30) -> dict:
+        """대시보드 채팅 이력. 노트북에서 받은 턴과 이 서버에서 물은 턴(웹)을 같이 준다.
+
+        after 가 없으면 최근 limit 개를 새것부터, 있으면 그 뒤 턴을 들어온 순서로 준다.
+        """
+        limit = min(max(limit, 1), MAX_FEED_TURNS)
+        return {"turns": [_feed_item(t) for t in request.app.state.store.turn_feed(after, limit)]}
+
     # ---- 팀 음성 모드(voice_loop.py): 마이크 · 스피커 · 웹캠을 서버가 열고 팀 부품으로 돈다 ----
+
+    @app.get("/api/report")
+    def performance_report(request: Request) -> dict:
+        """성능 리포트: 실제 턴 지연 · 평가 실행 · 팀 실측 결과(api/report.py)."""
+        return report(request.app.state.store)
 
     @app.post("/api/voice/start")
     async def voice_start(request: Request) -> dict:
@@ -267,6 +327,20 @@ def create_app(
         return await _run_in_thread(lambda: _check(s, image, names))
 
     return app
+
+
+def _feed_item(t: SessionTurn) -> dict:
+    title = (t.session.title if t.session is not None else None) or ""
+    asked = t.asked_at.replace(tzinfo=UTC) if t.asked_at.tzinfo is None else t.asked_at
+    return {
+        "id": t.turn_id,
+        "asked_at": asked.isoformat(),  # 브라우저가 자기 시각대로 바꿔 보여 준다
+        "where": "노트북" if title.startswith(UPLOAD_TITLE) else "웹",
+        "question": t.question_text,
+        "answer": t.answer_text,
+        "target": t.inference.target_label if t.inference is not None else None,
+        "total_ms": t.total_ms,
+    }
 
 
 def _probe_ocr(url: str | None) -> dict:

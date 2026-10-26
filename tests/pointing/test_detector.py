@@ -1,5 +1,5 @@
-"""물체 후보 검출 — 사람·작은 박스를 빼고, YOLO 결과를 Detection 으로 바꾸는지,
-가중치를 설정에서 고르는지.
+"""물체 후보 검출 — 사람 · 작은 박스 · 사진 절반 넘는 박스를 빼고, YOLO 결과를 Detection 으로
+바꾸는지, 가중치를 설정에서 고르는지.
 
 CI 에는 ultralytics 가 없어서 실제 모델 대신 결과 모양만 같은 가짜를 끼운다.
 """
@@ -11,7 +11,12 @@ from pathlib import Path
 import numpy as np
 
 from jarviseo import config
-from jarviseo.pointing.detector import MIN_AREA_RATIO, ObjectDetector, filter_detections
+from jarviseo.pointing.detector import (
+    MAX_AREA_RATIO,
+    MIN_AREA_RATIO,
+    ObjectDetector,
+    filter_detections,
+)
 from jarviseo.pointing.labels import korean_name
 from jarviseo.types import BBox, Detection
 
@@ -85,6 +90,19 @@ def test_filter_keeps_box_at_exact_min_area():
     side = (FRAME[0] * FRAME[1] * MIN_AREA_RATIO) ** 0.5
     edge = _det("cup", BBox(0, 0, side, side))
     assert filter_detections([edge], FRAME) == [edge]
+
+
+def test_filter_drops_box_over_half_the_photo():
+    """사진 넓이의 절반을 넘게 덮는 박스(냉장고 · 노트북 헛 박스)는 뺀다(#215)."""
+    fridge = _det("refrigerator", BBox(0, 0, 1920, 600))  # 넓이 약 56%
+    cup = _det("cup", BBox(800, 700, 1000, 900))
+    assert filter_detections([fridge, cup], FRAME) == [cup]
+
+
+def test_filter_keeps_box_at_exact_max_area():
+    """넓이가 딱 절반이면 남긴다(왼쪽 절반을 다 덮는 박스)."""
+    half = _det("laptop", BBox(0, 0, FRAME[0] * MAX_AREA_RATIO, FRAME[1]))
+    assert filter_detections([half], FRAME) == [half]
 
 
 def test_filter_keeps_order():

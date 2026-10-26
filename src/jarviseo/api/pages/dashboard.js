@@ -6,6 +6,7 @@
    원본: api/static/jarviseo.js (사용자 목업). 이 파일은 그 복사본에 실제 API 를 붙였다.
    - 모니터: 호출 → 받아쓰기(브라우저) · 말 시작 순간의 장면 → POST /api/ask(팀 그래프)
    - 환경설정 알러지 → GET · PUT /api/allergens
+   - 04 대화 내역 → GET /api/turns(노트북 assistant.py 가 보낸 턴 · 이 서버에서 물은 턴, 3초마다)
    - 성능 리포트는 아직 예시 데이터다
    ========================================================================== */
 
@@ -144,6 +145,17 @@
     store.set("jarviseo.sidebarCollapsed", on);
   };
   setCollapsed(store.get("jarviseo.sidebarCollapsed", false));
+
+  // 테마: 블랙(기본) · 화이트. 위쪽 막대의 버튼으로 바꾸고 이 브라우저에 저장한다
+  // (head 의 짧은 스크립트가 그리기 전에 붙여서 블랙으로 번쩍였다 바뀌지 않는다)
+  const setTheme = (theme) => {
+    if (theme === "light") document.documentElement.dataset.theme = "light";
+    else delete document.documentElement.dataset.theme;
+    store.set("jarviseo.theme", theme);
+    $$("[data-theme-set]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.themeSet === theme)));
+  };
+  setTheme(store.get("jarviseo.theme", "dark") === "light" ? "light" : "dark");
+  $$("[data-theme-set]").forEach((b) => b.addEventListener("click", () => setTheme(b.dataset.themeSet)));
   sbToggle.addEventListener("click", () => setCollapsed(!app.classList.contains("is-collapsed")));
 
   // 좁은 화면에서는 사이드바가 서랍처럼 열린다
@@ -239,22 +251,23 @@
   const waveBars = [];
   for (let i = 0; i < 64; i++) {
     const bar = document.createElement("i");
-    const h = i % 7 === 3 ? 6 : i % 4 === 1 ? 4 : 2;
-    bar.style.height = `${h}px`;
-    bar.style.animationDelay = `${((i * 37) % 90) / 100}s`;
+    bar.style.height = "2px"; // 조용하면 납작하다. 높이는 마이크 소리 크기로만 바뀐다(startMeter)
     wave.append(bar);
     waveBars.push(bar);
   }
 
   // 듣는 동안 마이크 소리 크기로 파형을 그린다. 목소리가 없으면(문턱 아래) 납작하게 둔다.
   // 받아쓰기(브라우저)와 같은 마이크를 따로 한 번 더 연다. 권한은 받아쓰기와 같이 묻는다.
+  // 휴대폰(손가락 화면)에서는 열지 않는다. 안드로이드 · 아이폰은 마이크를 한 곳만 쓰게 해서,
+  // 파형용으로 한 번 더 열면 받아쓰기가 소리를 못 받아 "말씀을 듣지 못했어요"로 끝났다(10/26).
   const VOICE_FLOOR = 0.02; // RMS 문턱. 방 소음은 이 아래, 말소리는 0.05~0.3
+  const isPhone = window.matchMedia("(pointer: coarse)").matches;
   const meter = { ctx: null, stream: null, raf: 0 };
   const flatWave = () => waveBars.forEach((b) => (b.style.height = "2px"));
   const startMeter = async () => {
     stopMeter();
     flatWave();
-    if (!navigator.mediaDevices?.getUserMedia) return;
+    if (isPhone || !navigator.mediaDevices?.getUserMedia) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -461,9 +474,36 @@
     shot.classList.remove("is-big");
     if (url) shot.src = url;
     else shot.removeAttribute("src");
+    if (typeof placeShotClose === "function") placeShotClose();
   };
   // 작은 결과 창은 누르면 커지고, 다시 누르면 작아진다
   shot.addEventListener("click", () => shot.classList.toggle("is-big"));
+
+  // 결과 창 닫기(×). 보고 싶지 않으면 끈다. 다음 질문의 결과는 다시 뜬다.
+  // 카메라가 켜져 있어 작은 창일 때만 보인다(올린 사진은 화면 전체라 닫으면 볼 것이 없다).
+  const shotClose = document.createElement("button");
+  shotClose.type = "button";
+  shotClose.className = "shot-close";
+  shotClose.setAttribute("aria-label", "결과 그림 닫기");
+  shotClose.textContent = "×";
+  shotClose.hidden = true;
+  shot.after(shotClose);
+  const placeShotClose = () => {
+    const box = shot.parentElement;
+    shotClose.hidden = shot.hidden || box.dataset.cam !== "on";
+    if (shotClose.hidden) return;
+    const f = box.getBoundingClientRect();
+    const b = shot.getBoundingClientRect();
+    shotClose.style.left = `${b.right - f.left - 32}px`;
+    shotClose.style.top = `${b.top - f.top + 6}px`;
+  };
+  new ResizeObserver(placeShotClose).observe(shot);
+  shot.addEventListener("load", placeShotClose);
+  window.addEventListener("resize", placeShotClose);
+  shotClose.addEventListener("click", (e) => {
+    e.stopPropagation();
+    showShot(null);
+  });
 
   function clearPhoto() {
     photo = null;
@@ -528,13 +568,21 @@
   };
 
   let logNo = 0;
-  const addLog = (tag, q, a) => {
-    const d = new Date();
-    const item = { id: `t${++logNo}`, time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}`, tag, q, a };
+  const shownTurns = new Set(); // 이미 보인 서버 turn_id. 물은 턴과 불러온 턴이 두 번 뜨지 않게
+  // turnId: 서버 기록 번호(있으면). at: 물은 시각. quiet: 켤 때 불러온 지난 기록이라 깜빡이지 않는다
+  const addLog = (tag, q, a, { turnId = null, at = new Date(), quiet = false } = {}) => {
+    if (turnId != null) {
+      if (shownTurns.has(turnId)) return;
+      shownTurns.add(turnId);
+    }
+    const id = turnId != null ? `turn-${turnId}` : `t${++logNo}`;
+    const item = { id, time: `${pad2(at.getHours())}:${pad2(at.getMinutes())}`, tag, q, a };
     const li = logItem(item);
-    li.classList.add("is-new");
     logList.prepend(li);
-    logList.scrollTo({ top: 0 });
+    if (!quiet) {
+      li.classList.add("is-new");
+      logList.scrollTo({ top: 0 });
+    }
 
     const btn = document.createElement("button");
     btn.type = "button";
@@ -548,6 +596,33 @@
     });
     sbHistory.prepend(btn);
   };
+
+  /* ------------------------------------------------------------------------
+     대화 기록 불러오기 (#144) — 이 서버 DB 의 턴. 노트북(assistant.py)이 보낸 턴과 웹에서 물은 턴.
+     켤 때 최근 30개, 그 뒤 3초마다 새 턴만 묻는다(?after=마지막 번호).
+     ------------------------------------------------------------------------ */
+
+  const TURN_POLL_MS = 3000;
+  let lastTurnId = null; // null = 아직 한 번도 못 불러옴
+
+  async function loadTurns() {
+    const first = lastTurnId === null;
+    try {
+      const r = await fetch(first ? "/api/turns?limit=30" : `/api/turns?after=${lastTurnId}`);
+      if (!r.ok) return;
+      const { turns } = await r.json();
+      // 처음에는 새것부터 오고, 그 뒤에는 들어온 순서로 온다. 오래된 것부터 위에 쌓는다.
+      (first ? turns.reverse() : turns).forEach((t) => {
+        addLog(t.where, t.question, t.answer || "(대답 없음)", { turnId: t.id, at: new Date(t.asked_at), quiet: first });
+        lastTurnId = Math.max(lastTurnId ?? 0, t.id);
+      });
+      lastTurnId ??= 0;
+    } catch {
+      /* 서버가 잠깐 안 되면 다음 차례에 다시 묻는다 */
+    }
+  }
+  loadTurns();
+  setInterval(loadTurns, TURN_POLL_MS);
 
   // 03 판단 근거의 한 줄 설명
   const reasonOf = (d) => {
@@ -585,7 +660,7 @@
     setText("#feed-msg", d.target ? `선택한 대상: ${d.target}` : answer);
     const overlay = (d.ingredient && d.ingredient.where) || d.boxes;
     if (overlay && !app.classList.contains("no-overlay")) showShot(overlay);
-    addLog(tag, question, answer);
+    addLog(tag, question, answer, { turnId: d.turn_id });
     // 팀 음성 모드면 서버 스피커가 이미 읽었다
     if (!voiceMode) speak((d.spoken && d.spoken.length ? d.spoken : [answer]).join(" "));
   }
@@ -753,11 +828,23 @@
     setText("#feed-tag", "CONNECTING");
     syncCamToggle();
 
+    // 휴대폰은 뒤 카메라(가리키는 물건 쪽). 노트북 웹캠은 하나라 facingMode 를 무시한다
+    const video1080 = { width: { ideal: 1920 }, height: { ideal: 1080 } };
     try {
-      camStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: false,
-      });
+      try {
+        // ideal 로만 주면 해상도 조건과 겨뤄 휴대폰이 앞 카메라를 고르기도 했다(10/26). 휴대폰은 꼭 뒤로
+        if (!isPhone) throw new Error("not phone");
+        camStream = await navigator.mediaDevices.getUserMedia({
+          video: { ...video1080, facingMode: { exact: "environment" } },
+          audio: false,
+        });
+      } catch (err) {
+        if (err.name === "NotAllowedError") throw err;
+        camStream = await navigator.mediaDevices.getUserMedia({
+          video: { ...video1080, facingMode: { ideal: "environment" } },
+          audio: false,
+        });
+      }
     } catch (err) {
       camStream = null;
       const reasons = {
@@ -870,17 +957,21 @@
 
   const onVoiceEvent = (e) => {
     if (e.type === "wake") {
+      startMeter(); // 질문을 듣는 동안 목소리 크기로 파형을 그린다
       showShot(null);
       setState("wake", { stages: ["run", "off", "off", "off", "off"] });
       setText("#core-sub", e.barge_in ? "끼어들었어요. 말씀하세요…" : "말씀하세요…");
       setText("#reason-q", "듣고 있어요");
       setText("#reason-a", "말을 시작한 순간 가장 선명한 장면을 고를게요.");
     } else if (e.type === "thinking") {
+      stopMeter();
       setState("processing", { stages: ["done", "run", "off", "off", "off"] });
       setText("#core-sub", "생각하고 있어요…");
     } else if (e.type === "result") {
+      stopMeter();
       showResult(e.data.question, e.data, 0);
     } else if (e.type === "no_question") {
+      stopMeter();
       setState("idle");
       setText("#core-sub", "말씀을 듣지 못했어요. 다시 불러 주세요.");
     } else if (e.type === "error") {
@@ -926,201 +1017,126 @@
   startVoice();
 
   /* ------------------------------------------------------------------------
-     관리자: 단계별 지연
+     성능 리포트 — 목업 숫자 대신 팀 기록(/api/report, api/report.py)
+     - 단계별 지연: 실제 턴에서 MemoryStore.latency_percentiles (P50 · P95)
+     - 평가 실행: eval_run (scripts/run_ablation.py --db)
+     - 팀 실측 결과 · 위 카드: docs/experiments.md 의 최종 숫자
      ------------------------------------------------------------------------ */
 
-  const LATENCY = {
-    names: [
-      ["음성 인식", "STT"],
-      ["대상 검출", "YOLO"],
-      ["문자 판독", "OCR"],
-      ["장면 이해", "VLM"],
-      ["음성 합성", "TTS"],
-    ],
-    avg: [0.8, 0.1, 0.4, 1.4, 0.3],
-    p95: [1.12, 0.16, 0.63, 2.21, 0.44],
-    scaleMax: 2.5, // 막대 전체 폭 = 2.5초
-  };
-
+  let REPORT = null;
   const latRows = $("#lat-rows");
-  LATENCY.names.forEach(([ko, en]) => {
-    const row = document.createElement("div");
-    row.className = "lat-row";
-    row.innerHTML = `
-      <div class="name">${ko}<span>${en}</span></div>
-      <div class="lat-track"><i></i></div>
-      <div class="val num"><span></span><small>s</small></div>`;
-    latRows.append(row);
-  });
 
   const setAgg = (agg) => {
-    const vals = LATENCY[agg];
+    if (!REPORT) return;
+    const rows = REPORT.latency.filter((r) => r.stage !== "total");
+    const total = REPORT.latency.find((r) => r.stage === "total");
+    const vals = rows.map((r) => (r[agg] || 0) / 1000);
+    const scaleMax = Math.max(2.5, ...vals);
     const peak = vals.indexOf(Math.max(...vals));
-    $$(".lat-row", latRows).forEach((row, i) => {
-      row.classList.toggle("is-peak", i === peak);
-      $(".lat-track i", row).style.width = `${Math.min(vals[i] / LATENCY.scaleMax, 1) * 100}%`;
-      $(".val span", row).textContent = vals[i].toFixed(2);
+    latRows.replaceChildren();
+    rows.forEach((r, i) => {
+      const row = document.createElement("div");
+      row.className = "lat-row" + (i === peak && vals[i] > 0 ? " is-peak" : "");
+      row.innerHTML = `
+        <div class="name">${r.name}<span>${r.en} · ${r.count}건</span></div>
+        <div class="lat-track"><i style="width:${(vals[i] / scaleMax) * 100}%"></i></div>
+        <div class="val num"><span>${r.count ? vals[i].toFixed(2) : "—"}</span><small>s</small></div>`;
+      latRows.append(row);
     });
-    const total = vals.reduce((a, b) => a + b, 0);
-    setText("#lat-total", total.toFixed(2));
-    setText("#lat-total-label", agg === "avg" ? "평균 응답 시간" : "단계별 P95 합계");
-    setText("#lat-goal", agg === "avg" ? "예시 목표 ≤ 3.0초" : "예시 목표 ≤ 4.5초");
+    setText("#lat-total", total && total.count ? ((total[agg] || 0) / 1000).toFixed(2) : "—");
+    setText("#lat-total-label", `말 끝 → 대답 첫 소리 · ${agg.toUpperCase()} · ${total ? total.count : 0}건`);
+    setText("#lat-goal", "");
+    if (vals[peak] > 0) {
+      setText("#lat-peak", `${rows[peak].name} · ${rows[peak].en}`);
+      setText("#lat-peak-note", `${agg.toUpperCase()} ${vals[peak].toFixed(2)}초로 가장 오래 걸려요.`);
+    }
     $$("[data-agg]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.agg === agg)));
   };
   $$("[data-agg]").forEach((b) => b.addEventListener("click", () => setAgg(b.dataset.agg)));
-  setAgg("avg");
 
-  /* ------------------------------------------------------------------------
-     관리자: 인식 성능 추이 (SVG 선 그래프)
-     ------------------------------------------------------------------------ */
-
-  const END_DATE = new Date(2026, 8, 22); // 2026-09-22
-  const LAST7 = {
-    pointing: [91.2, 92.4, 91.9, 93.5, 93.0, 93.9, 94.2],
-    allergy: [95.9, 96.4, 96.0, 97.2, 97.1, 97.5, 97.8],
+  const cell = (tr, text, cls) => {
+    const td = document.createElement("td");
+    if (cls) td.className = cls;
+    td.textContent = text;
+    tr.append(td);
+    return td;
   };
 
-  // 7일보다 앞선 날은 흐름이 이어지도록 만든 예시 값이다
-  const series = (days) => {
-    const pad = days - 7;
-    const pointing = [];
-    const allergy = [];
-    for (let k = 0; k < pad; k++) {
-      const r = (23 - pad + k) / 23; // 30일 전체에서의 위치 (0 ~ 1)
-      pointing.push(+(88.6 + r * 2.4 + 0.55 * Math.sin(k * 1.9)).toFixed(1));
-      allergy.push(+(94.2 + r * 1.5 + 0.4 * Math.sin(k * 1.3 + 1)).toFixed(1));
-    }
-    const dates = [];
-    for (let i = days - 1; i >= 0; i--) {
-      const d = new Date(END_DATE);
-      d.setDate(d.getDate() - i);
-      dates.push(d);
-    }
-    return {
-      dates,
-      pointing: pointing.concat(LAST7.pointing),
-      allergy: allergy.concat(LAST7.allergy),
-    };
-  };
+  function renderReport(r) {
+    REPORT = r;
+    setText("#range-label", `턴 기록 ${r.turns}개 · 이 PC 의 DB`);
+    setText("#report-turns", r.turns.toLocaleString());
 
-  const fmtDate = (d) => `${pad2(d.getMonth() + 1)}.${pad2(d.getDate())}`;
-  const chart = $("#trend-chart");
-  const tip = $("#chart-tip");
-  const G = { x0: 62, x1: 512, y0: 16, y1: 196, min: 85, max: 100 };
-  const SVGNS = "http://www.w3.org/2000/svg";
-  let current = null;
-
-  const el = (tag, attrs, parent) => {
-    const node = document.createElementNS(SVGNS, tag);
-    Object.entries(attrs).forEach(([k, v]) => node.setAttribute(k, v));
-    if (parent) parent.append(node);
-    return node;
-  };
-
-  function drawChart() {
-    const days = Number($("#period").value);
-    const data = series(days);
-    current = data;
-    const n = data.dates.length;
-    const x = (i) => G.x0 + (i * (G.x1 - G.x0)) / (n - 1);
-    const y = (v) => G.y1 - ((v - G.min) / (G.max - G.min)) * (G.y1 - G.y0);
-
-    chart.replaceChildren();
-
-    [85, 90, 95, 100].forEach((v) => {
-      el("line", { class: "grid-line", x1: G.x0, x2: G.x1 + 18, y1: y(v), y2: y(v) }, chart);
-      const t = el("text", { class: "axis-text num", x: G.x0 - 22, y: y(v) + 4, "text-anchor": "end" }, chart);
-      t.textContent = v;
+    const kpis = $("#kpis");
+    kpis.replaceChildren();
+    r.kpis.forEach((k, i) => {
+      const div = document.createElement("div");
+      div.className = "kpi";
+      div.innerHTML = `
+        <div class="kpi-head"></div>
+        <div class="kpi-val num"></div>
+        <div class="kpi-desc"></div>
+        <div class="kpi-bar${i === 3 ? " is-lavender" : ""}"><i style="width:${Math.min(k.bar, 100)}%"></i></div>
+        <div class="kpi-goal"></div>`;
+      $(".kpi-head", div).textContent = k.name;
+      const num = document.createElement("span");
+      num.textContent = String(i + 1).padStart(2, "0");
+      $(".kpi-head", div).append(num);
+      $(".kpi-val", div).textContent = k.value;
+      const unit = document.createElement("small");
+      unit.textContent = k.unit;
+      $(".kpi-val", div).append(unit);
+      $(".kpi-desc", div).textContent = k.desc;
+      $(".kpi-goal", div).textContent = k.goal;
+      kpis.append(div);
     });
 
-    const labelIdx = n <= 7 ? [0, 3, 6] : [0, Math.round((n - 1) / 3), Math.round(((n - 1) * 2) / 3), n - 1];
-    labelIdx.forEach((i) => {
-      const t = el("text", { class: "axis-text num", x: x(i), y: G.y1 + 30, "text-anchor": "middle" }, chart);
-      t.textContent = fmtDate(data.dates[i]);
+    setAgg("p50");
+
+    const runRows = $("#run-rows");
+    runRows.replaceChildren();
+    r.eval_runs.forEach((run) => {
+      const tr = document.createElement("tr");
+      cell(tr, run.run_at ? run.run_at.slice(0, 10) : "—", "num");
+      cell(tr, run.variant);
+      cell(tr, String(run.samples), "num");
+      cell(tr, Object.entries(run.metrics).map(([k, v]) => `${k} ${typeof v === "number" ? +v.toFixed(3) : v}`).join(" · "));
+      runRows.append(tr);
     });
+    setText(
+      "#run-caption",
+      r.eval_runs.length
+        ? `평가 실행 ${r.eval_runs.length}번`
+        : "이 DB 에는 아직 평가 실행이 없어요. scripts/run_ablation.py 를 이 서버 DB(--db)로 돌리면 쌓여요."
+    );
 
-    const cross = el("line", { class: "cross", y1: G.y0 - 6, y2: G.y1, x1: -10, x2: -10 }, chart);
-
-    const lines = [
-      ["allergy", "var(--lavender)", "#a3a1f0"],
-      ["pointing", "var(--accent)", "#5fd9cb"],
-    ];
-    lines.forEach(([key, , hex]) => {
-      const pts = data[key].map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
-      el("polyline", { class: "series", points: pts, stroke: hex }, chart);
-      // 30일 보기에서는 점이 너무 빽빽해서 마지막 점만 강조한다
-      data[key].forEach((v, i) => {
-        if (n > 14 && i !== n - 1) return;
-        el("circle", { cx: x(i), cy: y(v), r: 4, fill: hex, stroke: "#0d191e", "stroke-width": 2 }, chart);
-      });
+    const evalBody = $("#eval-rows");
+    evalBody.replaceChildren();
+    r.results.forEach((row) => {
+      const tr = document.createElement("tr");
+      const model = cell(tr, row.model, "model");
+      const small = document.createElement("small");
+      small.textContent = row.owner;
+      model.append(small);
+      cell(tr, row.metric);
+      cell(tr, row.now, "num");
+      cell(tr, row.goal, "num");
+      const st = document.createElement("td");
+      st.innerHTML = `<span class="pill ${row.ok ? "is-ok" : "is-warn"}">${row.ok ? "통과" : "개선 중"}</span>`;
+      tr.append(st);
+      cell(tr, row.source);
+      evalBody.append(tr);
     });
-
-    const hit = el("rect", { x: G.x0 - 10, y: 0, width: G.x1 - G.x0 + 20, height: G.y1 + 10, fill: "transparent" }, chart);
-
-    const show = (evt) => {
-      const box = chart.getBoundingClientRect();
-      const sx = ((evt.clientX - box.left) / box.width) * 600;
-      const i = Math.max(0, Math.min(n - 1, Math.round(((sx - G.x0) / (G.x1 - G.x0)) * (n - 1))));
-      cross.setAttribute("x1", x(i));
-      cross.setAttribute("x2", x(i));
-      tip.innerHTML = `<b>${fmtDate(current.dates[i])}</b>
-        <span><i class="is-c-accent"></i>지시 대상 특정 <strong class="num">${current.pointing[i].toFixed(1)}%</strong></span>
-        <span><i class="is-c-lavender"></i>알레르기 인식 <strong class="num">${current.allergy[i].toFixed(1)}%</strong></span>`;
-      tip.hidden = false;
-      const px = (x(i) / 600) * box.width;
-      const left = px + 14 + tip.offsetWidth > box.width ? px - tip.offsetWidth - 14 : px + 14;
-      tip.style.left = `${left}px`;
-    };
-    hit.addEventListener("pointermove", show);
-    hit.addEventListener("pointerdown", show);
-    hit.addEventListener("pointerleave", () => {
-      tip.hidden = true;
-      cross.setAttribute("x1", -10);
-      cross.setAttribute("x2", -10);
-    });
-
-    const first = data.dates[0];
-    const last = data.dates[n - 1];
-    setText("#range-label", `${first.getFullYear()}.${fmtDate(first)} — ${fmtDate(last)}`);
-    setText("#chart-caption", `일별 평가 결과 · ${n}일`);
   }
 
-  $("#period").addEventListener("change", drawChart);
-
-  /* ------------------------------------------------------------------------
-     관리자: 모델별 평가 상세
-     ------------------------------------------------------------------------ */
-
-  const EVAL_ROWS = [
-    ["손끝 검출", "YOLOv8n", "mAP@0.5", "0.91", "≥ 0.90", true, "역광 장면 샘플 보강"],
-    ["성분표 영역 검출", "YOLOv8n", "mAP@0.5:0.95", "0.864", "≥ 0.85", true, "곡면 포장 촬영 각도 추가"],
-    ["성분표 글자 읽기", "EasyOCR", "글자 인식률", "92.1%", "≥ 95%", false, "작은 글씨 확대 전처리"],
-    ["알레르기 판정", "동의어 사전 + 규칙", "Recall", "97.8%", "≥ 99%", false, "미탐지 2건 동의어 추가"],
-    ["웨이크워드 “자비서”", "커스텀 오디오 모델", "FRR · FAR", "4.1% · 0.3회/시간", "≤ 5% · ≤ 0.5회", true, "소음 환경 녹음 추가"],
-    ["지시 대상 특정", "다중 단서 융합", "정확도", "94.2%", "≥ 95%", false, "시선 단서 가중치 조정"],
-  ];
-
-  const evalBody = $("#eval-rows");
-  EVAL_ROWS.forEach(([model, engine, metric, now, goal, ok, next]) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td class="model"></td>
-      <td></td>
-      <td class="num"></td>
-      <td class="num"></td>
-      <td><span class="pill ${ok ? "is-ok" : "is-warn"}">${ok ? "달성" : "점검"}</span></td>
-      <td></td>`;
-    const tds = $$("td", tr);
-    tds[0].textContent = model;
-    const small = document.createElement("small");
-    small.textContent = engine;
-    tds[0].append(small);
-    tds[1].textContent = metric;
-    tds[2].textContent = now;
-    tds[3].textContent = goal;
-    tds[5].textContent = next;
-    evalBody.append(tr);
-  });
+  async function drawChart() {
+    // 이름은 화면 전환(route)이 부르던 그대로 둔다. 성능 리포트를 열 때마다 새로 읽는다.
+    try {
+      renderReport(await (await fetch("/api/report")).json());
+    } catch (err) {
+      setText("#range-label", "리포트를 불러오지 못했어요.");
+    }
+  }
 
   /* ------------------------------------------------------------------------
      환경설정

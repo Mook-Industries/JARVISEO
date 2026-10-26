@@ -50,6 +50,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_VISION_API_KEY: ${GOOGLE_VISION_API_KEY:-}
       JARVISEO_FOOD_QR_API_KEY: ${JARVISEO_FOOD_QR_API_KEY:-}
+      # 노트북이 턴을 보낼 때 같이 보내는 토큰(#144). 없으면 POST /api/turns 가 503 으로 아무것도 안 받는다.
+      JARVISEO_CLOUD_TOKEN: ${JARVISEO_CLOUD_TOKEN:-}
     # 질문 · 성분 확인 때 받은 사진을 남기는 폴더(assistant_web.PHOTO_DIR). 디스크에 쌓지 않고
     # 메모리에 두어 컨테이너를 다시 띄우면(배포마다) 사라지게 한다. 얼굴 · 집 안이 찍힐 수 있다.
     tmpfs:

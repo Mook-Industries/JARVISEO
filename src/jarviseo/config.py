@@ -85,6 +85,7 @@ DETECTOR_WEIGHTS = _get("JARVISEO_DETECTOR_WEIGHTS") or "yolov8n.pt"
 # 다 만든 기능의 플래그를 남겨두면 경우의 수만 늘어나고 아무도 안 지운다.
 ENABLE_GAZE_CUE = _get_bool("JARVISEO_ENABLE_GAZE_CUE", False)
 ENABLE_LANGUAGE_CUE = _get_bool("JARVISEO_ENABLE_LANGUAGE_CUE", False)
+ENABLE_CONTEXT_CUE = _get_bool("JARVISEO_ENABLE_CONTEXT_CUE", False)
 ENABLE_RECALL = _get_bool("JARVISEO_ENABLE_RECALL", False)
 
 # --- 외부 API -------------------------------------------------------------
@@ -215,7 +216,16 @@ WAKEWORD_PLAYBACK_THRESHOLD = _get_float("JARVISEO_WAKEWORD_PLAYBACK_THRESHOLD",
 # listen(since=감지 시각)은 이만큼 앞에서부터 읽어, 호출어에 바로 이어 말한 질문 앞부분이
 # 잘리지 않게 한다. 호출어("자비서" 길이 중앙 0.57초)가 통째로 들어가야 받아쓴 뒤
 # transcript.clean 이 지운다. 0.4초로는 끝 "서"만 들어가 "그래서"·"여기서"로 받아써졌다.
-WAKE_LOOKBACK_SEC = _get_float("JARVISEO_WAKE_LOOKBACK_SEC", 1.0)
+# 실제로 붙여 말하면("자비서 이거 뭐야") 감지가 질문 끝까지 늦어, 감지 직전 1.3초에 호출어와
+# 질문이 다 들어 있었다(#149 실측). 1초로는 호출어 앞부분이 빠져 1.5초로 늘렸다. 녹음으로 감지를
+# 호출어 끝 0.9초 뒤에 두고 재현하면 1초는 짧은 질문("밥 먹었어?")을 잃고 1.5초는 받는다
+# (scripts/wakeword/lookback.py --lag). 1.2초까지 늦으면 1.5·2초 모두 몇 개를 잃는다.
+WAKE_LOOKBACK_SEC = _get_float("JARVISEO_WAKE_LOOKBACK_SEC", 1.5)
+# 호출어 2단계 확인(voice/wakecheck.py, #149). 모델이 깨어나면 감지 직전 WAKE_CHECK_SEC 초를
+# 따로 받아써서 "자비서"가 있을 때만 질문을 받는다. TV 소리에 깨어나도 대답하지 않게 한다.
+WAKE_CHECK = _get_bool("JARVISEO_WAKE_CHECK", True)
+# 녹음 평가에서 1.3초와 1.6초가 같았고, 붙여 말해 감지가 늦어도 호출어가 들어가게 1.6초를 쓴다.
+WAKE_CHECK_SEC = _get_float("JARVISEO_WAKE_CHECK_SEC", 1.6)
 # 시작음("자비서"를 알아들음)·종료음(질문을 다 들음) 크기. 0~1 로 파일 소리에 곱한다. 0 이면 끔.
 CHIME_VOLUME = _get_float("JARVISEO_CHIME_VOLUME", 1.0)
 # VLM 답이 이 시간(초) 안에 안 오면 "잠깐만요"를 먼저 읽는다. 안경에는 화면이 없어서
@@ -225,6 +235,13 @@ FILLER_AFTER_SEC = _get_float("JARVISEO_FILLER_AFTER_SEC", 1.5)
 # VLM 답을 이 시간(초)까지만 기다리고, 넘으면 안내 문장으로 턴을 끝낸다. 클라이언트 타임아웃이
 # 10초 × 재시도 1번이라 그대로 두면 최악 20초를 기다린다. spike 3 에서 45번 중 1번(6.5초)만 넘었다.
 VLM_DEADLINE_SEC = _get_float("JARVISEO_VLM_DEADLINE_SEC", 5.0)
+
+# --- 클라우드 대시보드로 보내기 (#144) -------------------------------------
+# assistant.py 가 끝난 턴을 이 서버(https://….duckdns.org)로 보낸다(memory/uploader.py).
+# 둘 중 하나라도 비면 보내지 않는다.
+# 토큰은 서버의 같은 이름 값(Parameter Store /jarviseo/JARVISEO_CLOUD_TOKEN)과 같아야 받는다.
+CLOUD_URL = _get("JARVISEO_CLOUD_URL")
+CLOUD_TOKEN = _get("JARVISEO_CLOUD_TOKEN")
 
 # --- 켜기 (scripts/start.py) ---------------------------------------------
 # 켤 때 main 의 새 버전을 받는다(git pull). 확인한 버전 그대로 쓰려면 false 로 고정한다.

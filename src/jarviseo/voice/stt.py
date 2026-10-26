@@ -25,7 +25,13 @@ from jarviseo import config
 from jarviseo.types import Utterance
 from jarviseo.voice.gate import MIC_GATE
 from jarviseo.voice.mic import SAMPLE_RATE, Microphone, MicStream
-from jarviseo.voice.transcript import MIN_LETTERS, clean, is_question, is_wake_only
+from jarviseo.voice.transcript import (
+    MIN_LETTERS,
+    clean,
+    has_wake_word,
+    is_question,
+    is_wake_only,
+)
 
 if TYPE_CHECKING:
     import numpy as np
@@ -41,9 +47,9 @@ TIMEOUT_SEC, RETRIES = 8.0, 1
 # 호출어 감지가 호출어 끝보다 늦는 최대 시간(초). 평가셋 실제 녹음 37개에서 중앙 0.12, 최대 0.33초.
 # 질문은 그 뒤에 시작하므로 말 시작 시각을 감지 시각에서 이만큼 전보다 앞으로 두지 않는다.
 WAKE_LAG_SEC = 0.35
-# 감지 뒤 이 시간 안에 말이 끝났으면 호출어만 말하고 쉰 것으로 본다("자비서." … 질문).
+# 감지 뒤 이 시간 안에 말이 끝났으면 호출어만 말하고 쉬었을 수 있다("자비서." … 질문).
 # 감지는 호출어 끝보다 최대 0.33초 늦고, 끼어들기면 재생을 멈추기까지 0.2초쯤 재생 소리가 남는다.
-# 이어 말한 질문은 이보다 늦게 끝난다.
+# 다만 붙여 말하면 감지가 질문 끝까지 늦기도 해서(#149), 이때는 받아써 보고 정한다.
 WAKE_ONLY_SEC = 0.4
 
 
@@ -98,12 +104,13 @@ class SpeechToText:
 
         말 시작을 잡는 순간 ``on_speech_start(started_at)`` 을 부른다.
         since 는 호출어를 잡은 시각(``on_detect`` 의 t)이다. 공유 마이크(mic)가 있을 때만 쓰고,
-        없으면 지금부터 듣는다. 주면 그보다 ``config.WAKE_LOOKBACK_SEC``(1초) 앞부터 읽는다.
+        없으면 지금부터 듣는다. 주면 그보다 ``config.WAKE_LOOKBACK_SEC``(1.5초) 앞부터 읽는다.
         감지는 호출어가 끝나고 조금 뒤에 돼서, 바로 이어 말하면 감지 시각에는 질문이 이미
         시작돼 있다. 호출어도 같이 받아써지고 ``clean()`` 이 지운다. 말 시작 시각은 호출어가
         끝났을 때(감지 ``WAKE_LAG_SEC`` 전)보다 앞으로 두지 않는다. 프레임을 이 시각으로 고른다.
-        "자비서." 하고 쉬었다가 질문하면 녹음이 호출어에서 끝나는데, 그때는 받아쓰지 않고
-        이어서 한 번 더 듣는다(감지 ``WAKE_ONLY_SEC`` 안에 말이 끝났거나, 호출어만 받아써졌을 때).
+        "자비서." 하고 쉬었다가 질문하면 녹음이 호출어에서 끝나는데, 그때는 이어서 한 번 더 듣는다.
+        감지 ``WAKE_ONLY_SEC`` 안에 말이 끝났고 받아쓴 글자에 호출어 뒤 질문이 없을 때, 또는
+        호출어만 받아써졌을 때다. 붙여 말해서 감지가 질문 뒤로 늦었으면 그 녹음을 그대로 쓴다.
 
         timeout 초 안에 말이 시작되지 않거나, 받아쓰기가 끝내 실패하거나,
         정리하고 나니 비었거나 min_letters 글자보다 짧으면 None.
@@ -160,8 +167,16 @@ class SpeechToText:
 
         speech = record()
         if speech is not None and speech.ended_at <= since + WAKE_ONLY_SEC:
-            # 호출어(와 그 앞 소리)에서 말이 끝났다. 받아쓰면 STT 가 호출어를 "자비다"처럼 잘못 써서
-            # 질문으로 넘어갈 수 있다. 같은 마이크 줄에서 질문을 더 기다린다.
+            # 감지 바로 뒤에 말이 끝났다. "자비서." 하고 쉬었거나, 붙여 말해서 감지가 질문 끝까지
+            # 늦었다(실측 이어 말하기 10번 중 5번, 2단계 확인 글자 '자비서 이거 뭐야?', #149).
+            # 받아써서 호출어 뒤에 질문이 있으면 그대로 쓴다. 호출어가 안 보이면 쓰지 않는다.
+            # STT 가 호출어만 든 녹음을 "자비다"처럼 써서 질문으로 넘어갈 수 있어서다.
+            # 아니면 같은 마이크 줄에서 질문을 더 기다린다. 그동안 들어온 소리는 MicStream 에 있다.
+            late = self._question(speech, min_letters, hints)
+            if late is not None and has_wake_word(self.last_raw_text):
+                if self.on_speech_end is not None:
+                    self.on_speech_end()  # 질문을 다 들었다. 받아쓰기 뒤라 조금 늦게 난다
+                return Utterance(late.text, max(late.started_at, floor), late.ended_at)
             speech = record()
         utterance = question(speech)
         if utterance is None and speech is not None and is_wake_only(self.last_raw_text):
@@ -200,7 +215,7 @@ class SpeechToText:
         sent_at = time.monotonic()
         result = self.client.audio.transcriptions.create(
             model=self.model,
-            file=("speech.wav", _to_wav(audio)),
+            file=("speech.wav", to_wav(audio)),
             language=self.language,
             # 힌트가 없으면 호출어 "자비서"가 "자비스"로 받아써졌다(스파이크 02).
             prompt=", ".join(hints) if hints else config.WAKE_WORD,
@@ -210,7 +225,7 @@ class SpeechToText:
         return Utterance(result.text, started_at, ended_at)
 
 
-def _to_wav(audio: np.ndarray) -> bytes:
+def to_wav(audio: np.ndarray) -> bytes:
     """int16 배열을 WAV 로 감싼다. API 는 헤더를 보고 형식과 샘플레이트를 안다."""
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:

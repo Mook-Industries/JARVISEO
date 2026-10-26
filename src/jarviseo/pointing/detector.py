@@ -32,6 +32,7 @@ from jarviseo.types import BBox, Detection
 __all__ = [
     "EXCLUDED_LABELS",
     "FINETUNE_CLASSES",
+    "MAX_AREA_RATIO",
     "MIN_AREA_RATIO",
     "ObjectDetector",
     "filter_detections",
@@ -60,13 +61,21 @@ FINETUNE_CLASSES = (
     "tv",
     "product",
 )
+# 사진 넓이의 절반을 넘게 덮는 박스는 가리킨 물건이 아니라 배경(냉장고 · 노트북 헛 박스)으로 본다.
+# 가운데 단서에서 늘 1위라 정답이 후보에 없을 때 그 박스를 확신했다(valid 확신 오답 10장 중 4장).
+# valid 정답 박스는 최대 0.353, 헛 박스는 0.59~0.99. 채점의 "사진 절반" 기준과 같은 숫자다(#215).
+MAX_AREA_RATIO = 0.5
 
 
 def filter_detections(detections: list[Detection], frame_size: tuple[int, int]) -> list[Detection]:
-    """후보가 될 수 없는 검출(사람·아주 작은 박스)을 뺀다. 순서는 그대로 둔다."""
+    """후보가 될 수 없는 검출(사람 · 아주 작은 박스 · 사진 절반 넘는 박스)을 뺀다. 순서는 그대로."""
     width, height = frame_size
-    min_area = width * height * MIN_AREA_RATIO
-    return [d for d in detections if d.label not in EXCLUDED_LABELS and d.bbox.area >= min_area]
+    min_area, max_area = width * height * MIN_AREA_RATIO, width * height * MAX_AREA_RATIO
+    return [
+        d
+        for d in detections
+        if d.label not in EXCLUDED_LABELS and min_area <= d.bbox.area <= max_area
+    ]
 
 
 class ObjectDetector:

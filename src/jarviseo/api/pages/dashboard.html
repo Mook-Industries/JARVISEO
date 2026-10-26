@@ -22,6 +22,15 @@
     box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55);
   }
   .feed[data-cam="on"] .feed-shot.is-big { width: 72%; cursor: zoom-out; }
+  /* 작은 결과 창의 닫기(×). 자리는 dashboard.js 가 창 오른쪽 위에 맞춘다 */
+  .shot-close {
+    position: absolute; z-index: 5; width: 26px; height: 26px; padding: 0;
+    display: grid; place-items: center; border-radius: 50%;
+    border: 1px solid var(--accent-line); background: rgba(5, 10, 12, 0.85);
+    color: var(--text); font-size: 16px; line-height: 1; cursor: pointer;
+  }
+  .shot-close:hover { background: rgba(5, 10, 12, 1); }
+  .shot-close[hidden] { display: none; }
   .feed[data-cam="photo"] .no-signal { display: none; }
   .no-signal .row { display: flex; gap: 8px; }
   .ask-form { display: flex; gap: 8px; margin-top: 10px; width: 100%; }
@@ -29,9 +38,55 @@
   .ask-form .cam-btn { white-space: nowrap; }
   .reason-a.is-warn { color: var(--warn); }
   /* 듣는 중 파형은 실제 마이크 소리 크기로 움직인다(dashboard.js). 조용하면 납작하게 멈춘다 */
-  .is-listening .wave i { animation: none; transition: height 60ms linear; }
+  /* 파형은 목소리가 들릴 때만 움직인다. 원본의 상시 애니메이션(듣는 중 · 대답 중)은 끈다 */
+  .wave i { animation: none !important; transition: height 60ms linear; }
+  /* 사이드바 대화 내역: 원본은 목록이 남은 높이를 넘으면 버튼이 납작하게 눌려 글자가 잘렸다.
+     목록이 남은 높이만 차지하고, 넘치면 스크롤하게 한다. 버튼은 줄어들지 않는다 */
+  .sb-history { flex: 1 1 0; min-height: 0; overflow-y: auto; }
+  .sb-history button, .sb-history a { flex-shrink: 0; }
+  /* 대화 내역이 길어지면 사이드바 머리(로고 · 접기 버튼 · 메뉴)까지 눌려 펼쳤을 때 높이가 접었을 때와 달라졌다.
+     남는 높이는 대화 내역만 줄이고, 나머지는 줄지 않게 한다 */
+  .sb-head, .sb-toggle-row, .sb-rule, .sb-nav, .sb-section-label, .sb-foot { flex-shrink: 0; }
+  /* 펼침(버튼 아래 12 + 선 1 + 13) = 접힘(버튼 아래 26). 메뉴가 같은 높이에서 시작한다 */
+  .sb-rule { margin-bottom: 13px; }
   .saved-note { margin-top: 6px; font-size: 12px; color: var(--text-3); min-height: 1em; }
+
+  /* ---- 화이트 테마 (html[data-theme="light"]) ----
+     원본 목업(static/jarviseo.css)은 블랙 하나라 색 변수를 덮어쓴다. 원본에 숫자로 박힌 색도 여기서 덮는다.
+     카메라 화면은 영상이 잘 보이게 두 테마 모두 어둡게 둔다. */
+  html[data-theme="light"] {
+    color-scheme: light;
+    --bg: #f3f6f7; --bg-side: #eceff1; --panel: #ffffff; --panel-2: #f6f9fa; --panel-3: #edf2f4;
+    --line: #dce4e7; --line-2: #cbd6da;
+    --text: #13222a; --text-2: #485b62; --text-3: #7a8b91;
+    --accent: #0e8f84; --accent-hi: #0a766c; --accent-mid: #13a193;
+    --accent-soft: rgba(14, 143, 132, 0.08); --accent-line: rgba(14, 143, 132, 0.42);
+    --lavender: #5a57c8; --ok: #0e8f84; --warn: #b7791f; --danger: #d64545;
+    --track: #e2e9ec; --bar: #2a9d92;
+  }
+  html[data-theme="light"] body { background-image: none; }
+  html[data-theme="light"] .icon-btn { background: #e8eef0; }
+  html[data-theme="light"] .icon-btn:hover { background: #dce5e8; }
+  html[data-theme="light"] .topbar { background: rgba(243, 246, 247, 0.92); }
+  html[data-theme="light"] .tag { background: #e8eef0; }
+  html[data-theme="light"] .dock { background: rgba(255, 255, 255, 0.96); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12); }
+  html[data-theme="light"] .overview { background: linear-gradient(100deg, #e4f3f1 0%, #eef6f5 45%, #f6f9fa 100%); }
+  html[data-theme="light"] .seg button[aria-pressed="true"] { background: #dcefed; }
+  html[data-theme="light"] .callout { background: #eef6f5; }
+  html[data-theme="light"] .switch span { background: #c8d2d6; }
+  html[data-theme="light"] .switch input:checked + span { background: #13a193; }
+  html[data-theme="light"] .log-list { scrollbar-color: #b8c7cb transparent; }
+  html[data-theme="light"] .log-list::-webkit-scrollbar-thumb { background: #b8c7cb; }
+  html[data-theme="light"] .sidebar,
+  html[data-theme="light"] .chart-tip,
+  html[data-theme="light"] .cam-dialog { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12); }
+  /* 위쪽 막대의 블랙 · 화이트 버튼(어느 화면에서나 보인다) */
+  .theme-seg button { padding: 4px 10px; font-size: 12px; }
 </style>
+<script>
+  // 저장해 둔 테마를 그리기 전에 붙인다(블랙으로 번쩍였다 바뀌지 않게)
+  try { if (localStorage.getItem("jarviseo.theme") === "\"light\"") document.documentElement.dataset.theme = "light"; } catch (e) {}
+</script>
 </head>
 <body>
 
@@ -141,6 +196,10 @@
         <span class="brand-sub">자비서</span>
       </a>
       <div class="top-right">
+        <div class="seg theme-seg" role="group" aria-label="화면 테마">
+          <button type="button" data-theme-set="dark" aria-pressed="true">블랙</button>
+          <button type="button" data-theme-set="light" aria-pressed="false">화이트</button>
+        </div>
         <span class="chip is-accent">LIVE</span>
         <span class="status"><i class="dot"></i>시스템 정상</span>
         <time class="clock num" id="clock">--:--:--</time>
@@ -316,88 +375,50 @@
 
         <div class="report-meta">
           <div class="report-range">
-            <span class="chip is-accent">샘플 리포트</span>
-            <span class="num" id="range-label">2026.09.16 — 09.22</span>
+            <span class="chip is-accent">실측</span>
+            <span class="num" id="range-label">불러오는 중…</span>
           </div>
-          <label class="period" for="period">평가 기간
-            <span class="select">
-              <select id="period">
-                <option value="7">최근 7일</option>
-                <option value="14">최근 14일</option>
-                <option value="30">최근 30일</option>
-              </select>
-            </span>
-          </label>
         </div>
 
         <div class="overview">
           <div>
             <p class="eyebrow">Performance overview</p>
-            <h2>정확도는 안정적, 응답 속도는 개선 중</h2>
-            <p>장면 이해 단계가 전체 평균 지연의 47%를 차지합니다.</p>
+            <h2 id="report-head">팀이 잰 결과와 이 PC 의 실제 턴 기록</h2>
+            <p id="report-sub">평가 숫자는 docs/experiments.md, 지연은 DB 에 쌓인 턴에서 계산합니다.</p>
           </div>
           <div class="overview-num">
-            <strong class="num">1,248</strong>
-            <span>평가 요청</span>
+            <strong class="num" id="report-turns">—</strong>
+            <span>기록된 턴</span>
           </div>
         </div>
 
-        <div class="kpis">
-          <div class="kpi">
-            <div class="kpi-head">지시 대상 특정 정확도<span>01</span></div>
-            <div class="kpi-val num">94.2<small>%</small></div>
-            <div class="kpi-desc">가리킨 대상과 선택 결과의 일치율</div>
-            <div class="kpi-bar"><i style="width:94.2%"></i></div>
-            <div class="kpi-goal">목표 ≥ 95%</div>
-          </div>
-          <div class="kpi">
-            <div class="kpi-head">되묻기 비율<span>02</span></div>
-            <div class="kpi-val num">8.6<small>%</small></div>
-            <div class="kpi-desc">추가 질문이 발생한 요청 비율</div>
-            <div class="kpi-bar"><i style="width:43%"></i></div>
-            <div class="kpi-goal">낮을수록 좋음 · 목표 ≤ 10%</div>
-          </div>
-          <div class="kpi">
-            <div class="kpi-head">알레르기 인식률<span>03</span></div>
-            <div class="kpi-val num">97.8<small>%</small></div>
-            <div class="kpi-desc">알레르기 성분 재현율 · Recall</div>
-            <div class="kpi-bar is-lavender"><i style="width:97.8%"></i></div>
-            <div class="kpi-goal">목표 ≥ 99% · 미탐지 점검 필요</div>
-          </div>
-          <div class="kpi">
-            <div class="kpi-head">YOLO mAP<span>04</span></div>
-            <div class="kpi-val num">86.4<small>%</small></div>
-            <div class="kpi-desc">mAP@0.5:0.95 · 검출 성능</div>
-            <div class="kpi-bar"><i style="width:86.4%"></i></div>
-            <div class="kpi-goal">목표 ≥ 85%</div>
-          </div>
-        </div>
+        <div class="kpis" id="kpis"></div>
 
         <div class="report-grid">
           <div class="card">
             <div class="card-head">
               <div>
                 <h2 class="card-title">단계별 지연</h2>
-                <p class="card-sub">요청 수신부터 음성 응답 시작까지</p>
+                <p class="card-sub">실제 턴 기록 · MemoryStore.latency_percentiles</p>
               </div>
               <div class="seg" role="group" aria-label="지연 집계 방식">
-                <button type="button" data-agg="avg" aria-pressed="true">평균</button>
+                <button type="button" data-agg="p50" aria-pressed="true">P50</button>
                 <button type="button" data-agg="p95" aria-pressed="false">P95</button>
               </div>
             </div>
             <div class="lat-total">
               <div>
-                <strong class="num" id="lat-total">3.00</strong>
-                <span class="unit"><b>초</b><span id="lat-total-label">평균 응답 시간</span></span>
+                <strong class="num" id="lat-total">—</strong>
+                <span class="unit"><b>초</b><span id="lat-total-label">말 끝 → 대답 첫 소리</span></span>
               </div>
-              <span class="lat-goal" id="lat-goal">예시 목표 ≤ 3.0초</span>
+              <span class="lat-goal" id="lat-goal"></span>
             </div>
             <div class="lat-rows" id="lat-rows"></div>
             <div class="callout">
               <span class="k">병목 구간</span>
               <div>
-                <strong>장면 이해 · VLM</strong>
-                <p>입력 이미지 크기와 추론 시간을 우선 점검하세요.</p>
+                <strong id="lat-peak">—</strong>
+                <p id="lat-peak-note">턴이 쌓이면 가장 오래 걸린 단계를 보여 줘요.</p>
               </div>
             </div>
           </div>
@@ -405,39 +426,32 @@
           <div class="card">
             <div class="card-head">
               <div>
-                <h2 class="card-title">인식 성능 추이</h2>
-                <p class="card-sub">동일 평가 세트 기준 · 일별 정확도</p>
+                <h2 class="card-title">평가 실행 기록</h2>
+                <p class="card-sub">eval_run · scripts/run_ablation.py --db 로 쌓인다</p>
               </div>
-              <span class="card-unit">단위 %</span>
             </div>
-            <div class="legend">
-              <span><i class="is-c-accent"></i>지시 대상 특정</span>
-              <span><i class="is-c-lavender"></i>알레르기 인식</span>
+            <div class="table-scroll">
+              <table class="eval-table">
+                <thead><tr><th>날짜</th><th>버전</th><th>샘플</th><th>지표</th></tr></thead>
+                <tbody id="run-rows"></tbody>
+              </table>
             </div>
-            <div class="chart-wrap" id="chart-wrap">
-              <svg class="chart" id="trend-chart" viewBox="0 0 600 250" role="img" aria-label="일별 정확도 추이 그래프"></svg>
-              <div class="chart-tip" id="chart-tip" hidden></div>
-            </div>
-            <div class="chart-caption" id="chart-caption">일별 평가 결과 · 7일</div>
-            <div class="callout">
-              <span class="k">품질 관찰</span>
-              <p class="is-body">알레르기 인식은 전체 정확도와 함께<br>미탐지 건수를 확인해야 합니다.</p>
-            </div>
+            <div class="chart-caption" id="run-caption"></div>
           </div>
         </div>
 
         <div class="card table-card">
           <div class="card-head">
             <div>
-              <h2 class="card-title">모델별 평가 상세</h2>
-              <p class="card-sub">각 지표의 기준과 개선 항목</p>
+              <h2 class="card-title">팀 실측 결과</h2>
+              <p class="card-sub">docs/experiments.md 에 팀원이 적은 최종 숫자</p>
             </div>
-            <span class="chip is-accent" style="font-family:var(--font-sans);letter-spacing:0">오프라인 평가 · 데모</span>
+            <span class="chip is-accent" style="font-family:var(--font-sans);letter-spacing:0">오프라인 평가 · 실측</span>
           </div>
           <div class="table-scroll">
             <table class="eval-table">
               <thead>
-                <tr><th>모델</th><th>지표</th><th>현재</th><th>목표</th><th>상태</th><th>다음 개선</th></tr>
+                <tr><th>기능</th><th>지표</th><th>결과</th><th>기준</th><th>상태</th><th>출처</th></tr>
               </thead>
               <tbody id="eval-rows"></tbody>
             </table>

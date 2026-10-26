@@ -220,7 +220,8 @@ GitHub main 머지 ─▶ Actions(deploy.yml) ─OIDC─▶ AWS 역할 ─▶ �
 |---|---|---|
 | EC2 | `jarviseo` | **t3.small(2GB)**, Ubuntu 24.04, 디스크 20GB gp3(암호화), 첫 부팅에 Docker · compose · 스왑 1GB |
 | Elastic IP | `jarviseo` | 서버에 붙은 고정 IP. DuckDNS 도메인이 이 IP 를 가리킨다 |
-| 보안 그룹 | `jarviseo-web` | 80 · 443 만 연다. **SSH(22)는 열지 않는다** — 서버 명령은 SSM 으로 보낸다 |
+| 보안 그룹 | `jarviseo-web` | 80 · 443 · **22(SSH)** 를 연다. 22 는 10/26 부터 키를 가진 팀원이 어디서든 DB · 로그를 보도록 모든 IP 에 연다(비밀번호 로그인은 꺼져 있어 키 없이는 못 들어온다) |
+| 키 페어 | `jarviseo` | 10/26 에 만들어 `ubuntu` 의 `authorized_keys` 에 넣었다(인스턴스는 키 페어 없이 만들어서 콘솔의 키 페어 칸은 비어 있다). `.pem` 은 팀 안에서만 직접 건넨다. Git · 채팅방에 올리지 않는다 |
 | IAM 역할 | `jarviseo-ec2-ssm` | 서버 권한: SSM 명령 받기 · Parameter Store 읽기(`AmazonSSMManagedInstanceCore`), ECR 에서 이미지 받기(`AmazonEC2ContainerRegistryReadOnly`) |
 | ECR 저장소 | `jarviseo-web` | 팀 웹 이미지. 커밋마다 태그 + `latest`, 최근 5개만 남긴다 |
 | Parameter Store | `/jarviseo/*` | SecureString: `OPENAI_API_KEY` · `GOOGLE_VISION_API_KEY` · `JARVISEO_FOOD_QR_API_KEY` · `BASIC_AUTH_PASSWORD` |
@@ -247,6 +248,18 @@ python scripts/put_cloud_secrets.py --new-password  # 접속 비밀번호 바꾸
 
 접속 비밀번호는 **임시**다(Caddy 의 브라우저 기본 로그인 창). 웹 담당과 정한 로그인이 팀 웹에 들어오면 바꾼다.
 `/health` 만 비밀번호 없이 열린다(배포 확인용).
+
+10/26 비밀번호 없이 `https://jarviseo.duckdns.org` 로 확인했다.
+
+| 주소 | 결과 |
+|---|---|
+| `/` · `/assistant` · `/ingredient` | 401 |
+| `POST /api/ask` · `POST /api/ingredient` · `GET /api/allergens` · `GET /api/turns` · `GET /api/report` · `POST /api/voice/start` | 401 |
+| `POST /api/turns`(노트북 → 서버, Caddy 를 거치지 않음) | 토큰이 틀리면 401 |
+| `/health` | 200 |
+
+비밀값: Git 기록 전체(모든 브랜치)에서 OpenAI · AWS · Google 키와 개인 키 모양을 찾아 0건이다.
+서버의 `/opt/jarviseo/.env` · `secrets.env` 는 root 만 읽는다(600), 서버의 레포 폴더에도 키가 없다.
 
 ### 서버 크기
 
@@ -290,6 +303,41 @@ PowerShell 에서 `--instance-type '{"Value":"t3.small"}'` 처럼 JSON 으로 �
 질문 · 성분 확인 때 받은 사진은 팀 웹이 `data/captures/web/` 에 남긴다. 서버에서는 이 폴더를 **tmpfs(메모리, 200MB)**로
 두어 디스크에 쌓이지 않고 컨테이너를 다시 띄우면(배포 · 재시작마다) 사라진다. 얼굴 · 집 안이 찍힐 수 있어서다.
 10/24 확인: 질문 · 성분 확인 10번 뒤 tmpfs 에 사진 15장(1.3MB), 디스크에는 없다. 대화 기록(턴)은 서버 Postgres 에 남는다.
+
+10/26 다시 확인: 배포 3시간 뒤 tmpfs 에 휴대폰 사진 55장 47MB(장당 약 0.85MB, 턴마다 원본 · 박스 · 크롭 3장),
+서버 디스크에서 찾은 사진 0장. 이 크기면 200MB 는 **약 75턴**에 찬다. 꽉 차면 사진만 못 남기고(로그에 `턴 사진을 못 남김`)
+대답은 그대로 간다(10/26 전에는 대답을 만든 뒤 사진을 쓰다 500 이 났다). api 를 다시 띄우면 비워진다.
+
+### 노트북 대화 기록 보내기 (#144)
+
+노트북 `assistant.py` 는 턴을 노트북 DB(`data/assistant.db`)에 **먼저** 쓰고, 그 뒤 다른 스레드가 서버
+`POST /api/turns` 로 복사본을 보낸다(`src/jarviseo/memory/uploader.py`). 대답은 보내기를 기다리지 않는다.
+대시보드 `/` 의 "대화 내역"이 3초마다 `GET /api/turns` 로 새 턴을 가져와 위에 쌓는다(노트북 턴은 "노트북", 웹에서 물은 턴은 "웹").
+
+```
+assistant.py ─턴 기록─▶ data/assistant.db ─▶ TurnUploader(스레드) ─https · 토큰─▶ POST /api/turns ─▶ 서버 Postgres
+                                                                                          대시보드 ◀─ GET /api/turns(3초마다)
+```
+
+| 보낸다 | 보내지 않는다 |
+|---|---|
+| 질문 · 대답 · 받아쓴 원문 · 물은 시각 · 말 시작/끝 시각 | **사진**(`data/captures/`) · 사진 경로 — 얼굴 · 집 안이 찍힐 수 있다 |
+| 단계별 지연(stt · route · vision · llm · tts · total) | 녹음 경로(`audio_path`) |
+| 고른 대상 · 확신도 · 점수차 · 되물음 · 끼어들기 · "잠깐만요" 여부 | 가리킴 후보 목록 · 성분 판정 행 · 대화 기억(임베딩) |
+| 성분표에서 읽은 글자(`ocr_text`) | 의도(DB 에 열이 없다) |
+
+- **켜기**: 노트북 `.env` 에 `JARVISEO_CLOUD_URL=https://<도메인>` 과 `JARVISEO_CLOUD_TOKEN` 을 둔다. 둘 중 하나라도 비면 보내지 않는다.
+  토큰은 `python scripts/put_cloud_secrets.py` 가 만들어 `.env` 에 적고 Parameter Store `/jarviseo/JARVISEO_CLOUD_TOKEN` 에도 넣는다
+  (화면에 찍지 않는다). 서버에는 다음 배포 때 들어간다. 켜지면 `assistant.py` 첫 화면에 "클라우드로 보내기 켜짐"이 찍힌다.
+- **토큰**: `POST /api/turns` 는 접속 비밀번호(Caddy)를 거치지 않고, 팀 웹이 `Authorization: Bearer <토큰>` 을 확인한다.
+  틀리면 401, 서버에 토큰이 없으면 503 으로 아무것도 받지 않는다. 읽기(`GET /api/turns`)는 접속 비밀번호를 거친다.
+- **못 보낸 턴**: 마지막으로 보낸 턴 번호를 `data/cloud_upload.json` 에 남긴다. 인터넷이 끊기면 2초부터 60초까지 늘려 가며
+  다시 보내고, 다음 턴 · 다시 연결 · 다음에 켤 때 밀린 턴을 순서대로 보낸다. 서버는 같은 턴(같은 노트북 세션 · 시각 · 질문)을 두 번 남기지 않는다.
+- **처음 켤 때**: 그때까지 노트북 DB 에 있던 턴(10/14~10/22 측정 턴 98개)은 보내지 않고, 켠 뒤의 턴부터 보낸다.
+  예전 턴은 옛 코드로 잰 것이고 32개가 빈 대답 · "모르겠어요"라 대시보드 지연 · 정확도가 흐려진다. 노트북 DB 에는 그대로 남는다.
+  예전 턴도 보내려면 `data/cloud_upload.json` 의 `last_turn_id` 를 그 앞 번호(전부면 0)로 고친다. 파일을 지우면 다시 "지금부터"가 된다.
+- `assistant.py` 를 끝내면 "클라우드 보내기: 다 보냄, 턴 끝 → 서버가 받기까지 중앙 …ms" 를 찍는다.
+  10/24 로컬(같은 PC 의 팀 웹)로 10턴: 턴 끝 → 서버 목록에 보이기까지 중앙 37ms(`notify` 자체는 0.02ms). 대시보드에는 여기에 3초 주기가 더해진다.
 
 ### 배포 역할이 믿는 GitHub 토큰 모양
 
@@ -340,6 +388,9 @@ aws iam update-assume-role-policy --role-name jarviseo-github-deploy --policy-do
 여기에 질문 · 성분 확인 수만큼 **OpenAI**(VLM · 임베딩) 사용료와 **Google Vision**(월 1,000건까지 무료, 넘으면
 1,000건당 약 $1.5)이 따로 나간다. 10/23 기준 이 계정 사용액은 크레딧으로 상쇄되고 있다(결제 콘솔 → Credits).
 
+예산 `jarviseo-monthly` 는 월 **$10**(실제 80% · 예상 100% 에서 메일)이다. t3.micro 때 정한 값이라 위 서버 예상 약 $25 보다 낮아,
+11월에는 예상 알림이 매번 온다. 10/26 이번 달 실제 사용액은 $1.30(태그 기준).
+
 예산은 태그로 걸러서 본다. 태그는 **결제 콘솔에서 비용 분류 태그로 켜야** 예산에 잡히는데, 자원에 태그를 단 뒤
 청구 데이터에 나타나기까지 최대 24시간이 걸린다. 그 전에는 켜기가 `Tag keys not found` 로 실패한다.
 
@@ -385,6 +436,7 @@ aws ssm send-command --profile jarviseo --region ap-northeast-2 --instance-ids <
 그다음 GitHub **Actions → Deploy → Run workflow**(main)로 첫 배포를 한다. 이후로는 main 에 머지될 때마다
 (`src/jarviseo/**` · `deploy/**` · `Dockerfile.web` · `requirements.lock` · 동의어 사전이 바뀌었으면) 저절로 돈다.
 이미지를 빌드해 올리느라 처음에는 10분쯤, 캐시가 있으면 몇 분 걸린다.
+10/25~26 main 머지 14번(성공한 Deploy): 머지 → 서버에 새 버전까지 중앙 **161초**(90~343초).
 
 ### 상태 보기 · 로그
 

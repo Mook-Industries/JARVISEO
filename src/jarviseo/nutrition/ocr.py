@@ -228,6 +228,79 @@ def _is_name_list(text: str) -> bool:
     )
 
 
+# 혼입 문구 바로 앞에 알레르기 표시 이름만인 조각이 이만큼 이어지면 혼입 목록으로 본다
+_MIN_NAME_RUN = 3
+# 이름 사이에 낀 깨진 낱말("복 숭대 토마토"의 "복", "숭대")의 최대 길이
+_MAX_BROKEN = 2
+# 이름 목록 사이에 낀, 옆 칸에서 섞여 들어온 짧은 조각("입니다")의 최대 길이. 한 번만 건너뛴다.
+_MAX_JUNK = 4
+
+
+def _notice_token(word: str) -> bool:
+    """알레르기 표시 이름인 낱말인가. "아황산류"처럼 '류'가 붙은 것도 받는다."""
+    return word in _NOTICE_WORDS or (word.endswith("류") and word[:-1] in _NOTICE_WORDS)
+
+
+def _list_chunks(text: str) -> list[tuple[int, int]]:
+    """괄호 바깥의 쉼표·마침표·•·※ 로 나눈 조각의 (시작, 끝) 위치."""
+    spans, depth, start = [], 0, 0
+    for i, ch in enumerate(text):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif ch in ",.•※" and depth == 0:
+            spans.append((start, i))
+            start = i + 1
+    spans.append((start, len(text)))
+    return spans
+
+
+def _name_run(text: str, lo: int, pos: int) -> int | None:
+    """혼입 문구 바로 앞에서 거꾸로, 알레르기 표시 이름이 든 조각이 이어지는 구간의 시작.
+
+    "~(감미료) 우유, 메밀,땅콩,대두, 밀, 복 숭대 토마토, 아황산류, 호두 주입니다 조혼입가능"처럼
+    "이 제품은"·"같은 제조시설"이 깨져 문장 시작을 못 찾아도, 혼입 문구 바로 앞에 이름만인 조각이
+    3개 이상 늘어서 있으면 혼입 목록이다.
+    - 깨진 조각("복 숭대 토마토")은 그 안에 표시 이름 낱말이 있고
+      그 앞 낱말이 2글자 이하면 이어 간다.
+    - 앞에 긴 낱말이 있는 조각은 표시 이름 낱말부터 쓰고 멈춘다
+      ("스테비올배당체(감미료) 우유" → "우유").
+    - 이름이 없는 짧은 조각("호두, 입니다. 잣"의 "입니다")은 한 번만 건너뛴다.
+      옆 칸 글자가 한 줄에 섞여 들어온 것이다.
+    - 그 밖에 이름이 없는 조각을 만나면 멈춘다. 이름만인 조각이 3개가 안 되면 None.
+    """
+    sub = text[lo:pos]
+    start, exact, skipped = None, 0, False
+    for s, e in reversed(_list_chunks(sub)):
+        chunk = sub[s:e]
+        words = _core(chunk).split()
+        if not words:
+            continue  # "호두, 입니다." 의 빈 조각, "대두, 혼입" 의 빈 조각
+        if _notice_token("".join(words)):  # 줄바꿈에 걸린 "복 숭아"도 이름 하나로 본다
+            exact += 1
+            start = s + chunk.find(words[0])
+            continue
+        hit = next((w for w in words if _notice_token(w)), None)
+        if hit is None:
+            junk = "".join(words)
+            if (
+                start is not None
+                and not skipped
+                and len(junk) <= _MAX_JUNK
+                and not re.search(r"\d", junk)
+            ):
+                skipped = True
+                continue
+            break
+        start = s + chunk.find(hit)
+        if any(len(w) > _MAX_BROKEN for w in words[: words.index(hit)]):
+            break  # 앞쪽 긴 낱말은 원재료다("스테비올배당체"). 이 조각에서 멈춘다.
+    if start is None or exact < _MIN_NAME_RUN:
+        return None
+    return lo + start
+
+
 def _cross_sentence(text: str, pos: int, floor: int = 0) -> tuple[int, int, bool]:
     """혼입 문구가 들어 있는 문장의 (시작, 끝, 시작이 확실한가).
 
@@ -235,6 +308,8 @@ def _cross_sentence(text: str, pos: int, floor: int = 0) -> tuple[int, int, bool
     가장 가까운 항목 경계(•·※·마침표·긴 숫자·지운 구간) 뒤에서
     1) "이 제품은"을 찾으면 거기서부터,
     2) 없어도 그 사이가 이름 목록("우유, 대두, 땅콩 혼입가능")이면 경계부터 확실한 시작으로 본다.
+    2-1) 이름 목록이 원재료 뒤에 바로 붙어 있어도 혼입 문구 바로 앞에 이름만 3개 이상
+       이어지면 그 이름부터 확실한 시작으로 본다(_name_run).
     3) 둘 다 아니면 예전처럼 닫는 괄호까지 보고, 그래도 멀면 40자까지만 거슬러 올라간다.
        이때는 시작이 불확실하다.
     경계를 못 찾아 floor(원재료명 머리말 끝)까지 간 경우에는 2)를 쓰지 않는다.
@@ -248,6 +323,12 @@ def _cross_sentence(text: str, pos: int, floor: int = 0) -> tuple[int, int, bool
         return phrases[-1].start(), end, True
     if bounds and _is_name_list(text[base:pos]):
         return base, end, True
+    # 이름 목록은 마침표·• 를 넘어 이어질 수 있어("•우유, …, 호두, 입니다. 잣 혼입가능")
+    # 경계가 아니라 원재료명 머리말 끝(floor)부터 본다.
+    # 이름이 아닌 조각에서 멈추므로 원재료는 안 삼킨다.
+    run = _name_run(text, floor, pos)
+    if run is not None:
+        return run, end, True
     base = max(base, text.rfind(")", 0, pos) + 1)
     return max(base, pos - _MAX_LOOKBACK), end, False
 

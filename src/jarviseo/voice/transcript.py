@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["MIN_LETTERS", "clean", "is_question", "is_wake_only"]
+__all__ = ["MIN_LETTERS", "clean", "has_wake_word", "is_question", "is_wake_only"]
 
 # 호출어. 힌트를 줘도 "자비스"처럼 받아써질 수 있어서 비슷한 표기도 같이 잡는다.
 # "자비서야" 같은 부르는 말은 호출어로 보고, "자비스럽게"처럼 뒤에 말이 이어지면 아니다.
@@ -16,6 +16,12 @@ _WAKE = re.compile(r"(?:[자재]\s?비\s?[서스써](?:야|아|님)?|jarvis)(?![
 # 맨 앞에 호출어 끝만 받아써진 토막("서, 오늘 날씨 어때?"). listen() 이 호출어 감지 시각보다
 # 조금 앞에서부터 읽어서 생길 수 있다. "서울"처럼 뒤에 말이 붙으면 아니다.
 _WAKE_TAIL = re.compile(r"^\s*(?:비\s?)?[서써](?:야|아)?(?![가-힣])[\s.,!?…~]*")
+# 호출어 2단계 확인(has_wake_word)은 감지 직전 1.6초만 받아써서 더 넓게 본다. 끊어 말한 "자, 비서"가
+# "아, 비서"·"다 비서"·"비, 서"로, 첫 소리가 "차"·"사"·"바"로 받아써졌다. 첫 소리가 빠지면
+# 조각 끝에 "비서."만 남는다. TV 오탐 조각은 "김신조 사건"·"형사"처럼 "비서"와 멀었다(#149).
+_WAKE_HEARD = re.compile(
+    r"[자재차사다아바나][\s,.]*비[\s,.]*[서스써성석]|(?:^|[\s,.])비[\s,.]*[서스써][.?!]?\s*$",
+)
 # 말 사이에 끼는 소리. 따로 떨어진 토막일 때만 지운다("아까"의 "아"는 그대로 둔다).
 _FILLER = re.compile(r"(?<!\w)(?:음+|으+음|어+|아+|에+|흠+)(?!\w)[.,!?…~]*")
 _LETTER = re.compile(r"[가-힣A-Za-z0-9]")
@@ -45,6 +51,11 @@ def clean(text: str) -> str:
 def is_question(text: str, min_letters: int = MIN_LETTERS) -> bool:
     """정리한 글자가 질문으로 쓸 만한지. 비었거나 min_letters 글자보다 짧으면 False."""
     return len(_LETTER.findall(text)) >= min_letters
+
+
+def has_wake_word(text: str | None) -> bool:
+    """감지 직전 구간을 받아쓴 글자가 호출어로 들리는지. 2단계 확인(``wakecheck.py``)용."""
+    return bool(text) and (_WAKE.search(text) or _WAKE_HEARD.search(text)) is not None
 
 
 def is_wake_only(text: str | None) -> bool:
