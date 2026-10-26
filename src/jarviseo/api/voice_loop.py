@@ -63,6 +63,10 @@ class VoiceLoop:
         self._stop = threading.Event()
         self._parts: dict = {}
         self._failed: str | None = None  # 못 켠 이유(다시 시도하지 않는다)
+        # 성분표를 잇달아 못 읽으면 다시 찍어 달라고 한다(입력창과 같은 횟수를 쓴다)
+        from jarviseo.api.assistant_web import RetakeLadder
+
+        self._ladder = RetakeLadder()
 
     # ---- 화면에 알리기 ----
 
@@ -201,7 +205,7 @@ class VoiceLoop:
             detector=detector,
             hands=hands,
             resolve=resolve_target,
-            checker=self.checker,
+            checker=self._ladder.wrap(self.checker),
         )
         graph = build_graph(deps)
         self._deps = deps
