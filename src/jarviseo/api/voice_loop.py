@@ -62,6 +62,7 @@ class VoiceLoop:
         self._ev_lock = threading.Lock()
         self._stop = threading.Event()
         self._parts: dict = {}
+        self._failed: str | None = None  # 못 켠 이유(다시 시도하지 않는다)
 
     # ---- 화면에 알리기 ----
 
@@ -115,9 +116,24 @@ class VoiceLoop:
     # ---- 켜고 끄기 ----
 
     def start(self) -> None:
-        """부품을 만들고 마이크 · 카메라를 연다. 못 열면 RuntimeError(이유)."""
+        """부품을 만들고 마이크를 연다. 못 열면 RuntimeError(이유).
+
+        한 번 못 켜면(키 · 마이크 · 스피커 · 호출어 모델 없음) 이유를 기억하고 다시 시도하지 않는다.
+        클라우드 서버(장치 없음)는 페이지를 열 때마다 켜 보느라 검출 모델을 매번 다시 읽었다.
+        장치를 꽂았으면 서버를 다시 켠다.
+        """
         if self.running:
             return
+        if self._failed:
+            raise RuntimeError(self._failed)
+        try:
+            self._start()
+        except Exception as e:
+            self._close()
+            self._failed = str(e) if isinstance(e, RuntimeError) else f"{type(e).__name__}: {e}"
+            raise RuntimeError(self._failed) from e
+
+    def _start(self) -> None:
         if not config.OPENAI_API_KEY:
             raise RuntimeError("OPENAI_API_KEY 가 없어 받아쓰기 · 읽기 · VLM 을 못 쓴다")
         from jarviseo.capture import FrameBuffer

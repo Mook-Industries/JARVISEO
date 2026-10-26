@@ -36,3 +36,19 @@ def test_start_needs_openai_key(monkeypatch):
     monkeypatch.setattr(config, "OPENAI_API_KEY", "")
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
         make_loop().start()
+
+
+def test_failed_start_is_not_retried(monkeypatch):
+    """장치가 없어 못 켰으면 다시 켜 보지 않는다(클라우드에서 페이지마다 모델을 다시 읽지 않게)."""
+    calls = []
+    loop = make_loop()
+
+    def no_mic():
+        calls.append(1)
+        raise OSError("마이크 없음")
+
+    monkeypatch.setattr(loop, "_start", no_mic)
+    for _ in range(3):
+        with pytest.raises(RuntimeError, match="마이크 없음"):
+            loop.start()
+    assert calls == [1] and not loop.running
