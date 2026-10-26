@@ -172,6 +172,7 @@ class WebAssistant:
         question: str,
         image: np.ndarray | None,
         more: list[tuple[np.ndarray, float]] | None = None,
+        trigger: str = "WAKEWORD",
     ) -> tuple[JarviseoState, list[str]]:
         """질문 한 번을 그래프로 돌리고 (끝난 상태, 읽은 문장들)을 돌려준다.
 
@@ -180,6 +181,7 @@ class WebAssistant:
             more: 그 뒤 잇달아 찍은 장면과 말 시작으로부터 지난 초. 그래프가 그중 가장 선명한
                 장면을 고른다(FrameBuffer.pick_best, 안경과 같다). 한 장만 찍으면 그 순간 손이
                 흔들렸을 때 그대로 실패한다(멘토 피드백 2026-10-22).
+            trigger: session_turn.trigger_type. 대답을 읽는 중 "자비서"로 끼어들었으면 BARGE_IN.
         """
         self._parts()
         now = time.monotonic()
@@ -215,7 +217,7 @@ class WebAssistant:
             dialog=self._dialog,
             recall_enabled=config.ENABLE_RECALL and self._dialog is not None,
         )
-        turn = {"session_id": self.session_id, "user_id": self.user_id, "trigger_type": "WAKEWORD"}
+        turn = {"session_id": self.session_id, "user_id": self.user_id, "trigger_type": trigger}
         self.pointing = "v2" if image is not None and self._hands is not None else "v1"
         state = build_graph(deps).invoke(turn)
         picked = state.get("frame")

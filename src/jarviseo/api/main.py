@@ -58,6 +58,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import UTC
 from pathlib import Path
+from typing import Literal
 
 import anyio
 import cv2
@@ -101,6 +102,11 @@ SECTIONS = (("ingredients", "원재료"), ("notice", "알레르기 표시"), ("c
 CLOUD_TOKEN = os.environ.get("JARVISEO_CLOUD_TOKEN", "").strip()
 MAX_UPLOAD_TURNS = 100  # 노트북은 20개씩 보낸다(memory/uploader.BATCH)
 MAX_FEED_TURNS = 50
+# 브라우저 호출어 2단계 확인에 받는 구간 상한(5초). 보통은 1.6초 = 51,200바이트
+MAX_WAKE_CLIP_BYTES = 16000 * 2 * 5
+# 브라우저 호출어(#218)가 받는 모델. 공용 특징 모델 2개 + 팀 모델(config.WAKEWORD_MODEL)
+WAKEWORD_FEATURES = ("melspectrogram.onnx", "embedding_model.onnx")
+WAKEWORD_FILE = "jarviseo.onnx"
 
 
 class Allergens(BaseModel):
@@ -113,6 +119,9 @@ class Ask(BaseModel):
     # 말을 시작한 뒤 잇달아 찍은 장면들과 찍은 시각(말 시작으로부터 ms). 가장 선명한 장면을 쓴다.
     more: list[str] = []
     more_ms: list[int] = []
+    # 대답을 읽는 중 "자비서"로 끼어들어 물었으면 BARGE_IN(브라우저 호출어, #218).
+    # session_turn.trigger_type 에 남는다.
+    trigger: Literal["WAKEWORD", "BARGE_IN"] = "WAKEWORD"
 
 
 class UploadedTurn(BaseModel):
@@ -135,8 +144,9 @@ def create_app(
     checker: IngredientChecker | None = None,
     assistant: WebAssistant | None = None,
     cloud_token: str | None = None,
+    wake_check=None,
 ) -> FastAPI:
-    """앱을 만든다. 테스트에서는 가짜 store · checker 와 토큰을 넣는다."""
+    """앱을 만든다. 테스트에서는 가짜 store · checker 와 토큰, 호출어 확인(WakeCheck)을 넣는다."""
     token = CLOUD_TOKEN if cloud_token is None else cloud_token
 
     @asynccontextmanager
@@ -150,6 +160,8 @@ def create_app(
         app.state.assistant = assistant or WebAssistant(
             app.state.store, app.state.checker, app.state.user_id
         )
+        # 브라우저 호출어 2단계 확인(#218). OpenAI 키가 있을 때 처음 확인할 때 만든다
+        app.state.wake_check = wake_check
         app.state.voice = VoiceLoop(
             app.state.store, app.state.checker, app.state.user_id, app.state.lock, _voice_result
         )
@@ -176,6 +188,46 @@ def create_app(
     @app.get("/dashboard.js", include_in_schema=False)
     def dashboard_js() -> FileResponse:
         return FileResponse(PAGES / "dashboard.js", media_type="text/javascript", headers=NO_CACHE)
+
+    @app.get("/wakeword.js", include_in_schema=False)
+    def wakeword_js() -> FileResponse:
+        return FileResponse(PAGES / "wakeword.js", media_type="text/javascript", headers=NO_CACHE)
+
+    @app.get("/api/wakeword")
+    def wakeword_info() -> dict:
+        """브라우저 호출어를 켤 수 있는지(모델 3개가 다 있는지)와 임계값. 노트북과 같은 값이다."""
+        return {
+            "available": all(
+                wakeword_file(n) is not None for n in (*WAKEWORD_FEATURES, WAKEWORD_FILE)
+            ),
+            "threshold": config.WAKEWORD_THRESHOLD,
+            "playback_threshold": config.WAKEWORD_PLAYBACK_THRESHOLD,
+            # 2단계 확인: 깨어나면 직전 check_sec 초를 POST /api/wake-check 로 보낸다
+            "check": config.WAKE_CHECK,
+            "check_sec": config.WAKE_CHECK_SEC,
+        }
+
+    @app.post("/api/wake-check")
+    async def wake_check_clip(request: Request) -> dict:
+        """브라우저 호출어가 깨어난 직전 구간(16kHz 모노 int16 PCM)을 받아써 호출어였는지 본다.
+
+        노트북 2단계 확인(voice/wakecheck.py, #149)과 같은 코드다. 키가 브라우저에 가지 않게
+        받아쓰기는 서버가 한다. 받아쓰지 못하면(키 없음 · 오류) 통과로 본다.
+        진짜 호출을 놓치지 않게.
+        """
+        data = await request.body()
+        if len(data) % 2 or len(data) > MAX_WAKE_CLIP_BYTES:
+            raise HTTPException(400, f"16비트 PCM, {MAX_WAKE_CLIP_BYTES} 바이트까지입니다")
+        audio = np.frombuffer(data, dtype="<i2")
+        return await _run_in_thread(lambda: _wake_check(request.app.state, audio))
+
+    @app.get("/models/wakeword/{name}", include_in_schema=False)
+    def wakeword_model(name: str) -> FileResponse:
+        """브라우저 호출어 모델 3개(약 2.6MB). 대시보드가 켤 때 한 번 받는다."""
+        path = wakeword_file(name)
+        if path is None:
+            raise HTTPException(404, "없는 호출어 모델입니다")
+        return FileResponse(path, media_type="application/octet-stream")
 
     @app.get("/sounds/{name}", include_in_schema=False)
     def sound(name: str) -> FileResponse:
@@ -216,7 +268,7 @@ def create_app(
             # 팀 음성 모드: 입력 질문도 같은 팀 부품으로(서버 스피커로 읽고, 장면은 카메라 버퍼에서)
             return await _run_in_thread(lambda: s.voice.ask_text(question, image))
         return await _run_in_thread(
-            lambda: _ask(s, question, image, more if image is not None else [])
+            lambda: _ask(s, question, image, more if image is not None else [], body.trigger)
         )
 
     @app.post("/api/turns")
@@ -441,10 +493,48 @@ def _voice_result(state, t0: float, loop) -> dict:
     return result
 
 
-def _ask(s, question: str, image: np.ndarray | None, more=None) -> dict:
+def wakeword_file(name: str) -> Path | None:
+    """브라우저 호출어 모델 파일. 없으면 None.
+
+    팀 모델은 config.WAKEWORD_MODEL(.onnx 경로일 때만). 공용 특징 모델은 data/models/
+    (웹 이미지가 빌드 때 넣는다)를 먼저 보고, 없으면 노트북의 openwakeword 패키지 폴더
+    (scripts/download_models.py).
+    """
+    if name == WAKEWORD_FILE:
+        path = Path(config.WAKEWORD_MODEL)
+        return path if path.suffix == ".onnx" and path.is_file() else None
+    if name not in WAKEWORD_FEATURES:
+        return None
+    path = config.MODELS_DIR / name
+    if path.is_file():
+        return path
+    try:
+        import openwakeword  # 리눅스(서버 이미지)에는 없다
+    except ImportError:
+        return None
+    path = Path(openwakeword.__file__).parent / "resources" / "models" / name
+    return path if path.is_file() else None
+
+
+def _wake_check(s, audio: np.ndarray) -> dict:
+    if s.wake_check is None:
+        if not config.OPENAI_API_KEY:
+            return {"passed": True, "text": None, "ms": 0}
+        from jarviseo.voice.wakecheck import WakeCheck  # openai 를 쓸 때만 읽는다
+
+        s.wake_check = WakeCheck()
+    from jarviseo.voice.transcript import has_wake_word
+
+    t0 = time.perf_counter()
+    text = s.wake_check.check(audio)  # 실패하면 None(통과). 노트북과 같은 로그를 남긴다
+    ms = round((time.perf_counter() - t0) * 1000)
+    return {"passed": text is None or has_wake_word(text), "text": text, "ms": ms}
+
+
+def _ask(s, question: str, image: np.ndarray | None, more=None, trigger="WAKEWORD") -> dict:
     t0 = time.perf_counter()
     with s.lock:  # 성분 판정기(OCR)를 성분 페이지와 같이 쓴다
-        state, spoken = s.assistant.ask(question, image, more or None)
+        state, spoken = s.assistant.ask(question, image, more or None, trigger=trigger)
     return _result(s, question, state, spoken, t0)
 
 
