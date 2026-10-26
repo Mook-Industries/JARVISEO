@@ -20,6 +20,7 @@ from jarviseo.nutrition.service import IngredientCheck
 from jarviseo.pointing.hands import HandPose
 from jarviseo.types import (
     AssistantResponse,
+    BBox,
     Detection,
     Frame,
     Intent,
@@ -83,6 +84,10 @@ class JarviseoState(TypedDict, total=False):
     # 턴마다 그래프를 새로 불러 상태가 남지 않아서다. 없으면 None(이어 묻기 단서 기권).
     prev_target_label: str | None
     target: TargetResolution
+    # 손 우선 크롭 사각형(픽셀). 가리키는 손이 있는데 손가락 선 근처에 후보가 없으면 resolve 가
+    # 채우고, crop_target 이 고른 박스 대신 이 사각형을 자른다. None 이면 고른 박스로 자른다.
+    # TargetResolution(types.py)은 세 사람의 계약이라 "박스 없는 선택"을 여기에 따로 둔다.
+    hand_crop: BBox | None
     # 고른 대상만 잘라낸 사진. VLM 과 성분 판정에는 전체 프레임 대신 이것이 간다.
     crop: np.ndarray
     # 성분 판정 결과. log 노드가 store.log_ingredient 로 turn_ingredient 에 남긴다.
