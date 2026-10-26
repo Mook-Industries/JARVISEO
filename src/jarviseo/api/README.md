@@ -54,6 +54,26 @@ python -m jarviseo.api          # http://localhost:8000 이 열린다. 끄려면
   손 모델(선택, 위 2-1). 마이크 · 스피커는 `.env` 의 `JARVISEO_MIC` · `JARVISEO_SPEAKER`(비면 기본 장치).
 - 키나 마이크가 없으면 예전처럼 브라우저 받아쓰기 · 읽기로 돈다(콘솔에 `[voice] 팀 음성 모드 꺼짐`).
 
+### 브라우저 호출어 (#218)
+
+서버에 마이크가 없을 때(클라우드 `jarviseo.duckdns.org`) 대시보드 탭이 직접 "자비서"를 듣는다(`pages/wakeword.js`).
+노트북과 같은 모델 3개를 onnxruntime-web 1.20.1(jsDelivr)로 돌린다. 평소 소리는 서버로 가지 않는다.
+
+```
+노트북 마이크(유선 카메라) → 브라우저: melspectrogram → embedding → jarviseo.onnx (80ms 마다 점수)
+  "자비서" 감지 → 시작음 → 브라우저 받아쓰기 → POST /api/ask (사진 + 질문) → 서버 그래프 → 브라우저가 읽음
+```
+
+- 서버는 모델을 `GET /models/wakeword/<이름>` 으로 내려주고, `GET /api/wakeword` 가 켤 수 있는지와 임계값
+  (config 의 `WAKEWORD_THRESHOLD` · `WAKEWORD_PLAYBACK_THRESHOLD`, 지금 둘 다 0.97)을 알려 준다.
+  웹 이미지(`Dockerfile.web`)가 빌드 때 세 모델을 `data/models/` 에 넣는다. 노트북은 `scripts/download_models.py` 가 받은 것을 쓴다.
+- 대답을 읽는 중에도 듣는다. "자비서"가 들리면 읽기를 끊고 새 질문을 받는다. 그 턴은 `trigger_type=BARGE_IN`.
+- 마이크는 브라우저 기본 마이크. 유선 카메라 마이크를 쓰려면 주소창 왼쪽 사이트 설정 → 마이크에서 고른다.
+  잡음 제거 · 자동 음량은 끄고 에코 제거는 켠다(주소 끝에 `?aec=0` 이면 에코 제거도 끈다). 콘솔에 `[wake] 브라우저 호출어 켜짐 · <마이크 이름>`.
+- 켜지지 않는 경우(콘솔 `[wake] 브라우저 호출어 꺼짐: <이유>`): 휴대폰, https 가 아님, 마이크 권한 거부, 서버에 모델 없음.
+  그때 화면 문구는 "호출 버튼이나 스페이스바로 불러 주세요."
+- 노트북 파이썬과 점수가 같은지는 `scripts/wakeword/compare_browser.py` 로 잰다(Node + onnxruntime-web).
+
 ### 질문 하나가 도는 곳
 
 | 단계 | 어디서 |

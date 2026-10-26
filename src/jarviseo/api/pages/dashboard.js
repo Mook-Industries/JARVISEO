@@ -445,13 +445,14 @@
 
   /* ------------------------------------------------------------------------
      모니터: 자비서에게 묻기 (실제 API)
-     - 호출(버튼 · 스페이스바) → 브라우저 받아쓰기로 질문을 듣는다(Chrome)
+     - 호출("자비서" · 버튼 · 스페이스바) → 브라우저 받아쓰기로 질문을 듣는다(Chrome). "자비서"는 아래 #218
      - 말을 시작한 순간의 카메라 장면을 고정한다(안경과 같다). 카메라가 꺼져 있으면 올린 사진
      - POST /api/ask → 팀 그래프 한 턴(의도 · 가리킴 · VLM · 기억 · 성분). 대답은 브라우저가 읽는다
      - 받아쓰기를 못 쓰는 브라우저는 아래 입력칸으로 묻는다
      ------------------------------------------------------------------------ */
 
   let busy = false;
+  let nextTrigger = "WAKEWORD"; // 대답을 읽는 중 "자비서"로 불렀으면 BARGE_IN(브라우저 호출어)
   let voiceMode = false; // 팀 음성 모드: 서버가 듣고 읽는다(api/voice_loop.py)
   let photo = null; // 카메라가 꺼져 있을 때 올린 사진(data URL)
   const shot = $("#feed-shot");
@@ -665,7 +666,7 @@
     if (!voiceMode) speak((d.spoken && d.spoken.length ? d.spoken : [answer]).join(" "));
   }
 
-  async function ask(question, frame, sttSec, more = []) {
+  async function ask(question, frame, sttSec, more = [], trigger = "WAKEWORD") {
     busy = true;
     STAGES.forEach((st) => (st.sec = 0));
     STAGES[0].sec = sttSec || 0;
@@ -681,6 +682,7 @@
           image: frame || null,
           more: frame ? more.map((m) => m.shot) : [],
           more_ms: frame ? more.map((m) => m.ms) : [],
+          trigger,
         }),
       });
       const d = await r.json();
@@ -713,6 +715,8 @@
       askInput.focus();
       return;
     }
+    const trigger = nextTrigger;
+    nextTrigger = "WAKEWORD";
     const rec = new Rec();
     listening = rec;
     rec.lang = "ko-KR";
@@ -748,7 +752,7 @@
       listening = null;
       stopMeter();
       const q = heard.trim();
-      if (q) ask(q, frame || grabFrame(), (performance.now() - t0) / 1000, frame ? more : []);
+      if (q) ask(q, frame || grabFrame(), (performance.now() - t0) / 1000, frame ? more : [], trigger);
       else if (!busy) {
         setState("idle");
         setText("#core-sub", "말씀을 듣지 못했어요. 다시 부르거나 아래에 입력해 주세요.");
@@ -1010,11 +1014,69 @@
       feedFrames();
     } catch (err) {
       console.info("[voice] 팀 음성 모드 꺼짐 — 브라우저로 돈다:", err.message);
-      setText("#core-sub", "“자비서”라고 부르면 대화를 시작합니다.");
+      startBrowserWake();
     }
     browserCamera();
   }
   startVoice();
+
+  /* ------------------------------------------------------------------------
+     브라우저 호출어 (#218) — 서버에 마이크가 없을 때(클라우드) 이 브라우저가 "자비서"를 듣는다
+     - 노트북과 같은 모델 3개를 onnxruntime-web 으로 돌린다(wakeword.js). 평소 소리는 서버로 안 간다
+     - 대답을 읽는 중에도 듣는다. "자비서"가 들리면 읽기를 끊고 새 질문을 받는다(끼어들기, BARGE_IN)
+     - 휴대폰은 켜지 않는다(마이크를 한 곳만 써서 받아쓰기와 겹친다). 못 켜면 버튼 · 스페이스바만
+     ------------------------------------------------------------------------ */
+
+  const ORT_URL = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.wasm.min.mjs";
+  let wake = null; // listenForWakeWord 가 돌려준 것
+  const speaking = () => !!window.speechSynthesis?.speaking;
+
+  // 대기 화면 문구. 호출어가 켜졌는지에 따라 바뀐다(대답 뒤 대기로 돌아갈 때도 이 문구)
+  const idleSub = (text) => {
+    STATES.idle.sub = text;
+    setText("#core-sub", text);
+  };
+
+  async function startBrowserWake() {
+    const off = (why) => {
+      console.info("[wake] 브라우저 호출어 꺼짐:", why);
+      idleSub("호출 버튼이나 스페이스바로 불러 주세요.");
+    };
+    if (isPhone) return off("휴대폰");
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) return off("https 가 아님");
+    try {
+      const info = await (await fetch("/api/wakeword")).json();
+      if (!info.available) return off("서버에 호출어 모델이 없음");
+      const [{ listenForWakeWord }, ort] = await Promise.all([import("/wakeword.js"), import(ORT_URL)]);
+      ort.env.wasm.numThreads = 1;
+      wake = await listenForWakeWord({
+        ort,
+        threshold: info.threshold,
+        playbackThreshold: info.playback_threshold,
+        isPlaying: speaking,
+        onDetect: onWake,
+      });
+    } catch (err) {
+      return off(err.message || err.name);
+    }
+    console.info("[wake] 브라우저 호출어 켜짐 ·", wake.label, "· 에코 제거", wake.aec);
+    const ready = () => idleSub("“자비서”라고 부르면 대화를 시작합니다.");
+    if (!wake.suspended) return ready();
+    idleSub("화면을 한 번 누르면 “자비서”를 듣기 시작해요.");
+    const resume = () => wake.resume().then(ready);
+    ["pointerdown", "keydown"].forEach((ev) => document.addEventListener(ev, resume, { once: true }));
+  }
+
+  function onWake(score) {
+    console.info("[wake] 자비서", score.toFixed(3));
+    if (voiceMode || listening) return; // 이미 질문을 듣는 중
+    if (speaking()) {
+      nextTrigger = "BARGE_IN"; // 읽던 대답을 끊고(listen → stopDemo) 새 질문
+    } else if (busy) {
+      return; // 대답을 만드는 중
+    }
+    listen();
+  }
 
   /* ------------------------------------------------------------------------
      성능 리포트 — 목업 숫자 대신 팀 기록(/api/report, api/report.py)

@@ -62,6 +62,20 @@ RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')" \
     && mkdir -p data/models \
     && python -c "import urllib.request as u; u.urlretrieve('https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task', 'data/models/hand_landmarker.task')"
 
+# 브라우저 호출어(#218) 모델 3개(약 2.6MB). 서버는 돌리지 않고 대시보드에 내려주기만 한다(/models/wakeword/).
+# 팀 모델은 레포 릴리스, 공용 특징 모델 2개는 openWakeWord 릴리스. 받은 파일이 바뀌었으면 빌드를 멈춘다.
+# jarviseo.onnx 를 바꾸면 scripts/download_models.py 의 주소 · SHA256 과 같이 바꾼다.
+RUN python -c "import urllib.request as u; \
+oww = 'https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/'; \
+u.urlretrieve('https://github.com/Mook-Industries/JARVISEO/releases/download/models-v1/jarviseo.onnx', 'data/models/jarviseo.onnx'); \
+u.urlretrieve(oww + 'melspectrogram.onnx', 'data/models/melspectrogram.onnx'); \
+u.urlretrieve(oww + 'embedding_model.onnx', 'data/models/embedding_model.onnx')" \
+    && printf '%s\n' \
+        "4686db10ae2febb837cadccf0e51e10b3bb9bccfdcc4b4820164fb73dd272b46  data/models/jarviseo.onnx" \
+        "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f  data/models/melspectrogram.onnx" \
+        "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f  data/models/embedding_model.onnx" \
+    | sha256sum -c -
+
 # 성분 판정이 읽는 알레르기 동의어 사전(레포에 있다).
 COPY data/datasets/allergen_synonyms.json data/datasets/
 COPY src ./src

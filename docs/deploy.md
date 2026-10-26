@@ -190,6 +190,8 @@ python scripts/start.py --db postgresql+psycopg://jarviseo:jarviseo@localhost:54
 휴대폰에서 `https://<도메인>` 으로 여는 **팀 웹**(`api/main.py`: 대시보드 `/` · 물어보기 `/assistant` ·
 성분 확인 `/ingredient`)이다(#179). 서버가 OpenAI · Google Vision · 푸드QR 키로 질문과 성분 확인을 처리하므로
 **접속 비밀번호**를 건다. 호출어로 부르는 본체(`assistant.py`)는 여전히 노트북에서 돈다.
+대시보드의 "자비서" 호출은 서버가 아니라 **브라우저**가 듣는다(#218, `src/jarviseo/api/README.md` "브라우저 호출어").
+서버는 호출어 모델 3개(약 2.6MB)를 내려주기만 한다.
 
 ```
 휴대폰 ──https──▶ <이름>.duckdns.org ──▶ EC2 (서울 ap-northeast-2, t3.small 2GB, 고정 IP)
@@ -208,7 +210,7 @@ GitHub main 머지 ─▶ Actions(deploy.yml) ─OIDC─▶ AWS 역할 ─▶ �
 | `deploy/bootstrap.sh` | 서버에 AWS CLI 가 없으면 `update.sh` 가 처음 한 번 깐다 |
 | `deploy/schema.sql` | `scripts/schema_sql.py` 가 모델에서 뽑은 스키마. 모델을 바꾸면 다시 뽑는다 |
 | `deploy/env.example` | 서버의 `/opt/jarviseo/.env` 모양(도메인 · DB 비밀번호). 실제 값은 서버에만 |
-| `Dockerfile.web` | 팀 웹 이미지(3.85GB, 받는 크기 917MB). YOLO · 손 관절 모델을 미리 넣는다 |
+| `Dockerfile.web` | 팀 웹 이미지(3.85GB, 받는 크기 917MB). YOLO · 손 관절 모델, 브라우저에 내려줄 호출어 모델 3개를 미리 넣는다 |
 | `scripts/put_cloud_secrets.py` | 키 · 접속 비밀번호를 Parameter Store 에 넣는다 |
 | `.github/workflows/deploy.yml` | main 머지 때 이미지를 빌드해 ECR 에 올리고 서버에 새 버전을 띄운다 |
 
