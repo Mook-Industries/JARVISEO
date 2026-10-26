@@ -1,4 +1,4 @@
-"""가리킴 ablation — 정답 표시 읽기(세션 고르기), 8분류 채점, v1 · v2 채점,
+"""가리킴 ablation — 정답 표시 읽기(세션 고르기), 8분류 채점, v1 · v2 채점, v2+C(손 우선 크롭),
 확신 오답 · 크롭 담김, 지표, DB 기록, 실행 조건(커밋 · 가중치 지문 · 세션) 기록과
 같은 조건끼리만 비교, 가중치끼리 후보 적중 변화.
 
@@ -77,6 +77,7 @@ def _row(**overrides) -> dict:
         "crop_covered": 1.0,
         "crop_area": 0.05,
         "crop_contained": True,
+        "hand_crop": False,
         "answered": True,
         "clarified": False,
         "confident_error": False,
@@ -168,8 +169,9 @@ def test_judge_no_candidate_but_answered_is_separate():
 
 
 def test_outcomes_split_no_candidate_into_two():
-    """결과 분류는 8가지다. 옛 '후보 없음' 하나는 없다."""
-    assert len(run_ablation.OUTCOMES) == 8
+    """결과 분류는 judge 의 8가지 + 손 방향 크롭이다. 옛 '후보 없음' 하나는 없다."""
+    assert len(run_ablation.OUTCOMES) == 9
+    assert run_ablation.OUTCOMES[-1] == run_ablation.HAND_CROP
     assert "후보 없음" not in run_ablation.OUTCOMES
 
 
@@ -322,6 +324,79 @@ def test_evaluate_screen_covering_box_is_confident_error_not_contained():
     assert (row["crop_covered"], row["crop_area"], row["crop_contained"]) == (1.0, 1.0, False)
 
 
+# --- 손 우선 크롭 (v2+C) ----------------------------------------------------------------
+
+# 화면 아래 가운데에서 똑바로 위를 가리키는 손. LEFT · RIGHT 는 선에서 45° 벗어나 손 점수가 0.3 미만
+TO_UP = _hand(base=(960.0, 1040.0), tip=(960.0, 1000.0))
+# 손끝 위쪽 물건. 후보에는 없다(검출기가 놓친 물건)
+ABOVE = BBox(860, 600, 1060, 800)
+
+
+def test_hand_crop_variant_is_ready_and_separate():
+    """v2+C 는 단서가 v2 와 같아 바로 돌고, 손 크롭을 켜는 버전은 v2+C 하나다."""
+    assert run_ablation.implemented_variants(["v2", "v2+C"]) == (["v2", "v2+C"], [])
+    assert run_ablation.VARIANTS["v2+C"] == run_ablation.VARIANTS["v2"]
+    assert run_ablation.HAND_CROP_VARIANTS == {"v2+C"}
+
+
+def test_evaluate_v2c_crops_fingertip_when_no_candidate_on_line():
+    """선 위에 후보가 없으면 v2 는 되묻고(후보 없어 되물음), v2+C 는 손끝 방향을 잘라 정답을 담는다.
+
+    손 크롭은 IoU 로 맞을 수 없어 정답 · 답함 · 확신 오답에 넣지 않고 크롭 담김으로만 센다.
+    """
+    sample = _sample(gt=ABOVE, has_hand=True)
+    candidates = [_det(LEFT), _det(RIGHT)]
+
+    v2 = _evaluate_one("v2", sample, candidates, TO_UP)
+    v2c = _evaluate_one("v2+C", sample, candidates, TO_UP)
+
+    assert (v2["outcome"], v2["clarified"], v2["hand_crop"]) == ("후보 없어 되물음", True, False)
+    assert (v2c["outcome"], v2c["hand_crop"], v2c["crop_contained"]) == ("손 방향 크롭", True, True)
+    assert (v2c["correct"], v2c["answered"], v2c["clarified"]) == (False, False, False)
+    assert (v2c["confident_error"], v2c["pred_label"]) == (False, None)
+    # 사각형 (636, 460)-(1284, 1080) 이 정답을 다 담고 사진의 약 19% 를 덮는다
+    assert (v2c["crop_covered"], v2c["crop_area"]) == (1.0, round(648 * 620 / (1920 * 1080), 3))
+
+
+def test_evaluate_v2c_keeps_box_answer_when_hand_points_at_candidate():
+    """손이 후보를 가리키면 v2+C 도 v2 와 똑같이 그 박스를 고른다(손 크롭 없음)."""
+    sample = _sample(gt=RIGHT, has_hand=True)
+    candidates = [_det(LEFT), _det(RIGHT)]
+
+    v2 = _evaluate_one("v2", sample, candidates, TO_RIGHT)
+    v2c = _evaluate_one("v2+C", sample, candidates, TO_RIGHT)
+
+    assert (v2c["outcome"], v2c["hand_crop"]) == ("정답", False)
+    del v2["resolve_ms"], v2c["resolve_ms"]
+    assert v2c == v2
+
+
+def test_evaluate_v2c_without_hand_still_asks():
+    """손을 못 찾은 사진에서는 손 크롭이 없다. 후보가 0개면 되묻는다(손 없이는 자를 곳이 없다)."""
+    row = _evaluate_one("v2+C", _sample(has_hand=True), [], None)
+    assert (row["outcome"], row["hand_crop"], row["clarified"]) == ("후보 없어 되물음", False, True)
+
+
+def test_summarize_counts_hand_crops_apart_from_accuracy():
+    """손 크롭 장수 · 그중 담긴 장수를 따로 세고, 정답률 · 확신 오답률에는 넣지 않는다."""
+    hand = {"outcome": "손 방향 크롭", "correct": False, "answered": False, "pred_label": None}
+    rows = [
+        _row(),
+        _row(**hand, hand_crop=True),  # 정답을 담음
+        _row(**hand, hand_crop=True, crop_contained=False),  # 빗나감
+    ]
+
+    m = run_ablation.summarize(rows)
+
+    assert (m["hand_crop_count"], m["hand_crop_contained"]) == (2, 1)
+    assert m["outcomes"]["손 방향 크롭"] == 2
+    assert m["accuracy"] == round(1 / 3, 3)
+    assert m["answered_accuracy"] == 1.0  # 박스로 답한 1장만
+    assert m["confident_error_rate"] == 0.0
+    assert m["crop_contained_rate"] == round(2 / 3, 3)  # 크롭 담김에는 손 크롭도 들어간다
+    assert "| 2(1) |" in run_ablation.format_row("w", "v2+C", m, 3, None)
+
+
 # --- 지표 ---------------------------------------------------------------------------
 
 
@@ -459,13 +534,14 @@ def _two_rows_metrics() -> dict:
 
 def test_format_row_shows_delta_for_accuracy_and_confident_error():
     """맨 앞에 가중치, 정답률 · 확신 오답률을 붙여 두고 각각 이전 실행 대비 차이(%p),
-    후보 재현율 뒤에 크롭 담김, 끝에 대상 결정 p50/p95."""
+    후보 재현율 뒤에 크롭 담김 · 손 크롭(담김), 끝에 대상 결정 p50/p95."""
     previous = {"accuracy": 0.4, "confident_error_rate": 0.6}
 
     line = run_ablation.format_row("yolov8n.pt(abc123)", "v1", _two_rows_metrics(), 2, previous)
 
     assert line.startswith("yolov8n.pt(abc123) | v1 | 2 | 50.0 (+10.0) | 50.0 (-10.0) |")
-    assert line.endswith("| 100.0 | 50.0 | 0.20/0.20")  # 후보 재현율 · 크롭 담김 · p50/p95
+    # 후보 재현율 · 크롭 담김 · 손 크롭(담김) · p50/p95
+    assert line.endswith("| 100.0 | 50.0 | 0(0) | 0.20/0.20")
 
 
 def test_format_row_skips_delta_missing_in_old_run():
