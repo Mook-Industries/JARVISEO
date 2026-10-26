@@ -40,6 +40,10 @@
   /* 듣는 중 파형은 실제 마이크 소리 크기로 움직인다(dashboard.js). 조용하면 납작하게 멈춘다 */
   /* 파형은 목소리가 들릴 때만 움직인다. 원본의 상시 애니메이션(듣는 중 · 대답 중)은 끈다 */
   .wave i { animation: none !important; transition: height 60ms linear; }
+  /* 사이드바 대화 내역: 원본은 목록이 남은 높이를 넘으면 버튼이 납작하게 눌려 글자가 잘렸다.
+     목록이 남은 높이만 차지하고, 넘치면 스크롤하게 한다. 버튼은 줄어들지 않는다 */
+  .sb-history { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  .sb-history button, .sb-history a { flex-shrink: 0; }
   .saved-note { margin-top: 6px; font-size: 12px; color: var(--text-3); min-height: 1em; }
 
   /* ---- 화이트 테마 (html[data-theme="light"]) ----
