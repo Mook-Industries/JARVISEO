@@ -131,7 +131,8 @@ function downsampler(rate) {
 }
 
 /**
- * 마이크를 열고 "자비서"가 들릴 때마다 onDetect(score) 를 부른다. 돌려준 stop() 으로 멈춘다.
+ * 마이크를 열고 "자비서"가 들릴 때마다 onDetect(score, clip) 를 부른다. 돌려준 stop() 으로 멈춘다.
+ * clip 은 감지한 80ms 까지 직전 clipSec 초(Int16Array) — 2단계 확인(서버 받아쓰기)에 보낸다.
  *
  * 대답을 읽는 동안(isPlaying() 이 참이거나 끝난 뒤 0.3초)은 playbackThreshold 를 쓴다(gate.py 와 같은 뜻).
  * 읽는 중에도 계속 들어 "자비서"로 끼어들 수 있다. 한 번 깨어나면 refractory 초는 다시 깨지 않는다.
@@ -144,6 +145,7 @@ export async function listenForWakeWord({
   threshold = 0.97,
   playbackThreshold = 0.97,
   refractory = 2.0,
+  clipSec = 1.6,
   isPlaying = () => false,
   onDetect,
   onScore = () => {},
@@ -174,6 +176,8 @@ export async function listenForWakeWord({
   let quietUntil = 0; // 이 시각(초)까지는 다시 깨지 않는다
   let playedAt = -Infinity; // 마지막으로 대답을 읽고 있던 시각
   let stopped = false;
+  const recent = []; // 점수를 낸 최근 80ms 들(clipSec 초어치)
+  const keep = Math.ceil((clipSec * SAMPLE_RATE) / FRAME);
   tap.port.onmessage = ({ data }) => {
     const block = shrink(data);
     const joined = new Float32Array(pending.length + block.length);
@@ -191,10 +195,14 @@ export async function listenForWakeWord({
       busy = busy.then(async () => {
         if (stopped) return;
         const s = await scorer.score(frame);
+        recent.push(frame);
+        if (recent.length > keep) recent.shift();
         onScore(s);
         if (s >= limit && now >= quietUntil) {
           quietUntil = now + refractory;
-          onDetect(s);
+          const clip = new Int16Array(recent.length * FRAME);
+          recent.forEach((f, i) => clip.set(f, i * FRAME));
+          onDetect(s, clip);
         }
       });
     }

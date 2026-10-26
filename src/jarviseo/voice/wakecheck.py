@@ -103,7 +103,7 @@ class WakeCheck:
         if self.mic is None:
             raise ValueError("start() 는 mic 를 넘겨 만든 WakeCheck 에서만 부른다")
         audio = self.mic.clip(t - self.seconds, t)
-        return WakeVerdict(self._pool.submit(self._check, audio), time.monotonic() + TIMEOUT_SEC)
+        return WakeVerdict(self._pool.submit(self.check, audio), time.monotonic() + TIMEOUT_SEC)
 
     def transcribe(self, audio: np.ndarray, hint: bool | None = None) -> str:
         """구간 하나(16kHz 모노 int16)를 받아쓴 원문. 실패하면 OpenAIError 가 난다."""
@@ -116,7 +116,12 @@ class WakeCheck:
         )
         return result.text
 
-    def _check(self, audio: np.ndarray) -> str | None:
+    def check(self, audio: np.ndarray) -> str | None:
+        """구간 하나를 받아쓴 원문. 구간이 비었거나 받아쓰지 못했으면 None(= 통과로 본다).
+
+        ``start()`` 가 스레드에서 부르고, 브라우저 호출어(api/main.py ``/api/wake-check``)는
+        바로 부른다.
+        """
         if len(audio) == 0:
             return None  # 마이크가 그 구간을 들고 있지 않다. 확인하지 못한 것으로 본다
         sent_at = time.monotonic()

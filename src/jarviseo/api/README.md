@@ -67,6 +67,10 @@ python -m jarviseo.api          # http://localhost:8000 이 열린다. 끄려면
 - 서버는 모델을 `GET /models/wakeword/<이름>` 으로 내려주고, `GET /api/wakeword` 가 켤 수 있는지와 임계값
   (config 의 `WAKEWORD_THRESHOLD` · `WAKEWORD_PLAYBACK_THRESHOLD`, 지금 둘 다 0.97)을 알려 준다.
   웹 이미지(`Dockerfile.web`)가 빌드 때 세 모델을 `data/models/` 에 넣는다. 노트북은 `scripts/download_models.py` 가 받은 것을 쓴다.
+- 2단계 확인(노트북 #149 와 같은 `voice/wakecheck.py`): 깨어나면 감지까지 직전 1.6초(`JARVISEO_WAKE_CHECK_SEC`)를
+  `POST /api/wake-check`(16kHz 모노 int16 PCM, 5초까지)로 보낸다. 서버가 OpenAI 로 받아써 "자비서"가 없으면 거절 →
+  브라우저는 듣기를 멈추고 아무 말 없이 다시 기다린다. 질문을 듣는 동안 같이 돌아 진짜 호출은 늦어지지 않는다.
+  키가 없거나 받아쓰기가 실패 · 3초 넘게 걸리면 통과. 키는 브라우저로 가지 않는다. 콘솔에 `[wake] 2단계 확인 통과 · 거절`.
 - 대답을 읽는 중에도 듣는다. "자비서"가 들리면 읽기를 끊고 새 질문을 받는다. 그 턴은 `trigger_type=BARGE_IN`.
 - 마이크는 브라우저 기본 마이크. 유선 카메라 마이크를 쓰려면 주소창 왼쪽 사이트 설정 → 마이크에서 고른다.
   잡음 제거 · 자동 음량은 끄고 에코 제거는 켠다(주소 끝에 `?aec=0` 이면 에코 제거도 끈다). 콘솔에 `[wake] 브라우저 호출어 켜짐 · <마이크 이름>`.

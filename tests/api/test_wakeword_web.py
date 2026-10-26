@@ -60,6 +60,8 @@ def test_wakeword_models_are_served(client, models):
         "available": True,
         "threshold": config.WAKEWORD_THRESHOLD,
         "playback_threshold": config.WAKEWORD_PLAYBACK_THRESHOLD,
+        "check": config.WAKE_CHECK,
+        "check_sec": config.WAKE_CHECK_SEC,
     }
     for name in (*main.WAKEWORD_FEATURES, main.WAKEWORD_FILE):
         r = c.get(f"/models/wakeword/{name}")
@@ -92,3 +94,56 @@ def test_barge_in_question_is_recorded(client):
         assert db.get(SessionTurn, first).trigger_type == "WAKEWORD"
         assert db.get(SessionTurn, barged.json()["turn_id"]).trigger_type == "BARGE_IN"
     assert c.post("/api/ask", json={"question": "음", "trigger": "CLICK"}).status_code == 422
+
+
+class HeardText:
+    """받아쓰기 결과를 정해 둔 가짜 WakeCheck. 받은 구간 길이를 남긴다."""
+
+    def __init__(self, text):
+        self.text, self.got = text, []
+
+    def check(self, audio):
+        self.got.append(len(audio))
+        return self.text
+
+
+def wake_client(tmp_path, wake_check):
+    store = MemoryStore(database_url=f"sqlite:///{tmp_path / 'w.db'}")
+    store.init_schema()
+    app = main.create_app(store=store, checker=_NoChecker(), wake_check=wake_check)
+    return TestClient(app)
+
+
+CLIP = bytes(16000 * 2 * 16 // 10)  # 1.6초, 16비트 무음
+
+
+@pytest.mark.parametrize(
+    ("heard", "passed"),
+    [("자비서 이거 뭐야", True), ("자비스", True), ("오늘의 뉴스입니다", False), (None, True)],
+)
+def test_wake_check_passes_only_wake_word(tmp_path, heard, passed):
+    """깨어난 직전 구간을 받아써 호출어가 있으면 통과. 받아쓰지 못하면(None) 통과로 본다."""
+    fake = HeardText(heard)
+    with wake_client(tmp_path, fake) as c:
+        d = c.post("/api/wake-check", content=CLIP).json()
+    assert d["passed"] is passed and d["text"] == heard
+    assert fake.got == [16000 * 16 // 10]  # int16 샘플 그대로 받았다
+
+
+def test_wake_check_without_key_passes(tmp_path, monkeypatch):
+    """OpenAI 키가 없는 서버는 확인하지 않고 통과시킨다(호출을 막지 않는다)."""
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "")
+    with wake_client(tmp_path, None) as c:
+        assert c.post("/api/wake-check", content=CLIP).json() == {
+            "passed": True,
+            "text": None,
+            "ms": 0,
+        }
+
+
+def test_wake_check_rejects_bad_clip(tmp_path):
+    """16비트가 아닌 길이(홀수 바이트)나 5초를 넘는 구간은 받지 않는다."""
+    with wake_client(tmp_path, HeardText("자비서")) as c:
+        assert c.post("/api/wake-check", content=b"abc").status_code == 400
+        too_long = bytes(main.MAX_WAKE_CLIP_BYTES + 2)
+        assert c.post("/api/wake-check", content=too_long).status_code == 400
