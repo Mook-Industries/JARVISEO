@@ -36,9 +36,19 @@ def test_strong_glare_is_rejected():
     """반사가 심하면 걸러진다."""
     img = text_image()
     h, w = img.shape[:2]
-    img[:, : w // 3] = 255  # 왼쪽 1/3 이 하얗게 날아감
+    img[:, w // 10 : w // 10 + w // 5] = 255  # 글자 줄 가운데가 하얗게 날아가 글자가 지워짐
     q = assess_quality(img)
     assert q.reason == "glare", q
+
+
+def test_white_margin_is_not_glare():
+    """흰 종이 여백은 반사가 아니다. 글자 영역 바깥의 흰 부분은 세지 않는다."""
+    img = text_image()
+    h, w = img.shape[:2]
+    page = np.full((h + 300, w + 400, 3), 255, np.uint8)  # 흰 종이 위 성분표
+    page[150 : 150 + h, 200 : 200 + w] = img
+    q = assess_quality(page)
+    assert q.reason != "glare", q
 
 
 def test_flat_image_counts_as_blurry():
