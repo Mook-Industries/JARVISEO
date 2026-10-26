@@ -1,4 +1,5 @@
 """가리킴 ablation — 정답 표시 읽기(세션 고르기), 8분류 채점, v1 · v2 채점, v2+C(손 우선 크롭),
+v2+lang · v2+lang+ctx(말 · 이어 묻기 임시 버전, 색은 raw 사진에서),
 확신 오답 · 크롭 담김, 지표, DB 기록, 실행 조건(커밋 · 가중치 지문 · 세션) 기록과
 같은 조건끼리만 비교, 가중치끼리 후보 적중 변화.
 
@@ -12,11 +13,13 @@ import importlib.util
 import subprocess
 from pathlib import Path
 
+import cv2
+import numpy as np
 import pytest
 
 from jarviseo.memory import EvalRun, EvalSample
 from jarviseo.pointing.hands import HandPose
-from jarviseo.types import BBox, Detection, TargetCandidate, TargetResolution
+from jarviseo.types import BBox, CueKind, Detection, TargetCandidate, TargetResolution
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "run_ablation.py"
 _spec = importlib.util.spec_from_file_location("run_ablation", _SCRIPT)
@@ -224,11 +227,11 @@ def test_evaluate_symmetric_tie_clarifies():
     assert (row["outcome"], row["clarified"], row["answered"]) == ("되묻는 게 맞음", True, False)
 
 
-def _evaluate_one(variant, sample, candidates, hand):
+def _evaluate_one(variant, sample, candidates, hand, raw=None):
     """사진 한 장을 한 버전으로 채점한다. 후보와 손은 정해 둔 것을 쓴다."""
     file = sample["file"]
     [row] = run_ablation.evaluate(
-        [sample], {file: candidates}, {file: 40.0}, variant, {file: FRAME}, {file: hand}
+        [sample], {file: candidates}, {file: 40.0}, variant, {file: FRAME}, {file: hand}, raw=raw
     )
     return row
 
@@ -375,6 +378,60 @@ def test_evaluate_v2c_without_hand_still_asks():
     """손을 못 찾은 사진에서는 손 크롭이 없다. 후보가 0개면 되묻는다(손 없이는 자를 곳이 없다)."""
     row = _evaluate_one("v2+C", _sample(has_hand=True), [], None)
     assert (row["outcome"], row["hand_crop"], row["clarified"]) == ("후보 없어 되물음", False, True)
+
+
+# --- 말 · 이어 묻기 임시 버전 (v2+lang · v2+lang+ctx, #166) ------------------------------------
+
+
+def test_language_variants_are_ready_and_stack_on_v2():
+    """시선(v3) 없이도 돈다. 단서는 v2 에 말 · 이어 묻기를 하나씩 더한 것이고, 손 크롭은 안 켠다."""
+    names = ["v2+lang", "v2+lang+ctx"]
+    assert run_ablation.implemented_variants(names) == (names, [])
+    v2 = run_ablation.VARIANTS["v2"]
+    assert run_ablation.VARIANTS["v2+lang"] == v2 | {CueKind.LANG}
+    assert run_ablation.VARIANTS["v2+lang+ctx"] == v2 | {CueKind.LANG, CueKind.CTX}
+    assert not set(names) & run_ablation.HAND_CROP_VARIANTS
+
+
+def _write_photo(path: Path, *paints: tuple[BBox, tuple[int, int, int]]) -> None:
+    """검은 1080p 사진에 박스마다 색을 칠해 저장한다(run_ablation.read_image 가 읽는 방식)."""
+    image = np.zeros((1080, 1920, 3), np.uint8)
+    for box, color in paints:
+        image[int(box.y1) : int(box.y2), int(box.x1) : int(box.x2)] = color
+    path.parent.mkdir(parents=True)
+    cv2.imencode(".png", image)[1].tofile(path)
+
+
+def test_evaluate_v2_lang_reads_color_from_raw_photo(tmp_path):
+    """ "노란 거"는 raw 폴더의 사진에서 색을 봐서 대칭인 두 컵 중 노란 쪽을 고른다.
+
+    사진을 안 주면(예전 동작) 색이 기권해 v2 처럼 되묻는다.
+    """
+    _write_photo(tmp_path / "s04" / "d.png", (LEFT, (0, 255, 255)), (RIGHT, (255, 0, 0)))
+    sample = {**_sample(gt=LEFT, file="s04/d.png"), "utterance": "노란 거 뭐야?"}
+    candidates = [_det(LEFT), _det(RIGHT)]
+
+    v2 = _evaluate_one("v2", sample, candidates, None, raw=tmp_path)
+    no_photo = _evaluate_one("v2+lang", sample, candidates, None)
+    with_photo = _evaluate_one("v2+lang", sample, candidates, None, raw=tmp_path)
+
+    assert (v2["clarified"], no_photo["clarified"]) == (True, True)
+    assert (with_photo["outcome"], with_photo["correct"]) == ("정답", True)
+
+
+def test_evaluate_v2_lang_ctx_reads_previous_target():
+    """ "그거"는 정답표의 앞 대상(prev_label)으로 읽는다.
+
+    말 단서만으로는 못 가르는 컵 · 병에서 병을 고른다.
+    """
+    sample = {**_sample(gt=RIGHT), "utterance": "그거 얼마나 남았어?", "prev_label": "bottle"}
+    candidates = [_det(LEFT, "cup"), _det(RIGHT, "bottle")]
+
+    lang = _evaluate_one("v2+lang", sample, candidates, None)
+    ctx = _evaluate_one("v2+lang+ctx", sample, candidates, None)
+
+    assert lang["clarified"]
+    assert (ctx["outcome"], ctx["pred_label"]) == ("정답", "bottle")
 
 
 def test_summarize_counts_hand_crops_apart_from_accuracy():

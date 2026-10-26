@@ -9,6 +9,8 @@ resolve_target 으로 고른 박스를 정답 박스와 비교한다(IoU 0.5 이
 버전은 단서를 하나씩 쌓아 켠다(types.CueKind 순서). 아직 구현 안 된 단서가 든 버전은 건너뛴다.
 v2+C 는 단서가 아니라 대비책(손 우선 크롭, #205)을 v2 위에 얹은 임시 버전이다. 손 크롭은 박스를
 고르지 않아 IoU 로는 맞을 수 없으므로, 정답률 · 확신 오답률에 섞지 않고 크롭 담김으로만 센다.
+v2+lang · v2+lang+ctx 는 시선(v3) 없이 말 단서 · 이어 묻기 단서를 v2 위에 쌓은 임시 버전이다(#166).
+고르는 말 · 직전 대상이 든 발화는 말 · 맥락 세션(s04)에 있어서 --sessions 4 로 따로 잰다.
 검출은 가중치마다 사진마다 한 번만 해서, 버전 차이가 단서에서만 나오게 한다.
 STT · VLM 없이 촬영 때 적은 발화로 채점해서, 가리킴 모델 실력만 따로 잰다.
 
@@ -21,7 +23,8 @@ STT · VLM 없이 촬영 때 적은 발화로 채점해서, 가리킴 모델 실
     python scripts/run_ablation.py --variants v1 v2 --note "v2 손 방향 추가"
     python scripts/run_ablation.py --variants v1 v2 v2+C --note "손 우선 크롭"
     python scripts/run_ablation.py --weights yolov8n.pt data/models/detector_r1.pt --note "R0 vs R1"
-    python scripts/run_ablation.py --sessions 4 --note "말 · 맥락 세션"
+    python scripts/run_ablation.py --sessions 4 --variants v2 v2+lang v2+lang+ctx \
+        --weights yolov8n.pt data/models/detector_r2.pt --note "말 · 맥락 세션"
     python scripts/run_ablation.py --split test --note "최종"     # 10/24 최종 측정 때만
 """
 
@@ -59,6 +62,10 @@ VARIANTS: dict[str, frozenset[CueKind]] = {
     "v5": frozenset(CueKind),
     # 임시 버전: 단서는 v2 그대로, 선 위에 후보가 없으면 손 우선 크롭(v2+lang 과 같은 방식의 이름).
     "v2+C": frozenset({CueKind.CENTER, CueKind.POINT}),
+    # 임시 버전: v3(시선)이 없어 누적 버전 v4 · v5 가 건너뛰어지므로, 그 사이엔 v2 위에 쌓아 잰다
+    # (10/22 결정 ④). 말 단서는 말 · 맥락 세션(s04, --sessions 4)에서 잰다.
+    "v2+lang": frozenset({CueKind.CENTER, CueKind.POINT, CueKind.LANG}),
+    "v2+lang+ctx": frozenset({CueKind.CENTER, CueKind.POINT, CueKind.LANG, CueKind.CTX}),
 }
 # 손 우선 크롭을 켜는 버전. 단서가 아니라 대비책이라 단서 표(VARIANTS)와 따로 적는다.
 HAND_CROP_VARIANTS = frozenset({"v2+C"})
@@ -196,14 +203,25 @@ def evaluate(
     variant: str,
     frame_size: dict[str, tuple[int, int]],
     hands: dict[str, HandPose | None],
+    raw: Path | None = None,
 ) -> list[dict]:
-    """한 버전으로 모든 사진을 채점한다. 검출 · 손은 밖에서 한 번 해 둔 결과를 쓴다."""
+    """한 버전으로 모든 사진을 채점한다. 검출 · 손은 밖에서 한 번 해 둔 결과를 쓴다.
+
+    말 단서를 켠 버전은 색("노란 캔")을 보려고 raw 폴더에서 사진을 다시 읽는다.
+    main 은 메모리를 아끼려고 검출한 사진을 버리고, 색은 박스 안의 원본 픽셀이 필요하다.
+    raw 가 없으면 색만 기권한다.
+    """
     cues = VARIANTS[variant]
     rows = []
     for s in samples:
         found = candidates[s["file"]]
         size = frame_size[s["file"]]
         hit = any(d.bbox.iou(s["gt"]) >= IOU_MATCH for d in found)
+        # 시간을 재기 전에 읽는다. 실제 비서는 사진을 이미 들고 있어서
+        # 디스크 읽기는 resolve 지연이 아니다.
+        image = None
+        if raw is not None and CueKind.LANG in cues:
+            image = read_image(raw / s["file"])
         started = time.perf_counter()
         resolution = resolve_target(
             candidates=found,
@@ -213,6 +231,7 @@ def evaluate(
             frame_size=size,
             prev_target_label=s["prev_label"],
             enabled_cues=set(cues),
+            image=image,
         )
         # 실제 비서는 손 크롭 판단도 resolve 단계 안에서 한다. 같이 재야 지연이 맞는다.
         hand_crop = None
@@ -595,7 +614,9 @@ def main() -> None:
             "손있음/손없음 | 후보재현율 | 크롭담김 | 손크롭(담김) | resolve p50/p95 ms"
         )
         for variant in ready:
-            rows = evaluate(samples, candidates, detect_ms, variant, frame_size, hands)
+            rows = evaluate(
+                samples, candidates, detect_ms, variant, frame_size, hands, raw=args.raw
+            )
             metrics = summarize(rows)
             metrics["conditions"] = conditions
             run_id = save_run(store, variant, rows, metrics, args.note)
