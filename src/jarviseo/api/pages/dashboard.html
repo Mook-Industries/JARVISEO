@@ -42,8 +42,13 @@
   .wave i { animation: none !important; transition: height 60ms linear; }
   /* 사이드바 대화 내역: 원본은 목록이 남은 높이를 넘으면 버튼이 납작하게 눌려 글자가 잘렸다.
      목록이 남은 높이만 차지하고, 넘치면 스크롤하게 한다. 버튼은 줄어들지 않는다 */
-  .sb-history { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  .sb-history { flex: 1 1 0; min-height: 0; overflow-y: auto; }
   .sb-history button, .sb-history a { flex-shrink: 0; }
+  /* 대화 내역이 길어지면 사이드바 머리(로고 · 접기 버튼 · 메뉴)까지 눌려 펼쳤을 때 높이가 접었을 때와 달라졌다.
+     남는 높이는 대화 내역만 줄이고, 나머지는 줄지 않게 한다 */
+  .sb-head, .sb-toggle-row, .sb-rule, .sb-nav, .sb-section-label, .sb-foot { flex-shrink: 0; }
+  /* 펼침(버튼 아래 12 + 선 1 + 13) = 접힘(버튼 아래 26). 메뉴가 같은 높이에서 시작한다 */
+  .sb-rule { margin-bottom: 13px; }
   .saved-note { margin-top: 6px; font-size: 12px; color: var(--text-3); min-height: 1em; }
 
   /* ---- 화이트 테마 (html[data-theme="light"]) ----
