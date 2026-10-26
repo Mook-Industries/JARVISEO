@@ -1,4 +1,5 @@
-"""단서 점수 — 가운데(v1) · 손 방향(v2) · 말(v4) 단서가 맞는 후보에 높은 점수(0~1)를 주는지.
+"""단서 점수 — 가운데(v1) · 손 방향(v2) · 말(v4) · 이어 묻기(v5) 단서가 맞는 후보에
+높은 점수를 주는지.
 
 말 단서는 질문 읽기(parse_lang)와 점수(score_lang)를 따로 본다. 색은 칠한 가짜 사진으로 잰다.
 """
@@ -12,7 +13,9 @@ from jarviseo.pointing.cues import (
     POINT_SIGMA_DEG,
     LangQuery,
     parse_lang,
+    refers_back,
     score_center,
+    score_ctx,
     score_lang,
     score_point,
 )
@@ -282,3 +285,48 @@ def test_lang_abstains_instead_of_zero(text):
 
 def test_lang_no_candidates_abstains():
     assert score_lang([], parse_lang("왼쪽 컵 뭐야?"), FRAME) is None
+
+
+# --- 이어 묻기 단서 (v5) ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("그거 씻어야 돼?", True),
+        ("아까 그거 뭐였지?", True),
+        ("그것을 줘", True),  # 조사가 붙어도 찾는다
+        ("그 컵 뭐야?", True),
+        ("그런데 이건 뭐야?", False),  # "그"로 시작해도 되가리키는 말이 아니다
+        ("이 컵 뭐야?", False),  # 눈앞의 물건
+    ],
+)
+def test_refers_back_reads_words(text, expected):
+    """바로 전 물건을 되가리키는 말이 있는지 낱말 단위로 본다."""
+    assert refers_back(text) is expected
+
+
+def test_ctx_scores_same_label_as_previous_target():
+    """앞에서 고른 대상이 컵이면 컵 1, 병 0."""
+    candidates = [_det(400, 440, 600, 640, "bottle"), _det(1320, 440, 1520, 640, "cup")]
+
+    found = score_ctx(candidates, "cup", "그거 씻어야 돼?")
+
+    assert [s.score for s in found] == [0.0, 1.0]
+    assert found[1].kind is CueKind.CTX
+    assert found[1].detail == {"prev_label": "cup"}
+
+
+@pytest.mark.parametrize(
+    ("prev_label", "text", "labels"),
+    [
+        (None, "그거 씻어야 돼?", ("bottle", "cup")),  # 직전 대상 없음
+        ("cup", "이 컵 뭐야?", ("bottle", "cup")),  # 되가리키는 말 없음
+        ("book", "그거 뭐야?", ("bottle", "cup")),  # 맞는 후보 없음
+        ("cup", "그거 뭐야?", ("cup", "cup")),  # 모두 같은 이름이라 못 가름
+    ],
+)
+def test_ctx_abstains_instead_of_zero(prev_label, text, labels):
+    """기권(None)한다. 모두에게 같은 점수를 주면 총점 차이만 줄어 되묻기가 는다."""
+    candidates = [_det(400, 440, 600, 640, labels[0]), _det(1320, 440, 1520, 640, labels[1])]
+    assert score_ctx(candidates, prev_label, text) is None
