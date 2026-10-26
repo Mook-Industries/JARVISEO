@@ -1,5 +1,5 @@
-"""대상 결정 — 순위·margin·되묻기 문장, 되묻기 대답으로 후보 좁히기, 단서 스위치, 손 · 말 단서 기권,
-말 단서 플래그."""
+"""대상 결정 — 순위·margin·되묻기 문장, 되묻기 대답으로 후보 좁히기, 단서 스위치,
+손 · 말 · 이어 묻기 단서 기권, 말 · 이어 묻기 단서 플래그."""
 
 import numpy as np
 import pytest
@@ -373,3 +373,53 @@ def test_reply_narrowing_keeps_language_scores_from_question():
     assert result.chosen.detection.bbox == MIDDLE  # 남은 컵 중 왼쪽
     lang = next(s for s in result.chosen.cue_scores if s.kind is CueKind.LANG)
     assert lang.score == pytest.approx(0.5)  # 좁힌 뒤 다시 매겼다면 1.0
+
+
+# --- 이어 묻기 단서 (v5) ---------------------------------------------------------------
+
+
+def test_context_cue_is_off_by_default(monkeypatch):
+    """플래그가 꺼져 있으면(기본) 앞 대상이 있고 "그거"라고 해도 이어 묻기 단서를 안 쓴다."""
+    monkeypatch.setattr(config, "ENABLE_CONTEXT_CUE", False)
+    candidates = [_det("bottle", LEFT), _det("cup", RIGHT)]
+
+    result = _ask(candidates, "그거 씻어야 돼?", prev_target_label="cup")
+
+    assert result.needs_clarify  # 대칭이라 v1 처럼 되묻는다
+    assert all(_kinds(c) == ["center"] for c in result.candidates)
+
+
+def test_context_cue_on_picks_previous_target_without_asking(monkeypatch):
+    """플래그를 켜면 "그거"가 앞에서 고른 컵을 가리킨다.
+
+    대칭인 병 · 컵에서 되묻지 않고 컵을 고른다.
+    """
+    monkeypatch.setattr(config, "ENABLE_CONTEXT_CUE", True)
+    candidates = [_det("bottle", LEFT), _det("cup", RIGHT)]
+
+    result = _ask(candidates, "그거 씻어야 돼?", prev_target_label="cup")
+
+    assert result.chosen.detection.label == "cup"
+    assert _kinds(result.chosen) == ["center", "ctx"]
+
+
+def test_ablation_switch_turns_context_cue_on_regardless_of_flag(monkeypatch):
+    """ablation 은 단서를 직접 골라 켠다(정답표의 prev_label 로 잰다)."""
+    monkeypatch.setattr(config, "ENABLE_CONTEXT_CUE", False)
+    candidates = [_det("bottle", LEFT), _det("cup", RIGHT)]
+    ctx_on = {CueKind.CENTER, CueKind.CTX}
+
+    result = _ask(candidates, "그거 뭐야?", prev_target_label="bottle", enabled_cues=ctx_on)
+
+    assert result.chosen.detection.label == "bottle"
+
+
+def test_context_cue_abstains_without_back_reference():
+    """되가리키는 말이 없으면 앞 대상이 있어도 기권해서 v1 과 margin 이 같다."""
+    candidates = [_det("bottle", CORNER), _det("cup", MIDDLE)]
+    ctx_on = {CueKind.CENTER, CueKind.CTX}
+    center = _ask(candidates, "이 병 뭐야?", enabled_cues={CueKind.CENTER})
+    with_ctx = _ask(candidates, "이 병 뭐야?", prev_target_label="cup", enabled_cues=ctx_on)
+
+    assert with_ctx.margin == pytest.approx(center.margin)
+    assert _kinds(with_ctx.chosen) == ["center"]

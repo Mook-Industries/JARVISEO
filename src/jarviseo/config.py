@@ -85,6 +85,7 @@ DETECTOR_WEIGHTS = _get("JARVISEO_DETECTOR_WEIGHTS") or "yolov8n.pt"
 # 다 만든 기능의 플래그를 남겨두면 경우의 수만 늘어나고 아무도 안 지운다.
 ENABLE_GAZE_CUE = _get_bool("JARVISEO_ENABLE_GAZE_CUE", False)
 ENABLE_LANGUAGE_CUE = _get_bool("JARVISEO_ENABLE_LANGUAGE_CUE", False)
+ENABLE_CONTEXT_CUE = _get_bool("JARVISEO_ENABLE_CONTEXT_CUE", False)
 ENABLE_RECALL = _get_bool("JARVISEO_ENABLE_RECALL", False)
 
 # --- 외부 API -------------------------------------------------------------

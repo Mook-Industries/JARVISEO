@@ -78,6 +78,10 @@ class JarviseoState(TypedDict, total=False):
     detections: list[Detection]
     # 가리키는 손. detect 가 YOLO 와 같이 한 번 찾는다. 없으면 None(손 단서 기권).
     hand: HandPose | None
+    # 같은 세션에서 바로 전 가리킴 턴(60초 안)에 고른 대상의 검출 이름("cup"). 이어 묻기 단서(v5)가
+    # "그거 씻어야 돼?"의 "그거"를 이 대상으로 읽는다. detect 가 턴마다 한 번 DB 에서 채운다.
+    # 턴마다 그래프를 새로 불러 상태가 남지 않아서다. 없으면 None(이어 묻기 단서 기권).
+    prev_target_label: str | None
     target: TargetResolution
     # 고른 대상만 잘라낸 사진. VLM 과 성분 판정에는 전체 프레임 대신 이것이 간다.
     crop: np.ndarray
