@@ -660,7 +660,11 @@
     setText("#total-time", (d.elapsed_ms / 1000).toFixed(1));
     setText("#feed-tag", d.ingredient ? "INGREDIENT" : d.target ? "TARGET CONFIRMED" : "ANSWERED");
     setText("#feed-msg", d.target ? `선택한 대상: ${d.target}` : answer);
-    const overlay = (d.ingredient && d.ingredient.where) || d.boxes;
+    // 찍은 사진 전체가 아니라 판정 · 대답에 쓴 크롭만 보여 준다.
+    // 성분 판정이 크롭을 읽었으면 찾은 글자 표시가 그려진 그 크롭(where), 아니면 크롭 그대로.
+    // 크롭이 없으면(가리키지 않은 질문) 사진을 덮지 않고 카메라 화면을 그대로 둔다.
+    const whereIsCrop = d.ingredient && d.ingredient.where && d.crop && !d.retried_whole;
+    const overlay = d.crop ? (whereIsCrop ? d.ingredient.where : d.crop) : null;
     if (overlay && !app.classList.contains("no-overlay")) showShot(overlay);
     addLog(tag, question, answer, { turnId: d.turn_id });
     // 팀 음성 모드면 서버 스피커가 이미 읽었다
