@@ -22,6 +22,15 @@
     box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55);
   }
   .feed[data-cam="on"] .feed-shot.is-big { width: 72%; cursor: zoom-out; }
+  /* 작은 결과 창의 닫기(×). 자리는 dashboard.js 가 창 오른쪽 위에 맞춘다 */
+  .shot-close {
+    position: absolute; z-index: 5; width: 26px; height: 26px; padding: 0;
+    display: grid; place-items: center; border-radius: 50%;
+    border: 1px solid var(--accent-line); background: rgba(5, 10, 12, 0.85);
+    color: var(--text); font-size: 16px; line-height: 1; cursor: pointer;
+  }
+  .shot-close:hover { background: rgba(5, 10, 12, 1); }
+  .shot-close[hidden] { display: none; }
   .feed[data-cam="photo"] .no-signal { display: none; }
   .no-signal .row { display: flex; gap: 8px; }
   .ask-form { display: flex; gap: 8px; margin-top: 10px; width: 100%; }
@@ -29,7 +38,8 @@
   .ask-form .cam-btn { white-space: nowrap; }
   .reason-a.is-warn { color: var(--warn); }
   /* 듣는 중 파형은 실제 마이크 소리 크기로 움직인다(dashboard.js). 조용하면 납작하게 멈춘다 */
-  .is-listening .wave i { animation: none; transition: height 60ms linear; }
+  /* 파형은 목소리가 들릴 때만 움직인다. 원본의 상시 애니메이션(듣는 중 · 대답 중)은 끈다 */
+  .wave i { animation: none !important; transition: height 60ms linear; }
   .saved-note { margin-top: 6px; font-size: 12px; color: var(--text-3); min-height: 1em; }
 </style>
 </head>

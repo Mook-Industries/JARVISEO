@@ -240,9 +240,7 @@
   const waveBars = [];
   for (let i = 0; i < 64; i++) {
     const bar = document.createElement("i");
-    const h = i % 7 === 3 ? 6 : i % 4 === 1 ? 4 : 2;
-    bar.style.height = `${h}px`;
-    bar.style.animationDelay = `${((i * 37) % 90) / 100}s`;
+    bar.style.height = "2px"; // 조용하면 납작하다. 높이는 마이크 소리 크기로만 바뀐다(startMeter)
     wave.append(bar);
     waveBars.push(bar);
   }
@@ -462,9 +460,36 @@
     shot.classList.remove("is-big");
     if (url) shot.src = url;
     else shot.removeAttribute("src");
+    if (typeof placeShotClose === "function") placeShotClose();
   };
   // 작은 결과 창은 누르면 커지고, 다시 누르면 작아진다
   shot.addEventListener("click", () => shot.classList.toggle("is-big"));
+
+  // 결과 창 닫기(×). 보고 싶지 않으면 끈다. 다음 질문의 결과는 다시 뜬다.
+  // 카메라가 켜져 있어 작은 창일 때만 보인다(올린 사진은 화면 전체라 닫으면 볼 것이 없다).
+  const shotClose = document.createElement("button");
+  shotClose.type = "button";
+  shotClose.className = "shot-close";
+  shotClose.setAttribute("aria-label", "결과 그림 닫기");
+  shotClose.textContent = "×";
+  shotClose.hidden = true;
+  shot.after(shotClose);
+  const placeShotClose = () => {
+    const box = shot.parentElement;
+    shotClose.hidden = shot.hidden || box.dataset.cam !== "on";
+    if (shotClose.hidden) return;
+    const f = box.getBoundingClientRect();
+    const b = shot.getBoundingClientRect();
+    shotClose.style.left = `${b.right - f.left - 32}px`;
+    shotClose.style.top = `${b.top - f.top + 6}px`;
+  };
+  new ResizeObserver(placeShotClose).observe(shot);
+  shot.addEventListener("load", placeShotClose);
+  window.addEventListener("resize", placeShotClose);
+  shotClose.addEventListener("click", (e) => {
+    e.stopPropagation();
+    showShot(null);
+  });
 
   function clearPhoto() {
     photo = null;
@@ -906,17 +931,21 @@
 
   const onVoiceEvent = (e) => {
     if (e.type === "wake") {
+      startMeter(); // 질문을 듣는 동안 목소리 크기로 파형을 그린다
       showShot(null);
       setState("wake", { stages: ["run", "off", "off", "off", "off"] });
       setText("#core-sub", e.barge_in ? "끼어들었어요. 말씀하세요…" : "말씀하세요…");
       setText("#reason-q", "듣고 있어요");
       setText("#reason-a", "말을 시작한 순간 가장 선명한 장면을 고를게요.");
     } else if (e.type === "thinking") {
+      stopMeter();
       setState("processing", { stages: ["done", "run", "off", "off", "off"] });
       setText("#core-sub", "생각하고 있어요…");
     } else if (e.type === "result") {
+      stopMeter();
       showResult(e.data.question, e.data, 0);
     } else if (e.type === "no_question") {
+      stopMeter();
       setState("idle");
       setText("#core-sub", "말씀을 듣지 못했어요. 다시 불러 주세요.");
     } else if (e.type === "error") {
