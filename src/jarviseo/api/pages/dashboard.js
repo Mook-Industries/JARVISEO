@@ -145,6 +145,17 @@
     store.set("jarviseo.sidebarCollapsed", on);
   };
   setCollapsed(store.get("jarviseo.sidebarCollapsed", false));
+
+  // 테마: 블랙(기본) · 화이트. 위쪽 막대의 버튼으로 바꾸고 이 브라우저에 저장한다
+  // (head 의 짧은 스크립트가 그리기 전에 붙여서 블랙으로 번쩍였다 바뀌지 않는다)
+  const setTheme = (theme) => {
+    if (theme === "light") document.documentElement.dataset.theme = "light";
+    else delete document.documentElement.dataset.theme;
+    store.set("jarviseo.theme", theme);
+    $$("[data-theme-set]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.themeSet === theme)));
+  };
+  setTheme(store.get("jarviseo.theme", "dark") === "light" ? "light" : "dark");
+  $$("[data-theme-set]").forEach((b) => b.addEventListener("click", () => setTheme(b.dataset.themeSet)));
   sbToggle.addEventListener("click", () => setCollapsed(!app.classList.contains("is-collapsed")));
 
   // 좁은 화면에서는 사이드바가 서랍처럼 열린다

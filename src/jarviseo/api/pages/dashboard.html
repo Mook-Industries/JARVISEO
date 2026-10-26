@@ -40,8 +40,53 @@
   /* 듣는 중 파형은 실제 마이크 소리 크기로 움직인다(dashboard.js). 조용하면 납작하게 멈춘다 */
   /* 파형은 목소리가 들릴 때만 움직인다. 원본의 상시 애니메이션(듣는 중 · 대답 중)은 끈다 */
   .wave i { animation: none !important; transition: height 60ms linear; }
+  /* 사이드바 대화 내역: 원본은 목록이 남은 높이를 넘으면 버튼이 납작하게 눌려 글자가 잘렸다.
+     목록이 남은 높이만 차지하고, 넘치면 스크롤하게 한다. 버튼은 줄어들지 않는다 */
+  .sb-history { flex: 1 1 0; min-height: 0; overflow-y: auto; }
+  .sb-history button, .sb-history a { flex-shrink: 0; }
+  /* 대화 내역이 길어지면 사이드바 머리(로고 · 접기 버튼 · 메뉴)까지 눌려 펼쳤을 때 높이가 접었을 때와 달라졌다.
+     남는 높이는 대화 내역만 줄이고, 나머지는 줄지 않게 한다 */
+  .sb-head, .sb-toggle-row, .sb-rule, .sb-nav, .sb-section-label, .sb-foot { flex-shrink: 0; }
+  /* 펼침(버튼 아래 12 + 선 1 + 13) = 접힘(버튼 아래 26). 메뉴가 같은 높이에서 시작한다 */
+  .sb-rule { margin-bottom: 13px; }
   .saved-note { margin-top: 6px; font-size: 12px; color: var(--text-3); min-height: 1em; }
+
+  /* ---- 화이트 테마 (html[data-theme="light"]) ----
+     원본 목업(static/jarviseo.css)은 블랙 하나라 색 변수를 덮어쓴다. 원본에 숫자로 박힌 색도 여기서 덮는다.
+     카메라 화면은 영상이 잘 보이게 두 테마 모두 어둡게 둔다. */
+  html[data-theme="light"] {
+    color-scheme: light;
+    --bg: #f3f6f7; --bg-side: #eceff1; --panel: #ffffff; --panel-2: #f6f9fa; --panel-3: #edf2f4;
+    --line: #dce4e7; --line-2: #cbd6da;
+    --text: #13222a; --text-2: #485b62; --text-3: #7a8b91;
+    --accent: #0e8f84; --accent-hi: #0a766c; --accent-mid: #13a193;
+    --accent-soft: rgba(14, 143, 132, 0.08); --accent-line: rgba(14, 143, 132, 0.42);
+    --lavender: #5a57c8; --ok: #0e8f84; --warn: #b7791f; --danger: #d64545;
+    --track: #e2e9ec; --bar: #2a9d92;
+  }
+  html[data-theme="light"] body { background-image: none; }
+  html[data-theme="light"] .icon-btn { background: #e8eef0; }
+  html[data-theme="light"] .icon-btn:hover { background: #dce5e8; }
+  html[data-theme="light"] .topbar { background: rgba(243, 246, 247, 0.92); }
+  html[data-theme="light"] .tag { background: #e8eef0; }
+  html[data-theme="light"] .dock { background: rgba(255, 255, 255, 0.96); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12); }
+  html[data-theme="light"] .overview { background: linear-gradient(100deg, #e4f3f1 0%, #eef6f5 45%, #f6f9fa 100%); }
+  html[data-theme="light"] .seg button[aria-pressed="true"] { background: #dcefed; }
+  html[data-theme="light"] .callout { background: #eef6f5; }
+  html[data-theme="light"] .switch span { background: #c8d2d6; }
+  html[data-theme="light"] .switch input:checked + span { background: #13a193; }
+  html[data-theme="light"] .log-list { scrollbar-color: #b8c7cb transparent; }
+  html[data-theme="light"] .log-list::-webkit-scrollbar-thumb { background: #b8c7cb; }
+  html[data-theme="light"] .sidebar,
+  html[data-theme="light"] .chart-tip,
+  html[data-theme="light"] .cam-dialog { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12); }
+  /* 위쪽 막대의 블랙 · 화이트 버튼(어느 화면에서나 보인다) */
+  .theme-seg button { padding: 4px 10px; font-size: 12px; }
 </style>
+<script>
+  // 저장해 둔 테마를 그리기 전에 붙인다(블랙으로 번쩍였다 바뀌지 않게)
+  try { if (localStorage.getItem("jarviseo.theme") === "\"light\"") document.documentElement.dataset.theme = "light"; } catch (e) {}
+</script>
 </head>
 <body>
 
@@ -151,6 +196,10 @@
         <span class="brand-sub">자비서</span>
       </a>
       <div class="top-right">
+        <div class="seg theme-seg" role="group" aria-label="화면 테마">
+          <button type="button" data-theme-set="dark" aria-pressed="true">블랙</button>
+          <button type="button" data-theme-set="light" aria-pressed="false">화이트</button>
+        </div>
         <span class="chip is-accent">LIVE</span>
         <span class="status"><i class="dot"></i>시스템 정상</span>
         <time class="clock num" id="clock">--:--:--</time>
