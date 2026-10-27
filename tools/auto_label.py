@@ -8,14 +8,16 @@ YOLO 파인튜닝(#167)의 둘째 단계. tools/extract_frames.py 가 뽑은 사
 명령:
     compare  어느 선생이 우리 valid 사진에서 박스를 더 잘 치나 (YOLO-World vs yolo11x)
     label    고른 선생으로 라벨 초안을 만든다
-    review   R1 초안에 YOLOE 식품 박스를 더해 사람 검수 작업을 만든다(R2)
+    review   R1 초안에 YOLOE 식품 박스를 더해 사람 검수 작업을 만든다(R2).
+             --weights 를 주면 새 영상의 사진에 우리가 학습한 가중치로 초안을 그린다(R3)
     import   검수 결과(Label Studio JSON)나 R1 초안을 사진별 YOLO 라벨로 바꾼다(R2 · 대조군)
-    build    사진 + 라벨로 회차 폴더(yolo_r1 …)를 만든다. 학습 / 검증은 영상 단위로 나눈다
+    build    사진 + 라벨로 회차 폴더(yolo_r1 …)를 만든다. 학습 / 검증은 영상 단위로 나눈다.
+             라벨 폴더를 여러 개 받는다(R3 = R2 검수본 + R3 검수본)
 
-compare · label · review 는 CLIP 이 있는 곳(Colab, 또는 CLIP 을 깐 별도 가상환경)에서만 돈다.
+compare · label · review(R2) 는 CLIP 이 있는 곳(Colab, 또는 CLIP 을 깐 별도 가상환경)에서만 돈다.
 ultralytics 는 YOLO-World · YOLOE 의 글귀를 처음 읽을 때 CLIP 을 git 에서 자동으로 설치해서,
 팀 파이썬 환경에서 돌리면 승인 없이 패키지가 깔린다. 그래서 CLIP 이 없으면 미리 멈춘다.
-import · build 는 모델을 안 써서 어디서든 돈다.
+review --weights(R3) 는 글귀를 안 읽어서 팀 환경에서 돈다. import · build 는 모델을 안 쓴다.
 
 실행 (Colab, 레포 맨 위 폴더에서. 먼저 pip install git+https://github.com/ultralytics/CLIP.git):
     python tools/auto_label.py compare --pointing /content/drive/MyDrive/JARVISEO/pointing
@@ -28,6 +30,10 @@ import · build 는 모델을 안 써서 어디서든 돈다.
     <CLIP 가상환경>/bin/python <레포>/tools/auto_label.py review \\
         --root <레포>/data/datasets/detector
 
+실행 (맥, R3 검수 작업. 레포 맨 위 폴더에서):
+    python tools/auto_label.py review --weights data/models/detector_r2.pt \\
+        --videos d07 d08 d09 --out data/datasets/detector/review_r3
+
 저장 (--root 아래):
     auto/labels/d01_0001.txt   YOLO 라벨 (번호 중심x 중심y 너비 높이, 0~1)
     auto/tasks.json            Label Studio 로 가져올 검수 작업
@@ -36,6 +42,7 @@ import · build 는 모델을 안 써서 어디서든 돈다.
     review/label_config.xml    R2 Label Studio 프로젝트 설정
     review/labels/             검수 결과 YOLO 라벨 (import --export)
     review/auto_labels/        같은 사진의 R1 자동 라벨, 대조군 (import --predictions)
+    review_r3/                 R3 검수 작업 · 결과(새 영상 d07~d09). 구조는 review/ 와 같다
     yolo_r1/images/{train,val}/ · yolo_r1/labels/{train,val}/ · yolo_r1/data.yaml   회차 하나
 """
 
@@ -426,6 +433,33 @@ def make_product_finder(conf: float) -> Teacher:
     return partial(run_model, model, conf=conf, to_class=to_class)
 
 
+def weight_class_table(names: dict[int, str]) -> dict[int, str]:
+    """가중치에 적힌 종류(번호 → 이름)가 10종 표와 똑같은지 보고 그대로 돌려준다.
+
+    R1 가중치(remote 를 넣은 11종)를 넣으면 remote 초안이 섞이고, 사전학습 COCO 가중치를 넣으면
+    product 가 빠진다. 어느 쪽이든 초안 기준이 회차마다 흔들려서 조용히 넘기지 않고 멈춘다.
+    """
+    if sorted(names.values()) != sorted(FINETUNE_CLASSES):
+        extra = sorted(set(names.values()) - set(FINETUNE_CLASSES))
+        lacking = sorted(set(FINETUNE_CLASSES) - set(names.values()))
+        raise SystemExit(
+            f"가중치의 종류가 10종 표와 다릅니다(더 있음 {extra[:5]} · 없음 {lacking}). "
+            "R2 처럼 10종으로 학습한 가중치를 줍니다"
+        )
+    return dict(names)
+
+
+def make_weight_teacher(weights: Path, conf: float) -> Teacher:
+    """우리가 학습한 10종 가중치(R2 …)로 초안을 그린다(R3 검수 초안).
+
+    지금 가장 나은 우리 모델이라 초안을 고칠 곳이 적고, 글귀를 안 읽어서 CLIP 이 필요 없다.
+    """
+    from ultralytics import YOLO  # CI 에는 ultralytics 가 없다
+
+    model = YOLO(str(weights))
+    return partial(run_model, model, conf=conf, to_class=weight_class_table(model.names))
+
+
 def too_small(box: BBox, min_side: float = MIN_SIDE) -> bool:
     """짧은 변이 min_side 보다 작으면 True. 딱 min_side 인 박스는 남긴다."""
     return min(box.width, box.height) < min_side
@@ -532,14 +566,25 @@ def cmd_label(args: argparse.Namespace) -> None:
         print(f"  {name}: {counts[name]}")
 
 
+def write_review(out: Path, tasks: list[dict]) -> None:
+    """검수 작업과 Label Studio 설정을 쓴다. 가져온 순서가 곧 작업 번호라 검수 순서대로 정렬한다."""
+    tasks.sort(key=lambda t: t["data"]["order"])
+    out.mkdir(parents=True)
+    (out / "tasks.json").write_text(json.dumps(tasks, ensure_ascii=False), encoding="utf-8")
+    (out / "label_config.xml").write_text(label_config(with_note=True), encoding="utf-8")
+
+
 def cmd_review(args: argparse.Namespace) -> None:
-    require_clip()
-    out = args.root / "review"
+    out = args.out or args.root / "review"
     # 검수 도중 덮어쓰면 Label Studio 로 이미 가져간 작업과 어긋난다.
     if out.exists():
         raise SystemExit(
             f"이미 있습니다: {out} — 검수 중인 작업과 어긋나지 않게 보관한 뒤 다시 돌립니다"
         )
+    if args.weights is not None:
+        review_with_weights(args, out)
+        return
+    require_clip()
     drafts_path = args.drafts or args.root / "auto" / "tasks.json"
     if not drafts_path.exists():
         raise SystemExit(f"R1 초안이 없습니다: {drafts_path} — Drive 의 detector/auto/tasks.json")
@@ -581,11 +626,7 @@ def cmd_review(args: argparse.Namespace) -> None:
         new["data"] |= {"video": stem.split("_", 1)[0], "order": order[stem], "note": note}
         tasks.append(new)
 
-    # 가져온 순서가 곧 작업 번호라, 정렬하지 않아도 검수 순서대로 나온다.
-    tasks.sort(key=lambda t: t["data"]["order"])
-    out.mkdir(parents=True)
-    (out / "tasks.json").write_text(json.dumps(tasks, ensure_ascii=False), encoding="utf-8")
-    (out / "label_config.xml").write_text(label_config(with_note=True), encoding="utf-8")
+    write_review(out, tasks)
 
     val_names = " ".join(sorted(args.val))
     val_count = sum(t["data"]["video"] in args.val for t in tasks)
@@ -601,6 +642,55 @@ def cmd_review(args: argparse.Namespace) -> None:
     print(f"10종 밖이라 뺀 R1 초안: {names} · 사진 {len(outside)}장 {' '.join(sorted(outside))}")
     print(
         f"짧은 변 {MIN_SIDE}px 미만이라 뺀 박스: R1 초안 {small_draft}개 · YOLOE {small_product}개"
+    )
+
+
+def review_with_weights(args: argparse.Namespace, out: Path) -> None:
+    """R3: 새 영상의 사진에 우리가 학습한 가중치로 초안을 그려 검수 작업을 만든다.
+
+    새 사진에는 R1 초안이 없어서, 사진 목록은 frames/<영상>/ 에서 --videos 에 든 영상만 읽는다.
+    YOLOE 는 부르지 않는다. 초안 방법이 R2 와 달라도 최종 라벨은 사람이 고치므로,
+    회차 비교에서 바뀌는 것은 "새 사진을 더한 것" 하나로 남는다.
+    """
+    frames = args.root / "frames"
+    absent = [video for video in args.videos if not (frames / video).is_dir()]
+    if absent:
+        raise SystemExit(f"사진 폴더가 없습니다: {absent} — extract_frames.py 를 먼저 돌립니다")
+    if not args.weights.exists():
+        raise SystemExit(f"가중치가 없습니다: {args.weights}")
+    files = sorted(
+        path.relative_to(args.root).as_posix()
+        for video in args.videos
+        for path in (frames / video).glob("*.jpg")
+    )
+    if not files:
+        raise SystemExit(f"사진이 없습니다: {frames} 의 {' '.join(args.videos)}")
+    teacher = make_weight_teacher(args.weights, args.conf)
+    order = review_order([Path(file).stem for file in files], set(args.val))
+
+    tasks, counts, small = [], Counter(), 0
+    for file in files:
+        image = read_image(args.root / file)
+        height, width = image.shape[:2]
+        found = teacher(image)
+        small += sum(too_small(d.bbox) for d in found)
+        boxes = [d for d in found if not too_small(d.bbox)]
+        counts.update(d.label for d in boxes)
+        stem = Path(file).stem
+        # 모델 이름에 가중치 파일 이름을 남겨, 어느 가중치로 그린 초안인지 작업에서 보이게 한다.
+        new = to_label_studio(file, boxes, width, height, args.weights.stem)
+        new["data"] |= {"video": stem.split("_", 1)[0], "order": order[stem], "note": ""}
+        tasks.append(new)
+    write_review(out, tasks)
+
+    per_video = Counter(t["data"]["video"] for t in tasks)
+    videos = " · ".join(f"{video} {n}장" for video, n in sorted(per_video.items()))
+    print(f"검수 작업 {len(tasks)}장 ({videos}) · 초안 박스 {sum(counts.values())}개 → {out}")
+    for name in FINETUNE_CLASSES:
+        print(f"  {name}: {counts[name]}")
+    print(
+        f"초안: {args.weights.name} (conf {args.conf}) · "
+        f"짧은 변 {MIN_SIDE}px 미만이라 뺀 박스 {small}개"
     )
 
 
@@ -770,29 +860,39 @@ def cmd_build(args: argparse.Namespace) -> None:
         )
     val_videos = set(args.val)
     # 대조군은 학습 라벨만 다르고 검증 라벨(best.pt 를 고르는 기준)은 R2 와 같은 사람 라벨을 쓴다.
-    folders = {"train": args.labels, "val": args.val_labels or args.labels}
-    names_files = {split: class_names_file(folder) for split, folder in folders.items()}
+    # R3 는 라벨 폴더가 둘이다(R2 검수본 + R3 검수본). 사진마다 라벨이 있는 폴더 하나에서 읽는다.
+    folders = {"train": args.labels, "val": [args.val_labels] if args.val_labels else args.labels}
+    names_files = {
+        folder: class_names_file(folder) for split in folders.values() for folder in split
+    }
 
     # 먼저 다 읽고 검사한 뒤에 쓴다. 중간에 멈추면 반쯤 만든 회차 폴더가 다음 실행을 막는다.
     # 라벨 파일이 있는 사진만 넣는다. 검수하지 않은 사진을 "물건 없음"으로 가르치지 않으려고.
     # 빈 라벨 파일은 물건이 없는 사진이라 넣는다.
-    items, missing = [], 0
+    items, missing, used = [], 0, Counter()
     try:
-        tables: dict[str, dict[int, int] | None] = {}
-        for split, names_file in names_files.items():
-            tables[split] = None
+        # 이름표 다시 맞추기는 폴더마다 따로 한다(R1 처럼 옛 11종 번호로 쓴 폴더가 섞일 수 있다).
+        tables: dict[Path, dict[int, int] | None] = {}
+        for folder, names_file in names_files.items():
+            tables[folder] = None
             if names_file is not None:
                 names = names_file.read_text(encoding="utf-8").splitlines()
-                tables[split] = remap_table([name.strip() for name in names if name.strip()])
+                tables[folder] = remap_table([name.strip() for name in names if name.strip()])
         for path in frames:
             split = split_of(path.stem, val_videos)
-            label_path = folders[split] / f"{path.stem}.txt"
-            if not label_path.exists():
+            found = [f for f in folders[split] if (f / f"{path.stem}.txt").exists()]
+            if not found:
                 missing += 1
                 continue
-            raw = label_path.read_text(encoding="utf-8").splitlines()
-            lines = [remap_line(line, tables[split]) for line in raw if line.strip()]
+            # 두 폴더에 다 있으면 어느 라벨이 맞는지 모른다. 한쪽을 조용히 고르면 R2 라벨이 바뀌어
+            # "새 사진을 더한 것 하나만 다르다"는 회차 비교가 깨진다.
+            if len(found) > 1:
+                raise ValueError(f"같은 사진의 라벨이 두 폴더에 있습니다: {path.stem} — {found}")
+            (folder,) = found
+            raw = (folder / f"{path.stem}.txt").read_text(encoding="utf-8").splitlines()
+            lines = [remap_line(line, tables[folder]) for line in raw if line.strip()]
             items.append((path, split, lines))
+            used[folder] += 1
     except ValueError as e:
         raise SystemExit(str(e)) from None
     splits = {split for _, split, _ in items}
@@ -822,6 +922,8 @@ def cmd_build(args: argparse.Namespace) -> None:
     )
     if args.val_labels is not None:
         print(f"검증 라벨은 {args.val_labels} 에서 읽음")
+    if len(used) > 1:
+        print("라벨을 가져온 폴더: " + " · ".join(f"{f} {n}장" for f, n in sorted(used.items())))
     for names_file in sorted({f for f in names_files.values() if f is not None}):
         print(f"종류 번호를 이름으로 다시 맞춤: {names_file}")
     print("종류 | 학습 박스 | 검증 박스")
@@ -853,7 +955,9 @@ def parse_args() -> argparse.Namespace:
     label.add_argument("--teacher", choices=("world", "mix"), default="world", help="선생 모델")
     label.add_argument("--conf", type=float, default=CONF, help="신뢰도 기준")
 
-    review = sub.add_parser("review", help="R2 검수 작업 (R1 초안 + YOLOE 식품 박스)")
+    review = sub.add_parser(
+        "review", help="검수 작업 — R2: R1 초안 + YOLOE 식품 박스 / R3: --weights 가중치 초안"
+    )
     review.add_argument(
         "--root", type=Path, default=config.DATASETS_DIR / "detector", help="검출기 데이터 폴더"
     )
@@ -861,7 +965,24 @@ def parse_args() -> argparse.Namespace:
         "--drafts", type=Path, default=None, help="R1 초안. 기본 <root>/auto/tasks.json"
     )
     review.add_argument(
-        "--conf", type=float, default=REVIEW_CONF, help="YOLOE 식품 박스 신뢰도 기준"
+        "--weights",
+        type=Path,
+        default=None,
+        help="이 10종 가중치로 초안을 그린다(R3, 예: data/models/detector_r2.pt). "
+        "CLIP 이 필요 없다",
+    )
+    review.add_argument(
+        "--videos", nargs="+", default=None, help="--weights 로 초안을 그릴 영상 번호, 예: d07 d08"
+    )
+    review.add_argument(
+        "--out", type=Path, default=None, help="작업을 쓸 폴더. 기본 <root>/review(R2 검수 원본)"
+    )
+    review.add_argument(
+        "--conf",
+        type=float,
+        default=None,
+        help=f"초안 신뢰도 기준. 기본 --weights 는 {CONF}(비서 검출과 같게), "
+        f"없으면 YOLOE 식품 박스 {REVIEW_CONF}",
     )
     review.add_argument(
         "--val", nargs="+", default=["d05"], help="검증 영상 번호 (검수 순서의 맨 앞 · 맨 뒤)"
@@ -874,8 +995,10 @@ def parse_args() -> argparse.Namespace:
     build.add_argument(
         "--labels",
         type=Path,
+        nargs="+",
         required=True,
-        help="라벨 폴더. R1 은 <root>/auto/labels, R2 는 <root>/review/labels(import)",
+        help="라벨 폴더(여럿 가능). R1 은 <root>/auto/labels, R2 는 <root>/review/labels(import), "
+        "R3 는 <root>/review/labels <root>/review_r3/labels",
     )
     build.add_argument(
         "--val-labels",
@@ -908,6 +1031,18 @@ def parse_args() -> argparse.Namespace:
         bad = [v for v in args.val if not VIDEO_ID.fullmatch(v)]
         if bad:
             parser.error(f"--val 은 d05 처럼 영상 번호로 씁니다: {bad}")
+    if args.command == "review":
+        if args.weights is not None and not args.videos:
+            parser.error(
+                "--weights 로 초안을 그릴 때는 --videos 로 영상을 고릅니다(예: d07 d08 d09)"
+            )
+        if args.videos and args.weights is None:
+            parser.error("--videos 는 --weights 와 같이 씁니다(R2 갈래는 R1 초안의 사진을 쓴다)")
+        bad = [v for v in args.videos or [] if not VIDEO_ID.fullmatch(v)]
+        if bad:
+            parser.error(f"--videos 는 d07 처럼 영상 번호로 씁니다: {bad}")
+        if args.conf is None:
+            args.conf = CONF if args.weights is not None else REVIEW_CONF
     if args.command in ("compare", "label", "review") and not 0 < args.conf < 1:
         parser.error(f"--conf 는 0 과 1 사이입니다: {args.conf}")
     return args
