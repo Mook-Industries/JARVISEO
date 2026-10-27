@@ -257,16 +257,33 @@
   }
 
   // 듣는 동안 마이크 소리 크기로 파형을 그린다. 목소리가 없으면(문턱 아래) 납작하게 둔다.
-  // 받아쓰기(브라우저)와 같은 마이크를 따로 한 번 더 연다. 권한은 받아쓰기와 같이 묻는다.
-  // 휴대폰(손가락 화면)에서는 열지 않는다. 안드로이드 · 아이폰은 마이크를 한 곳만 쓰게 해서,
-  // 파형용으로 한 번 더 열면 받아쓰기가 소리를 못 받아 "말씀을 듣지 못했어요"로 끝났다(10/26).
+  // 브라우저 음성은 이미 연 마이크(서버로 보내는 소리)의 크기를 쓴다. 팀 음성 모드(서버 마이크)만
+  // 파형용 마이크를 따로 연다. 휴대폰에서는 열지 않는다. 안드로이드 · 아이폰은 마이크를 한 곳만
+  // 쓰게 해서, 한 번 더 열면 다른 쪽이 소리를 못 받는다(10/26).
   const VOICE_FLOOR = 0.02; // RMS 문턱. 방 소음은 이 아래, 말소리는 0.05~0.3
   const isPhone = window.matchMedia("(pointer: coarse)").matches;
   const meter = { ctx: null, stream: null, raf: 0 };
   const flatWave = () => waveBars.forEach((b) => (b.style.height = "2px"));
+  const drawLevel = (rms) => {
+    const level = rms < VOICE_FLOOR ? 0 : Math.min(1, (rms - VOICE_FLOOR) / 0.2);
+    const t = performance.now() / 120;
+    waveBars.forEach((b, i) => {
+      const shape = 0.55 + 0.45 * Math.abs(Math.sin(i * 0.7 + t)); // 막대마다 조금씩 다르게
+      b.style.height = `${(2 + level * 22 * shape).toFixed(1)}px`;
+    });
+  };
   const startMeter = async () => {
     stopMeter();
     flatWave();
+    if (link && mic) {
+      // 브라우저 음성: 서버로 보내는 그 마이크의 소리 크기(voicelink.js level)로 그린다
+      const tick = () => {
+        drawLevel(link?.level || 0);
+        meter.raf = requestAnimationFrame(tick);
+      };
+      tick();
+      return;
+    }
     if (isPhone || !navigator.mediaDevices?.getUserMedia) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -280,13 +297,7 @@
         an.getFloatTimeDomainData(buf);
         let sum = 0;
         for (const v of buf) sum += v * v;
-        const rms = Math.sqrt(sum / buf.length);
-        const level = rms < VOICE_FLOOR ? 0 : Math.min(1, (rms - VOICE_FLOOR) / 0.2);
-        const t = performance.now() / 120;
-        waveBars.forEach((b, i) => {
-          const shape = 0.55 + 0.45 * Math.abs(Math.sin(i * 0.7 + t)); // 막대마다 조금씩 다르게
-          b.style.height = `${(2 + level * 22 * shape).toFixed(1)}px`;
-        });
+        drawLevel(Math.sqrt(sum / buf.length));
         meter.raf = requestAnimationFrame(tick);
       };
       tick();
@@ -445,29 +456,27 @@
 
   /* ------------------------------------------------------------------------
      모니터: 자비서에게 묻기 (실제 API)
-     - 호출("자비서" · 버튼 · 스페이스바) → 브라우저 받아쓰기로 질문을 듣는다(Chrome). "자비서"는 아래 #218
-     - 말을 시작한 순간의 카메라 장면을 고정한다(안경과 같다). 카메라가 꺼져 있으면 올린 사진
-     - POST /api/ask → 팀 그래프 한 턴(의도 · 가리킴 · VLM · 기억 · 성분). 대답은 브라우저가 읽는다
-     - 받아쓰기를 못 쓰는 브라우저는 아래 입력칸으로 묻는다
+     - 호출("자비서" · 버튼 · 스페이스바) → 서버가 노트북과 같은 부품으로 듣고 읽는다(아래 #218,
+       voicelink.js · api/browser_voice.py). Chrome 받아쓰기 · 브라우저 목소리는 쓰지 않는다
+     - 장면은 서버가 말을 시작한 순간 근처에서 고른다(안경과 같다). 카메라가 꺼져 있으면 올린 사진
+     - 팀 그래프 한 턴(의도 · 가리킴 · VLM · 기억 · 성분)이 끝나면 결과를 받아 보여 준다
+     - 서버에 OpenAI 키가 없으면 음성은 꺼지고 입력칸 질문(POST /api/ask)만 된다
      ------------------------------------------------------------------------ */
 
   let busy = false;
-  let nextVerdict = null; // 그 호출의 2단계 확인(Promise<boolean>, 브라우저 호출어만)
-  let nextTrigger = "WAKEWORD"; // 대답을 읽는 중 "자비서"로 불렀으면 BARGE_IN(브라우저 호출어)
-  let voiceMode = false; // 팀 음성 모드: 서버가 듣고 읽는다(api/voice_loop.py)
+  let voiceMode = false; // 팀 음성 모드: 서버가 이 PC 마이크로 듣고 읽는다(api/voice_loop.py)
+  let link = null; // 브라우저 음성: 이 브라우저 마이크 · 스피커로 서버가 듣고 읽는다(voicelink.js)
+  let mic = null; // 브라우저 마이크(wakeword.js listenForWakeWord). "자비서"도 여기서 듣는다
   let photo = null; // 카메라가 꺼져 있을 때 올린 사진(data URL)
   const shot = $("#feed-shot");
   const askForm = $("#ask-form");
   const askInput = $("#ask-input");
-  const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
   const INTENT_TAG = { general: "일반 질문", pointing: "가리킴", ingredient: "성분 판정", recall: "기억 검색" };
   const STATUS = { contains: "들어 있음", may: "섞였을 수 있음" };
-  let listening = null;
 
   // 화면을 떠나면 읽던 대답을 멈춘다(원본의 시연 정지 자리)
   function stopDemo() {
-    if (window.speechSynthesis) speechSynthesis.cancel();
-    if (listening) listening.abort();
+    link?.stop();
     stopMeter();
   }
 
@@ -544,30 +553,6 @@
     r.readAsDataURL(file);
     e.target.value = "";
   });
-
-  // 시작음 · 종료음 — 안경(voice/chime.py)과 같은 소리. 환경설정 음량을 따른다.
-  // 호출을 받으면 시작음, 질문하는 말이 끝나면 종료음. 받아쓰기는 소리와 함께 바로 시작한다(안경과 같음).
-  const SOUNDS = { start: new Audio("/sounds/start.wav"), end: new Audio("/sounds/end.wav") };
-  Object.values(SOUNDS).forEach((a) => (a.preload = "auto"));
-  const chime = (which) => {
-    const a = SOUNDS[which];
-    const vol = Number($("#volume").value) / 100;
-    if (!a || vol <= 0) return;
-    a.volume = vol;
-    a.currentTime = 0;
-    a.play().catch(() => {}); // 사용자가 페이지를 한 번도 누르지 않았으면 브라우저가 막는다
-  };
-
-  // 대답 읽기 — 환경설정의 음량 · 속도를 따른다
-  const speak = (text) => {
-    if (!window.speechSynthesis || !text) return;
-    speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "ko-KR";
-    u.volume = Number($("#volume").value) / 100;
-    u.rate = Number($("#rate").value);
-    speechSynthesis.speak(u);
-  };
 
   let logNo = 0;
   const shownTurns = new Set(); // 이미 보인 서버 turn_id. 물은 턴과 불러온 턴이 두 번 뜨지 않게
@@ -667,10 +652,10 @@
     const overlay = d.crop ? (whereIsCrop ? d.ingredient.where : d.crop) : null;
     if (overlay && !app.classList.contains("no-overlay")) showShot(overlay);
     addLog(tag, question, answer, { turnId: d.turn_id });
-    // 팀 음성 모드면 서버 스피커가 이미 읽었다
-    if (!voiceMode) speak((d.spoken && d.spoken.length ? d.spoken : [answer]).join(" "));
+    // 대답 소리는 서버가 읽었다(팀 음성 모드는 PC 스피커, 브라우저 음성은 이 브라우저로 보냄)
   }
 
+  // 서버에 OpenAI 키가 없을 때만 쓴다(입력칸 질문, 소리 없이 화면에만)
   async function ask(question, frame, sttSec, more = [], trigger = "WAKEWORD") {
     busy = true;
     STAGES.forEach((st) => (st.sec = 0));
@@ -702,84 +687,25 @@
     }
   }
 
-  const listen = () => {
+  // 호출 버튼 · 스페이스바 = "자비서"라고 부른 것(읽는 중이면 끼어들기)
+  async function listen() {
     if (voiceMode) {
-      // "자비서"라고 부른 것과 같다. 듣기 · 읽기는 서버가 한다(읽는 중이면 끼어들기)
-      fetch("/api/voice/call", { method: "POST" });
+      fetch("/api/voice/call", { method: "POST" }); // 듣기 · 읽기는 서버가 PC 마이크로 한다
       return;
     }
-    if (busy) return;
-    stopDemo();
-    if (feed.dataset.cam === "on") showShot(null);
-    setState("wake", { stages: ["run", "off", "off", "off", "off"] });
-    setText("#core-sub", "말씀하세요…");
-    setText("#reason-q", "듣고 있어요");
-    setText("#reason-a", "말을 시작한 순간의 장면을 고정할게요.");
-    if (!Rec) {
-      setText("#core-sub", "이 브라우저는 받아쓰기를 못 해요. 아래에 입력해 주세요.");
+    if (!link?.open) {
+      setText("#core-sub", "음성은 서버에 OpenAI 키가 있어야 해요. 아래에 입력해 주세요.");
       askInput.focus();
       return;
     }
-    const trigger = nextTrigger;
-    const verdict = nextVerdict; // 브라우저 호출어 2단계 확인. 버튼 · 스페이스바면 null
-    nextTrigger = "WAKEWORD";
-    nextVerdict = null;
-    let rejected = false;
-    const rec = new Rec();
-    listening = rec;
-    rec.lang = "ko-KR";
-    rec.interimResults = true;
-    let frame = null;
-    let more = [];
-    let heard = "";
-    const t0 = performance.now();
-    rec.onspeechstart = () => {
-      frame = grabFrame(); // 말을 시작한 순간
-      // 0.15초 간격으로 2장 더 찍어 모두 3장. 서버가 흔들림 · 반사가 가장 적은 장면을 고른다.
-      // 그 순간 손이 흔들리거나 빛이 반사돼도 다른 장면으로 읽을 수 있다. 카메라가 켜졌을 때만.
-      more = [];
-      if (feed.dataset.cam !== "on") return;
-      const start = performance.now();
-      [150, 300].forEach((ms) =>
-        setTimeout(() => {
-          const shot = grabFrame();
-          if (shot) more.push({ shot, ms: Math.round(performance.now() - start) });
-        }, ms)
-      );
-    };
-    rec.onspeechend = () => chime("end"); // 질문하는 말이 끝났다
-    rec.onresult = (e) => {
-      heard = [...e.results].map((x) => x[0].transcript).join("");
-      setText("#core-sub", `“${heard}”`);
-    };
-    rec.onerror = (e) => {
-      if (e.error === "aborted") return;
-      setText("#core-sub", e.error === "not-allowed" ? "마이크 권한이 필요해요. 아래에 입력해도 돼요." : `받아쓰기 실패: ${e.error}`);
-    };
-    const backToIdle = () => {
-      if (!busy) setState("idle"); // 호출이 아니었다. 아무 말 없이 다시 "자비서"를 기다린다
-    };
-    rec.onend = async () => {
-      listening = null;
-      stopMeter();
-      const q = heard.trim();
-      // 호출어가 아니었으면(TV 소리 등) 대답 없이 대기로. 노트북처럼 확인 결과를 기다렸다가 묻는다
-      if (rejected || (verdict && !(await verdict))) return backToIdle();
-      if (q) ask(q, frame || grabFrame(), (performance.now() - t0) / 1000, frame ? more : [], trigger);
-      else if (!busy) {
-        setState("idle");
-        setText("#core-sub", "말씀을 듣지 못했어요. 다시 부르거나 아래에 입력해 주세요.");
-      }
-    };
-    verdict?.then((ok) => {
-      if (ok || listening !== rec) return;
-      rejected = true; // 아직 듣는 중이면 바로 멈춘다
-      rec.abort();
-    });
-    rec.start();
-    startMeter();
-    chime("start"); // 호출을 받았다
-  };
+    try {
+      await ensureMic(); // 휴대폰은 처음 누를 때 마이크를 연다
+    } catch (err) {
+      setText("#core-sub", "마이크를 열지 못했어요. 권한을 확인하거나 아래에 입력해 주세요.");
+      return;
+    }
+    link.wake({ pos: mic.pos, button: true });
+  }
 
   $("#call-btn").addEventListener("click", listen);
 
@@ -798,6 +724,11 @@
     if (!q || busy) return;
     askInput.value = "";
     stopDemo();
+    if (link?.ask(q, grabFrame())) {
+      setState("processing", { stages: ["done", "run", "off", "off", "off"] });
+      setText("#reason-q", `“${q}”`);
+      return;
+    }
     ask(q, grabFrame(), 0);
   });
 
@@ -1018,6 +949,12 @@
   }
 
   async function startVoice() {
+    // ?voice=browser 면 서버에 마이크가 있어도 브라우저 음성으로 돈다(노트북에서 클라우드와 같게 시험)
+    if (new URLSearchParams(location.search).get("voice") === "browser") {
+      startBrowserVoice();
+      browserCamera();
+      return;
+    }
     setText("#core-sub", "팀 음성 모드를 준비하고 있어요… (처음엔 20초쯤 걸려요)");
     try {
       const r = await (await fetch("/api/voice/start", { method: "POST" })).json();
@@ -1031,25 +968,23 @@
       pollVoice();
       feedFrames();
     } catch (err) {
-      console.info("[voice] 팀 음성 모드 꺼짐 — 브라우저로 돈다:", err.message);
-      startBrowserWake();
+      console.info("[voice] 팀 음성 모드 꺼짐 — 브라우저 음성으로 돈다:", err.message);
+      startBrowserVoice();
     }
     browserCamera();
   }
   startVoice();
 
   /* ------------------------------------------------------------------------
-     브라우저 호출어 (#218) — 서버에 마이크가 없을 때(클라우드) 이 브라우저가 "자비서"를 듣는다
-     - 노트북과 같은 모델 3개를 onnxruntime-web 으로 돌린다(wakeword.js). 평소 소리는 서버로 안 간다
-     - 대답을 읽는 중에도 듣는다. "자비서"가 들리면 읽기를 끊고 새 질문을 받는다(끼어들기, BARGE_IN)
-     - 휴대폰은 켜지 않는다(마이크를 한 곳만 써서 받아쓰기와 겹친다). 못 켜면 버튼 · 스페이스바만
+     브라우저 음성 (#218) — 서버에 마이크가 없을 때(클라우드 · 휴대폰) 이 브라우저가 마이크 · 스피커다
+     - "자비서"는 노트북과 같은 모델 3개를 onnxruntime-web 으로 이 브라우저에서 듣는다(wakeword.js)
+     - 호출되면 직전 4초와 그 턴 동안의 소리 · 장면만 서버로 간다(voicelink.js). 서버가 노트북과
+       같은 부품으로 2단계 확인 · 받아쓰기(OpenAI) · "잠깐만요" · 읽기(OpenAI 목소리) · 되묻기 ·
+       끼어들기를 하고, 소리를 이 브라우저로 보낸다(api/browser_voice.py)
+     - 휴대폰은 호출어를 켜지 않고(배터리 · 상시 마이크) 호출 버튼을 누를 때 마이크를 연다
      ------------------------------------------------------------------------ */
 
   const ORT_URL = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.wasm.min.mjs";
-  let wake = null; // listenForWakeWord 가 돌려준 것
-  let wakeInfo = null; // GET /api/wakeword
-  const CHECK_TIMEOUT_MS = 3000; // 확인이 이만큼 안 끝나면 통과(voice/wakecheck.py TIMEOUT_SEC 와 같다)
-  const speaking = () => !!window.speechSynthesis?.speaking;
 
   // 대기 화면 문구. 호출어가 켜졌는지에 따라 바뀐다(대답 뒤 대기로 돌아갈 때도 이 문구)
   const idleSub = (text) => {
@@ -1057,61 +992,98 @@
     setText("#core-sub", text);
   };
 
-  async function startBrowserWake() {
-    const off = (why) => {
-      console.info("[wake] 브라우저 호출어 꺼짐:", why);
-      idleSub("호출 버튼이나 스페이스바로 불러 주세요.");
-    };
-    if (isPhone) return off("휴대폰");
-    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) return off("https 가 아님");
-    try {
-      const info = (wakeInfo = await (await fetch("/api/wakeword")).json());
-      if (!info.available) return off("서버에 호출어 모델이 없음");
-      const [{ listenForWakeWord }, ort] = await Promise.all([import("/wakeword.js"), import(ORT_URL)]);
-      ort.env.wasm.numThreads = 1;
-      wake = await listenForWakeWord({
+  // 지금 장면을 서버로 보낼 수 있는지: 카메라("live") · 올린 사진("photo") · 없음(null)
+  const cameraState = () => (feed.dataset.cam === "on" && video.videoWidth ? "live" : photo ? "photo" : null);
+
+  // 지금 장면 JPEG. 카메라는 width 까지 줄이고, 올린 사진은 그대로
+  async function grabBlob(width) {
+    if (cameraState() === "live") {
+      const c = document.createElement("canvas");
+      const scale = Math.min(1, width / video.videoWidth);
+      c.width = Math.round(video.videoWidth * scale);
+      c.height = Math.round(video.videoHeight * scale);
+      c.getContext("2d").drawImage(video, 0, 0, c.width, c.height);
+      return new Promise((ok) => c.toBlob(ok, "image/jpeg", 0.85));
+    }
+    return photo ? (await fetch(photo)).blob() : null;
+  }
+
+  // 브라우저 마이크를 연다(한 번만). 데스크톱은 "자비서"도 듣고, 휴대폰 · 모델 없는 서버는 소리만 받는다
+  let micOpening = null;
+  function ensureMic() {
+    if (mic) return Promise.resolve(mic);
+    micOpening ??= (async () => {
+      const [info, { listenForWakeWord }] = await Promise.all([
+        fetch("/api/wakeword").then((r) => r.json()),
+        import("/wakeword.js"),
+      ]);
+      const detect = info.available && !isPhone;
+      const ort = detect ? await import(ORT_URL) : null;
+      if (ort) ort.env.wasm.numThreads = 1;
+      mic = await listenForWakeWord({
         ort,
+        detect,
         threshold: info.threshold,
         playbackThreshold: info.playback_threshold,
-        clipSec: info.check_sec,
-        isPlaying: speaking,
-        onDetect: onWake,
+        isPlaying: () => !!link?.playing,
+        onAudio: (frame, pos) => link?.feed(frame, pos),
+        onDetect: (score, clip, pos) => {
+          console.info("[wake] 자비서", score.toFixed(3));
+          link?.wake({ pos, score }); // 읽는 중 · 생각 중이어도 보낸다. 끼어들기는 서버가 정한다
+        },
       });
+      mic.detect = detect;
+      console.info("[wake] 브라우저 마이크 ·", mic.label, "· 에코 제거", mic.aec, "· 호출어", detect);
+      return mic;
+    })().finally(() => (micOpening = null));
+    return micOpening;
+  }
+
+  // 서버 알림(api/browser_voice.py). 팀 음성 모드 알림과 같은 모양이라 같은 함수로 그린다
+  const onLinkEvent = (e) => {
+    if (e.type === "rejected") {
+      stopMeter(); // "자비서"가 아니었다(TV 소리 등). 아무 말 없이 다시 기다린다
+      setState("idle");
+    } else if (e.type === "closed") {
+      link = null;
+      idleSub("음성 서버와 연결이 끊겼어요. 새로고침해 주세요.");
+    } else {
+      onVoiceEvent(e);
+    }
+  };
+
+  async function startBrowserVoice() {
+    const off = (why) => {
+      console.info("[voice] 브라우저 음성 꺼짐:", why);
+      idleSub("음성을 쓸 수 없어요. 아래에 입력해 주세요.");
+    };
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) return off("https 가 아님");
+    let l = null;
+    try {
+      const { VoiceLink } = await import("/voicelink.js");
+      l = new VoiceLink({ onEvent: onLinkEvent, camera: cameraState, grab: grabBlob });
+      const r = await l.connect();
+      link = l;
+      link.setVolume(Number(volume.value) / 100);
+      link.setRate(Number(rate.value));
+      console.info("[voice] 브라우저 음성 켜짐 · 가리킴", r.pointing, "· 기억", r.recall);
     } catch (err) {
+      l?.close();
       return off(err.message || err.name);
     }
-    console.info("[wake] 브라우저 호출어 켜짐 ·", wake.label, "· 에코 제거", wake.aec, "· 2단계 확인", info.check);
-    const ready = () => idleSub("“자비서”라고 부르면 대화를 시작합니다.");
-    if (!wake.suspended) return ready();
-    idleSub("화면을 한 번 누르면 “자비서”를 듣기 시작해요.");
-    const resume = () => wake.resume().then(ready);
-    ["pointerdown", "keydown"].forEach((ev) => document.addEventListener(ev, resume, { once: true }));
-  }
-
-  // 2단계 확인(#149 와 같다): 깨어난 직전 구간을 서버가 받아써서 "자비서"가 있었는지 본다.
-  // 질문을 듣는 동안 같이 돈다. 실패 · 3초 초과는 통과(인터넷이 끊겨도 호출은 된다)
-  function checkWake(clip) {
-    if (!wakeInfo?.check || !clip?.length) return null;
-    const asked = fetch("/api/wake-check", { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: clip.buffer })
-      .then((r) => (r.ok ? r.json() : { passed: true }))
-      .then((d) => {
-        console.info(`[wake] 2단계 확인 ${d.passed ? "통과" : "거절"} “${d.text ?? ""}” ${d.ms ?? "-"}ms`);
-        return d.passed;
-      })
-      .catch(() => true);
-    return Promise.race([asked, new Promise((ok) => setTimeout(() => ok(true), CHECK_TIMEOUT_MS))]);
-  }
-
-  function onWake(score, clip) {
-    console.info("[wake] 자비서", score.toFixed(3));
-    if (voiceMode || listening) return; // 이미 질문을 듣는 중
-    if (speaking()) {
-      nextTrigger = "BARGE_IN"; // 읽던 대답을 끊고(listen → stopDemo) 새 질문. 노트북도 확인 전에 끊는다
-    } else if (busy) {
-      return; // 대답을 만드는 중
+    if (isPhone) return idleSub("호출 버튼을 누르면 대화를 시작합니다.");
+    try {
+      await ensureMic();
+    } catch (err) {
+      console.info("[wake] 마이크 못 엶:", err.message || err.name);
+      return idleSub("호출 버튼을 누르면 대화를 시작합니다.");
     }
-    nextVerdict = checkWake(clip);
-    listen();
+    if (!mic.detect) return idleSub("호출 버튼이나 스페이스바로 불러 주세요.");
+    const ready = () => idleSub("“자비서”라고 부르면 대화를 시작합니다.");
+    if (!mic.suspended) return ready();
+    idleSub("화면을 한 번 누르면 “자비서”를 듣기 시작해요.");
+    const resume = () => mic.resume().then(ready);
+    ["pointerdown", "keydown"].forEach((ev) => document.addEventListener(ev, resume, { once: true }));
   }
 
   /* ------------------------------------------------------------------------
@@ -1257,6 +1229,9 @@
   };
   volume.addEventListener("input", syncVolume);
   rate.addEventListener("input", syncRate);
+  // 브라우저 음성: 서버가 보낸 소리의 음량, 서버 목소리 속도(SLOW · NORMAL · FAST)
+  volume.addEventListener("change", () => link?.setVolume(Number(volume.value) / 100));
+  rate.addEventListener("change", () => link?.setRate(Number(rate.value)));
   syncVolume();
   syncRate();
 
