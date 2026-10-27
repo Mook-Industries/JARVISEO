@@ -183,6 +183,25 @@ python scripts/start.py --db postgresql+psycopg://jarviseo:jarviseo@localhost:54
 
 옛 릴리스는 지우지 않는다. 새 모델이 나쁘면 태그만 되돌리면 된다.
 
+## 팀 모델을 서버에 올릴 때 (모델 담당자)
+
+지금은 가리킴 물체 검출기(#167)만 이 길로 올린다. 비워 두면 서버는 사전학습 `yolov8n.pt` 를 쓴다.
+배포 담당 없이 모델 담당자가 혼자 할 수 있다. AWS 계정은 필요 없다.
+
+1. 기존 모델보다 나아진 것을 같은 실행으로 확인한다(`run_ablation.py --weights yolov8n.pt data/models/detector_rN.pt`).
+2. GitHub 레포 **Releases → Draft a new release** 로 `.pt` 를 올린다. 태그는 `models-v2` 처럼 새로 만든다.
+3. 파일의 SHA256 을 구한다. 윈도우 cmd: `certutil -hashfile detector_rN.pt SHA256`, 맥: `shasum -a 256 detector_rN.pt`.
+4. `Dockerfile.web` 의 두 줄만 고쳐 PR 을 올린다. PR 본문에 1번 비교 결과를 붙인다.
+   ```dockerfile
+   ARG DETECTOR_URL="https://github.com/Mook-Industries/JARVISEO/releases/download/models-v2/detector_rN.pt"
+   ARG DETECTOR_SHA256="<3번 값>"
+   ```
+5. PR 의 Docker 체크(web image)가 초록불이면 파일을 받았고 SHA256 도 맞은 것이다. 틀리면 빨간불이고 서버는 그대로다.
+   머지하면 Deploy 가 서버에 올린다(약 3분). Deploy 가 초록불이면 끝이다.
+
+되돌릴 때는 그 PR 을 Revert 하거나 두 줄을 전 값(또는 `""`)으로 돌린다. 옛 릴리스는 지우지 않는다.
+노트북에서 같은 모델을 쓰려면 파일을 `data/models/` 에 두고 `.env` 에 `JARVISEO_DETECTOR_WEIGHTS=data/models/detector_rN.pt`.
+
 ---
 
 ## 클라우드 서버 (AWS)
