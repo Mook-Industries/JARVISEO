@@ -25,6 +25,7 @@ __all__ = [
     "RETAKE_UNCOVER",
     "MAX_WARNING_CHARS",
     "RETAKE_OTHER_SIDE",
+    "RETAKE_AGAIN",
     "RETAKE_SHOW_INGREDIENTS",
     "RETAKE_WHOLE",
     "SMALL_TEXT_NOTE",
@@ -43,6 +44,8 @@ RETAKE_WHOLE = "원재료명이 잘 안 보여요. 성분표 전체를 카메라
 RETAKE_OTHER_SIDE = "원재료명이 안 보여요. 원재료명이 적힌 면을 보여 주세요."
 # 원재료명도 함유 표시("○○ 함유")도 못 찾았을 때. 판정할 근거가 하나도 없다(2026-10-24 결정).
 RETAKE_SHOW_INGREDIENTS = "원재료명 부분을 보여 주세요."
+# 보여 달라고 했는데 또 못 읽었을 때. 같은 안내를 되풀이하지 않고 처음부터 다시 찍게 한다.
+RETAKE_AGAIN = "아직 성분표를 읽지 못했어요. 원재료명이 화면 가운데에 크게 나오게 다시 찍어 주세요."
 # 성분표 일부가 가려졌거나 잘렸을 때 (nutrition/occlusion.py).
 # 찾은 경고가 있으면 경고 뒤에 OCCLUDED_NOTE 를 붙이고,
 # 없으면 RETAKE_UNCOVER 로 다시 보여 달라고 한다.

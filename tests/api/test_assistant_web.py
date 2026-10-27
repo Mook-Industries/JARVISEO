@@ -197,6 +197,55 @@ def test_ingredient_uses_whole_photo_when_nothing_detected(tmp_path):
     assert spoken == ["해당 제품에는 밀이 들어 있어요."]
 
 
+class NeverReads:
+    """늘 성분표를 못 읽는 판정기."""
+
+    def __init__(self):
+        self.seen = []
+
+    def check(self, image, allergens):
+        from jarviseo.nutrition.response import RETAKE_SHOW_INGREDIENTS
+        from jarviseo.nutrition.service import IngredientCheck
+        from jarviseo.types import AllergenJudgement, AllergenVerdict
+
+        self.seen.append(image.shape)
+        j = AllergenJudgement(verdict=AllergenVerdict.UNDETERMINED, reason="no_ingredients")
+        msg = RETAKE_SHOW_INGREDIENTS
+        return IngredientCheck(judgement=j, message=msg, retake=msg)
+
+
+def test_show_first_then_ask_to_retake(tmp_path):
+    """크롭에서 못 읽으면 먼저 원재료명을 보여 달라고 하고, 또 못 읽으면 다시 찍어 달라고 한다."""
+    from jarviseo.nutrition.response import RETAKE_AGAIN, RETAKE_SHOW_INGREDIENTS
+
+    checker = NeverReads()
+    web = web_with(tmp_path, CupOnTheLeft(), checker)
+    state, spoken = web.ask("이거 먹어도 돼?", IMAGE)
+    assert state["target"].chosen.detection.label == "cup"  # 가리킨 물건의 크롭을 읽었다
+    assert checker.seen[0] != IMAGE.shape and spoken == [RETAKE_SHOW_INGREDIENTS]
+    assert web.ask("이거 먹어도 돼?", IMAGE)[1] == [RETAKE_AGAIN]
+    assert web.ask("이거 먹어도 돼?", IMAGE)[1] == [RETAKE_AGAIN]
+
+
+def test_retake_ladder_resets_on_success_and_time():
+    from jarviseo.api.assistant_web import RETAKE_RESET_SEC, RetakeLadder
+    from jarviseo.nutrition.response import RETAKE_AGAIN
+    from jarviseo.nutrition.service import IngredientCheck
+    from jarviseo.types import AllergenJudgement, AllergenVerdict
+
+    now = [0.0]
+    ladder = RetakeLadder(clock=lambda: now[0])
+    j = AllergenJudgement(verdict=AllergenVerdict.UNDETERMINED)
+    miss = IngredientCheck(judgement=j, message="보여 주세요.", retake="보여 주세요.")
+    ok = IngredientCheck(judgement=j, message="해당 제품에는 밀이 들어 있어요.")
+    assert ladder.judge(miss).message == "보여 주세요."
+    assert ladder.judge(ok).message == ok.message  # 읽으면 처음으로
+    assert ladder.judge(miss).message == "보여 주세요."
+    now[0] += RETAKE_RESET_SEC + 1  # 한참 뒤의 실패는 처음 실패다
+    assert ladder.judge(miss).message == "보여 주세요."
+    assert ladder.judge(miss).message == RETAKE_AGAIN
+
+
 def test_other_questions_keep_plain_pointing(tmp_path):
     """성분 질문이 아니면 보완을 끼우지 않는다. 물체가 없으면 그래프대로 되묻는다."""
     vlm_web = web_with(tmp_path, NoObjects(), PanelOnlyInWholePhoto(IMAGE.shape))

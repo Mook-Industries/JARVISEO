@@ -20,6 +20,10 @@
   (_RetryWholeFrame). 손이 가린 데가 있으면 찾은 경고 + 가려졌다는 안내가 나간다(service.py).
 진짜 안경에서도 같은 문제라, 가리킴 쪽 해결은 담당(최홍묵)과 따로 정한다.
 
+그래도 성분표를 못 읽으면 먼저 보여 달라고 하고("원재료명 부분을 보여 주세요." 등 service.py 안내),
+잇달아 또 못 읽으면 같은 안내를 되풀이하지 않고 다시 찍어 달라고 한다 (RetakeLadder).
+음성 모드(voice_loop.py)도 같은 RetakeLadder 를 쓴다.
+
 턴마다 원본 · 후보 박스 · 크롭을 data/captures/web/ 에 남긴다(어디서 막혔는지 보려고).
 
 OPENAI_API_KEY 가 없으면 VLM 은 가짜(vlm.FakeVLMClient)로 답하고 기억 저장 · 검색은 끈다.
@@ -31,6 +35,7 @@ from __future__ import annotations
 import inspect
 import logging
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import cv2
@@ -39,13 +44,14 @@ import numpy as np
 from jarviseo import config
 from jarviseo.capture import FrameBuffer
 from jarviseo.memory import MemoryStore
+from jarviseo.nutrition.response import RETAKE_AGAIN
 from jarviseo.nutrition.service import IngredientChecker
 from jarviseo.types import BBox, Detection, Frame, Intent
 from jarviseo.voice import FakeSpeechToText, FakeTextToSpeech
 from jarviseo.workflow import GraphDeps, JarviseoState, build_graph
 from jarviseo.workflow.router import classify_intent
 
-__all__ = ["NO_KEY_ANSWER", "WebAssistant", "draw_boxes"]
+__all__ = ["NO_KEY_ANSWER", "RetakeLadder", "WebAssistant", "draw_boxes"]
 
 NO_KEY_ANSWER = "VLM 키(OPENAI_API_KEY)가 없어서 사진을 보고 답할 수 없어요. 이건 가짜 답이에요."
 WHOLE_LABEL = "사진 전체"  # 물체를 못 찾아 사진 전체를 대상으로 줄 때의 이름
@@ -106,6 +112,52 @@ class _RetryWholeFrame:
         return result
 
 
+# 성분표를 못 읽은 일이 이 시간 안에 잇달아 나야 "또 못 읽음"으로 센다(초)
+RETAKE_RESET_SEC = 60.0
+
+
+class RetakeLadder:
+    """성분표를 못 읽은 횟수를 턴을 넘어 센다.
+
+    처음 못 읽으면 판정기 안내(원재료명 부분을 보여 주세요 · 더 가까이 · 반사 등)를 그대로 읽고,
+    잇달아 또 못 읽으면 같은 안내를 되풀이하지 않고 다시 찍어 달라고 한다(RETAKE_AGAIN).
+    읽으면, 또는 RETAKE_RESET_SEC 동안 못 읽은 일이 없으면 처음으로 돌아간다.
+    """
+
+    def __init__(self, clock=time.monotonic) -> None:
+        self.clock = clock
+        self.misses = 0
+        self.last: float | None = None
+
+    def wrap(self, checker):
+        return _LadderChecker(checker, self) if checker is not None else None
+
+    def judge(self, result):
+        now = self.clock()
+        if self.last is not None and now - self.last > RETAKE_RESET_SEC:
+            self.misses = 0
+        if not result.retake:
+            self.misses, self.last = 0, None
+            return result
+        self.misses, self.last = self.misses + 1, now
+        if self.misses >= 2:
+            return replace(result, retake=RETAKE_AGAIN, message=RETAKE_AGAIN)
+        return result
+
+
+class _LadderChecker:
+    """판정 결과를 RetakeLadder 에 거쳐 돌려준다. 턴마다 새로 감싸도 횟수는 ladder 에 남는다."""
+
+    def __init__(self, inner, ladder: RetakeLadder) -> None:
+        self.inner, self.ladder = inner, ladder
+
+    def __getattr__(self, name: str):
+        return getattr(self.inner, name)
+
+    def check(self, image: np.ndarray, allergens: list[str], *args, **kwargs):
+        return self.ladder.judge(self.inner.check(image, allergens, *args, **kwargs))
+
+
 class WebAssistant:
     """웹 요청 하나 = 그래프 한 턴. 오래 사는 부품(검출기 · VLM · 기억)은 처음 한 번만 만든다."""
 
@@ -134,6 +186,7 @@ class WebAssistant:
         self.judged_image: np.ndarray | None = None  # 지난 턴 성분 판정에 쓴 사진
         self.picked: np.ndarray | None = None  # 지난 턴에 여러 장 중 고른 장면
         self.picked_index = 0  # 몇 번째 장면을 골랐나(0 = 말 시작 순간)
+        self.ladder = RetakeLadder()  # 성분표를 잇달아 못 읽으면 다시 찍어 달라고 한다
         self.session_id = store.start_session(user_id, title="web")
 
     def _parts(self) -> None:
@@ -211,7 +264,8 @@ class WebAssistant:
             detector=detector if image is not None else None,
             hands=self._hands if image is not None else None,
             resolve=self._resolve,
-            checker=checker,
+            # 크롭 → (못 읽으면) 사진 전체까지 한 번 판정한 결과를 센다
+            checker=self.ladder.wrap(checker) if ingredient else checker,
             store=self.store,
             memory=self._dialog.memory if self._dialog is not None else None,
             dialog=self._dialog,
