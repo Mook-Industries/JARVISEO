@@ -50,6 +50,10 @@ MEMORY_RULE = """\
 네가 그때 사진을 보고 한 대답이다. 기억을 묻는 질문이면 이 기록만 근거로 답한다.
 기록에 없는 내용은 지어내지 말고 기억에 없다고 말한다."""
 
+RECENT_RULE = """\
+기록은 오래된 것부터 시간 순서이고 맨 아래가 지금 질문 바로 전의 대화다.
+'방금' · '마지막' · '아까'처럼 직전 대화를 물으면 맨 아래 기록부터 본다."""
+
 
 class VLMClient:
     """사진 한 장과 질문을 보내고 답 문장을 받는다."""
@@ -165,8 +169,13 @@ def _prompt(question: str, memories: list[MemoryHit] | None) -> str:
         return question
     lines = [f"- {_when(hit.observed_at)}{_one_line(hit.text)}" for hit in memories]
     records = "\n".join(lines) or "- (찾은 기록 없음)"
+    rule = MEMORY_RULE
+    if any(hit.kind == "turn" for hit in memories):
+        # 지난 대화를 물어 최근 턴을 붙였으면 시간순이다(memory/vector.py). 시각은 분까지라
+        # 1분 안에 두 번 물으면 시각만으로는 순서를 모른다
+        rule += "\n" + RECENT_RULE
     now = _when(time.time()).strip()
-    return f"{MEMORY_RULE}\n{records}\n\n지금 시각: {now}\n지금 질문: {question}"
+    return f"{rule}\n{records}\n\n지금 시각: {now}\n지금 질문: {question}"
 
 
 def _one_line(text: str) -> str:
