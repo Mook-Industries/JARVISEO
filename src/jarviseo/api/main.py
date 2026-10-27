@@ -50,8 +50,11 @@ JARVISEO_OCR_NOTEBOOK_URL(서버 노트북 주소)을 여는 버튼을 보여 �
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import contextlib
 import hmac
+import json
 import os
 import threading
 import time
@@ -64,13 +67,14 @@ import anyio
 import cv2
 import httpx
 import numpy as np
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from jarviseo import config
 from jarviseo.api.assistant_web import WebAssistant, draw_boxes
+from jarviseo.api.browser_voice import FRAME, HEADER, BrowserVoice
 from jarviseo.api.marks import jpeg_data_url, mark_findings
 from jarviseo.api.report import report
 from jarviseo.api.voice_loop import VoiceLoop
@@ -145,8 +149,12 @@ def create_app(
     assistant: WebAssistant | None = None,
     cloud_token: str | None = None,
     wake_check=None,
+    openai_client=None,
 ) -> FastAPI:
-    """앱을 만든다. 테스트에서는 가짜 store · checker 와 토큰, 호출어 확인(WakeCheck)을 넣는다."""
+    """앱을 만든다. 테스트에서는 가짜 store · checker 와 토큰, 호출어 확인(WakeCheck)을 넣는다.
+
+    openai_client 는 테스트에서 브라우저 음성(/api/voice/ws)의 받아쓰기 · 읽기를 가짜로 바꿀 때만.
+    """
     token = CLOUD_TOKEN if cloud_token is None else cloud_token
 
     @asynccontextmanager
@@ -192,6 +200,10 @@ def create_app(
     @app.get("/wakeword.js", include_in_schema=False)
     def wakeword_js() -> FileResponse:
         return FileResponse(PAGES / "wakeword.js", media_type="text/javascript", headers=NO_CACHE)
+
+    @app.get("/voicelink.js", include_in_schema=False)
+    def voicelink_js() -> FileResponse:
+        return FileResponse(PAGES / "voicelink.js", media_type="text/javascript", headers=NO_CACHE)
 
     @app.get("/api/wakeword")
     def wakeword_info() -> dict:
@@ -341,6 +353,64 @@ def create_app(
         request.app.state.voice.push_frame(image)
         return {"ok": True}
 
+    @app.websocket("/api/voice/ws")
+    async def voice_ws(ws: WebSocket) -> None:
+        """브라우저 마이크 · 스피커로 팀 음성 부품을 돌린다(api/browser_voice.py, #218).
+
+        서버에 마이크가 없을 때(클라우드) 대시보드가 연다. 받아쓰기 · 읽기 · "잠깐만요" · 되묻기 ·
+        끼어들기가 노트북과 같은 코드로 돈다. 키가 없으면 off 를 보내고 닫는다.
+        """
+        await ws.accept()
+        s = ws.app.state
+        loop = asyncio.get_running_loop()
+        outbox: asyncio.Queue[bytes | dict] = asyncio.Queue()
+
+        def send(msg: bytes | dict) -> None:  # 아무 스레드에서나 부른다. 보내는 줄은 하나다
+            # 연결이 끝난 뒤에 나는 소리(시작음 스레드 등)는 버린다
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(outbox.put_nowait, msg)
+
+        async def sender() -> None:
+            with contextlib.suppress(Exception):  # 끊긴 뒤 남은 것은 버린다
+                while True:
+                    msg = await outbox.get()
+                    if isinstance(msg, bytes):
+                        await ws.send_bytes(msg)
+                    else:
+                        await ws.send_json(msg)
+
+        voice = BrowserVoice(
+            s.store, s.checker, s.user_id, s.lock, s.assistant, send, _voice_result, openai_client
+        )
+        task = asyncio.create_task(sender())
+        try:
+            try:
+                await _run_in_thread(voice.start)
+            except Exception as e:
+                await ws.send_json({"type": "off", "reason": str(e)})
+                return
+            while True:
+                m = await ws.receive()
+                if m["type"] == "websocket.disconnect":
+                    break
+                if m.get("bytes"):
+                    data = m["bytes"]
+                    if data[0] == FRAME and len(data) > HEADER.size:
+                        # 장면은 풀고 선명도를 재느라 몇십 ms 걸린다. 소리를 받는 줄을 막지 않게
+                        await _run_in_thread(lambda d=data: voice.on_binary(d))
+                    else:
+                        voice.on_binary(data)
+                elif m.get("text"):
+                    with contextlib.suppress(ValueError):
+                        voice.on_message(json.loads(m["text"]))
+        except WebSocketDisconnect:
+            pass
+        finally:
+            await _run_in_thread(voice.close)
+            task.cancel()
+            with contextlib.suppress(Exception):
+                await ws.close()
+
     @app.get("/api/ocr-status")
     def ocr_status(request: Request) -> dict:
         """Colab OCR 서버 상태. remote=False 면 원래부터 이 PC CPU 로 읽는 설정이다."""
@@ -468,7 +538,7 @@ def _decode_image(data: str) -> np.ndarray:
 
 
 def _voice_result(state, t0: float, loop) -> dict:
-    """팀 음성 모드의 턴 결과를 /api/ask 와 같은 모양으로. 대답은 서버 스피커가 이미 읽었다."""
+    """팀 음성 모드 · 브라우저 음성의 턴 결과를 /api/ask 와 같은 모양으로. 대답은 이미 읽었다."""
     from types import SimpleNamespace
 
     crop, frame = state.get("crop"), state.get("frame")
@@ -479,9 +549,9 @@ def _voice_result(state, t0: float, loop) -> dict:
         assistant=SimpleNamespace(
             vlm_real=True,
             pointing=loop.pointing,
-            retried_whole=False,
+            retried_whole=getattr(loop, "retried_whole", False),
             picked_index=0,
-            judged_image=crop if crop is not None else (frame.image if frame else None),
+            judged_image=_judged(loop, crop, frame),
         ),
     )
     response = state.get("response")
@@ -491,6 +561,14 @@ def _voice_result(state, t0: float, loop) -> dict:
     result["filler"] = bool(state.get("filler_sent"))
     result["interrupted"] = bool(state.get("interrupted"))
     return result
+
+
+def _judged(loop, crop, frame):
+    """성분 판정에 실제로 넣은 사진. 브라우저 음성(browser_voice.py)은 따로 적어 둔다."""
+    judged = getattr(loop, "judged_image", None)
+    if judged is not None:
+        return judged
+    return crop if crop is not None else (frame.image if frame else None)
 
 
 def wakeword_file(name: str) -> Path | None:

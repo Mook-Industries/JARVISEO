@@ -220,6 +220,17 @@ class WebAssistant:
 
             self._resolve = resolve_target
 
+    def shared_parts(self) -> dict:
+        """무거운 부품을 브라우저 음성 연결(browser_voice.py)과 같이 쓴다. 처음이면 만든다."""
+        self._parts()
+        return {
+            "vlm": self._vlm,
+            "dialog": self._dialog,
+            "detector": self._detector,
+            "hands": self._hands,
+            "resolve": self._resolve,
+        }
+
     def ask(
         self,
         question: str,
