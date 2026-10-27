@@ -67,8 +67,10 @@ listen(STT + 말을 시작한 순간의 사진) ─▶ (recapture ↺) ─▶ ro
 - 턴이 끝나면 질문·대답을 대화 기억(`DialogMemory`)에 맡긴다. 빈 대답, 미리 정한 안내 문장(`CANNED`),
   기억을 물은 턴은 넣지 않는다. 새 내용이 없고, 넣으면 다음 기억 검색에서 원래 기록보다 먼저 찾힌다.
 - VLM 과 성분 판정에는 가리킨 대상의 **크롭**이 간다. 기록(`used_frame`)에는 원본 장면이 남는다.
+  VLM 에는 크롭이라는 맥락 문장(`POINTING_CONTEXT` · `HAND_CONTEXT`)을 질문 앞에 붙이고, 검출 이름은 넣지 않는다.
+  이름이 틀리면 VLM 이 "고양이는 아니고…"처럼 그 이름을 꺼내기 때문이다(#229). 기록의 `target_label` 은 그대로 남는다.
   가리키는 손이 있는데 손가락 선 근처에 후보가 없으면 `resolve` 가 되묻지 않고 손 우선 크롭(상태 `hand_crop`)을 정하고,
-  `crop_target` 이 그 사각형을 자른다. 이때 VLM 맥락 문장에는 검출 이름이 없고(`HAND_CONTEXT`), 기록은 `resolved_by=MODEL` 에
+  `crop_target` 이 그 사각형을 자른다. 이때 맥락 문장은 손끝이 향한 물건을 보라는 `HAND_CONTEXT` 이고, 기록은 `resolved_by=MODEL` 에
   `target_label` 이 빈 턴으로 남는다(#205).
   성분 질문인데 고를 후보가 없으면(0개 · 후보 하나의 총점 미달) `after_resolve` 가 `ingredient_no_target` 을 돌려주고,
   `check_ingredient` 가 크롭 대신 사진 전체로 판정한다. 가리킴 질문은 그대로 "다시 가리켜 주세요"로 끝나고, 되물을 문장이 없으면

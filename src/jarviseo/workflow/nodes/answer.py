@@ -12,7 +12,6 @@ from dataclasses import replace
 from typing import Literal
 
 from jarviseo.pointing.crop import fit_for_vlm
-from jarviseo.pointing.labels import korean_name
 from jarviseo.types import AssistantResponse
 from jarviseo.workflow.deps import GraphDeps
 from jarviseo.workflow.messages import SORRY, VLM_TOO_SLOW
@@ -21,14 +20,14 @@ from jarviseo.workflow.state import JarviseoState
 __all__ = ["HAND_CONTEXT", "POINTING_CONTEXT", "after_generate", "generate"]
 
 # VLM 지시문(vlm/client.py)은 사진을 "질문한 순간 보인 장면"이라고 설명한다. 크롭을 보낼 때
-# 그대로 두면 잘린 사진을 장면 전체로 믿는다. 검출기 이름(COCO)은 틀릴 수 있어 추정으로만 준다.
+# 그대로 두면 잘린 사진을 장면 전체로 믿는다.
+# 검출 이름은 넣지 않는다. 박스는 맞아도 이름이 틀리는 일이 잦고(R0 valid 4/11), 틀린 이름을
+# 주면 VLM 이 "고양이는 아니고…"처럼 그 이름을 꺼낸다(모의 루프 턴 22, #229).
 POINTING_CONTEXT = (
-    "사진은 사용자가 가리킨 물건만 잘라낸 것이다. 주변 장면은 보이지 않는다.\n"
-    "물체 검출기의 추정은 '{name}'이지만 틀릴 수 있으니 사진을 보고 판단한다.\n"
-    "질문: {question}"
+    "사진은 사용자가 가리킨 물건만 잘라낸 것이다. 주변 장면은 보이지 않는다.\n질문: {question}"
 )
-# 손 우선 크롭은 후보 박스가 아니라 손가락 선을 따라 자른 것이라 붙일 검출 이름이 없다.
-# 선에서 벗어난 후보 이름을 넣으면 "고양이는 아니고…"(모의 루프 턴 22) 같은 답이 나온다.
+# 손 우선 크롭은 후보 박스가 아니라 손가락 선을 따라 자른 것이라 손가락이 같이 보인다.
+# 그래서 손끝이 향한 물건을 보라고 덧붙인다. 이 문장에도 검출 이름은 넣지 않는다.
 HAND_CONTEXT = (
     "사진은 사용자가 손가락으로 가리킨 쪽을 잘라낸 것이다. "
     "주변 장면은 보이지 않고 손가락이 같이 보일 수 있다.\n"
@@ -104,9 +103,4 @@ def _with_pointing_context(question: str, state: JarviseoState) -> str:
         return question
     if state.get("hand_crop") is not None:
         return HAND_CONTEXT.format(question=question)
-    target = state.get("target")
-    # 손 크롭이 아니면 crop_target 은 고른 대상이 있을 때만 돈다. 그래도 없으면 질문만.
-    if target is None or target.chosen is None:
-        return question
-    name = korean_name(target.chosen.detection.label)
-    return POINTING_CONTEXT.format(name=name, question=question)
+    return POINTING_CONTEXT.format(question=question)
