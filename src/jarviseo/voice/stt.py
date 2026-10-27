@@ -23,7 +23,7 @@ from openai import OpenAI, OpenAIError
 
 from jarviseo import config
 from jarviseo.types import Utterance
-from jarviseo.voice.gate import MIC_GATE
+from jarviseo.voice.gate import MIC_GATE, MicGate
 from jarviseo.voice.mic import SAMPLE_RATE, Microphone, MicStream
 from jarviseo.voice.transcript import (
     MIN_LETTERS,
@@ -64,6 +64,7 @@ class SpeechToText:
         mic: MicStream | None = None,
         client: OpenAI | None = None,
         on_speech_end: Callable[[], None] | None = None,
+        gate: MicGate | None = None,
     ) -> None:
         """device 는 sounddevice 입력 장치 번호다. None 이면 기본 마이크.
 
@@ -74,8 +75,12 @@ class SpeechToText:
         on_speech_end 는 listen() 이 사용자 말이 끝났다고 판정한 순간, 받아쓰기 요청을 보내기 전에
         부른다. 종료음(``Chime.end``)을 넘긴다. 바로 돌아와야 받아쓰기가 늦어지지 않는다.
         호출어만 듣고 끝난 녹음(다시 듣는 경우)에는 부르지 않는다.
+
+        gate 는 TTS 와 같이 쓰는 마이크 게이트다. 기본은 ``MIC_GATE``. 브라우저 연결은 연결마다
+        따로 만든 것을 넘긴다(``api/browser_voice.py``).
         """
         self.model = model
+        self.gate = gate or MIC_GATE
         self.language = language
         self.device = device
         self.mic = mic
@@ -138,17 +143,18 @@ class SpeechToText:
 
         # TTS 가 재생 중이거나 막 끝났으면 그동안 들어온 소리는 무음으로 바뀐다(gate.py).
         # 시작음·종료음이 마이크에 들어간 구간은 말로 보지 않는다(gate.sounding, #104).
-        ours = MIC_GATE.is_sounding
+        gate = self.gate
+        ours = gate.is_sounding
         if self.mic is None:
             # 받아쓰는 동안 마이크를 붙잡고 있지 않게, 녹음이 끝나면 바로 닫는다.
             with Microphone(self.device) as mic:
-                blocks = MIC_GATE.mute(mic.blocks())
+                blocks = gate.mute(mic.blocks())
                 speech = record_speech(
                     blocks, on_speech_start, timeout=timeout, ignore=ours, stop=stop
                 )
             return question(speech)
         if since is None:
-            blocks = MIC_GATE.mute(self.mic.blocks())
+            blocks = gate.mute(self.mic.blocks())
             speech = record_speech(blocks, on_speech_start, timeout=timeout, ignore=ours, stop=stop)
             return question(speech)
 
@@ -158,7 +164,7 @@ class SpeechToText:
             if on_speech_start is not None:
                 on_speech_start(max(t, floor))
 
-        blocks = MIC_GATE.mute(self.mic.blocks(since=since - config.WAKE_LOOKBACK_SEC))
+        blocks = gate.mute(self.mic.blocks(since=since - config.WAKE_LOOKBACK_SEC))
 
         def record() -> Speech | None:
             # 시작음 구간을 말로 안 봐야 "자비서." 하고 쉬었다가 질문할 때 시작음이 그 쉼을 메워

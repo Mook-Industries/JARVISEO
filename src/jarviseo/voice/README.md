@@ -16,6 +16,7 @@
 | `gate.py` | 재생 중과 끝난 뒤 0.3초 동안 STT 쪽 마이크를 막고, 호출어 쪽에는 그 구간을 알려 임계값을 올리게 한다 | 로컬 | — |
 | `mic.py` | 마이크를 30ms 블록으로 읽고 블록마다 들어온 시각을 붙인다. `MicStream` 은 마이크 하나를 여럿이 같이 읽게 한다 | 로컬 | — |
 | `vad.py` | webrtcvad 로 발화 하나를 잘라 낸다 (무음 700ms 면 끝) | 로컬 | — |
+| `remote.py` | 서버에 마이크 · 스피커가 없을 때 브라우저가 그 자리를 맡는다. 브라우저 소리를 `MicStream` 에 흘리고(`RemoteMic`), `Speaker` 소리를 브라우저로 보낸다(`RemoteOutput`, #218) | 서버 ↔ 브라우저 | — |
 | `fake.py` | 키 없이 쓰는 가짜 STT · TTS (그래프 개발 · CI 용) | 로컬 | — |
 
 그래프에서는 `from jarviseo.voice import FakeSpeechToText, FakeTextToSpeech` 로 먼저 개발하고,

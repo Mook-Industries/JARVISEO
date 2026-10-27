@@ -19,7 +19,10 @@ from __future__ import annotations
 
 import threading
 import wave
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -46,17 +49,19 @@ class Chime:
         volume: float = config.CHIME_VOLUME,
         device: int | None = None,
         gate: MicGate | None = None,
+        output: Callable[[], AbstractContextManager[Any]] | None = None,
     ) -> None:
         """volume 은 0~1 (0 이면 아무 소리도 안 낸다). device 는 sounddevice 출력 장치 번호.
 
-        gate 는 테스트에서만 넘긴다. 기본은 STT·TTS 와 같이 쓰는 ``MIC_GATE``.
+        gate 는 기본이 STT·TTS 와 같이 쓰는 ``MIC_GATE``. output 은 브라우저 스피커로 낼 때만
+        넘긴다(``Speaker``, ``remote.py``).
         """
         self.start_pcm = load_sound(START_WAV, volume)
         self.end_pcm = load_sound(END_WAV, volume)
         # 소리를 통째로 들고 있어서 출력 버퍼를 작게 잡아도 끊기지 않는다. 첫 소리가 0.1초쯤 빠르다.
         # 쓰는 것도 통째로 한 번에 한다. 20ms 씩 나눠 쓰면 다른 파이썬 스레드가 GIL 을 잡고 바쁠 때
         # 조각 사이에 버퍼가 비어 소리가 끊겼다(중간이 최대 0.1~0.8초 빔, check_chime_load.py).
-        self.speaker = Speaker(device, gate, latency="low", piece_bytes=None)
+        self.speaker = Speaker(device, gate, latency="low", piece_bytes=None, output=output)
         # 마지막 시작음·종료음의 첫 조각을 스피커에 쓴 시각(monotonic). 소리는 출력 지연 뒤에 난다.
         self.start_played_at: float | None = None
         self.end_played_at: float | None = None

@@ -12,9 +12,9 @@ from __future__ import annotations
 import itertools
 import threading
 import time
-from collections.abc import Iterable
-from contextlib import nullcontext
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Iterable
+from contextlib import AbstractContextManager, nullcontext
+from typing import TYPE_CHECKING, Any
 
 from jarviseo.voice.gate import MIC_GATE, MicGate
 
@@ -39,8 +39,10 @@ class Speaker:
         gate: MicGate | None = None,
         latency: str = "high",
         piece_bytes: int | None = PIECE_BYTES,
+        output: Callable[[], AbstractContextManager[Any]] | None = None,
     ) -> None:
-        """gate 는 테스트에서만 넘긴다. 기본은 STT 와 같이 쓰는 ``MIC_GATE``.
+        """gate 는 기본이 STT 와 같이 쓰는 ``MIC_GATE``. 브라우저 연결(``remote.py``)은 연결마다
+        따로 만든 게이트를 넘긴다.
 
         latency 는 sounddevice 출력 버퍼 크기("high"/"low"). 조각이 네트워크로 띄엄띄엄 오는
         TTS 는 "high", 소리를 통째로 들고 있는 시작음·종료음은 "low" 로 첫 소리를 당긴다
@@ -50,8 +52,13 @@ class Speaker:
         write() 는 버퍼에 자리가 날 때까지 GIL 을 놓고 C 안에서 기다리는데, 나눠 쓰면 조각마다
         GIL 을 다시 받아야 해서 다른 파이썬 스레드가 바쁘면 버퍼가 비어 소리가 끊긴다.
         대신 stop() 은 통째로 쓴 조각이 다 나간 뒤에야 듣는다. 끊을 일이 없는 짧은 소리용이다.
+
+        output 은 이 컴퓨터 스피커 대신 소리를 낼 곳이다. 부르면 ``write(bytes)`` · ``abort()`` ·
+        ``latency`` 가 있는 출력을 여는 with 문을 돌려줘야 한다(``remote.RemoteOutput``, 브라우저).
+        없으면 sounddevice 로 device 를 연다.
         """
         self.device = device
+        self.output = output
         self.gate = gate or MIC_GATE
         self.latency = latency
         self.piece_bytes = piece_bytes
@@ -101,21 +108,12 @@ class Speaker:
             return
         if first is None:
             return
-        # 리눅스 CI 에는 PortAudio 가 없어서, 맨 위에서 import 하면 이 모듈을 읽기만 해도 죽는다.
-        import sounddevice as sd
-
         # with 를 빠져나갈 때 stop() 이 버퍼에 남은 소리를 다 낼 때까지 기다린다(약 0.2초).
         # 게이트는 그다음에 풀어야 해서 바깥쪽에 둔다. 끊긴 경우는 abort() 로 버퍼를 버려서
         # 기다리지 않는다(그 뒤 stop() 은 이미 멈춘 스트림이라 바로 돌아온다).
         with (
             self.gate.playing() if mute_mic else nullcontext(),
-            sd.RawOutputStream(
-                samplerate=SAMPLE_RATE,
-                device=self.device,
-                channels=1,
-                dtype="int16",
-                latency=self.latency,
-            ) as out,
+            self._open() as out,
         ):
             self.started_at = time.monotonic()
             # 마이크를 안 막는 소리(시작음·종료음)는 마이크에 들어가는 구간만 표시한다(VAD 가 무시)
@@ -130,6 +128,20 @@ class Speaker:
                         out.abort()
         if self.interrupted and mute_mic:
             self.gate.reopen(self.stopped_at)
+
+    def _open(self) -> AbstractContextManager[Any]:
+        if self.output is not None:
+            return self.output()
+        # 리눅스 CI 에는 PortAudio 가 없어서, 맨 위에서 import 하면 이 모듈을 읽기만 해도 죽는다.
+        import sounddevice as sd
+
+        return sd.RawOutputStream(
+            samplerate=SAMPLE_RATE,
+            device=self.device,
+            channels=1,
+            dtype="int16",
+            latency=self.latency,
+        )
 
     def _write(self, out: sd.RawOutputStream, chunk: bytes) -> bool:
         """chunk 를 나눠 쓴다. 도중에 멈춤 신호가 오면 멈춘 시각을 남기고 False."""

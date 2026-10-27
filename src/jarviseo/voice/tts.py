@@ -20,12 +20,15 @@ import queue
 import threading
 import time
 from collections.abc import Callable, Generator, Iterator
+from contextlib import AbstractContextManager
+from typing import Any
 
 import httpx2
 import numpy as np
 from openai import APITimeoutError, OpenAI, OpenAIError
 
 from jarviseo import config
+from jarviseo.voice.gate import MicGate
 from jarviseo.voice.speaker import SAMPLE_RATE, Speaker
 from jarviseo.voice.tts_text import normalize
 
@@ -66,9 +69,12 @@ class TextToSpeech:
         device: int | None = None,
         client: OpenAI | None = None,
         fallback_model: str = config.TTS_FALLBACK_MODEL,
+        output: Callable[[], AbstractContextManager[Any]] | None = None,
+        gate: MicGate | None = None,
     ) -> None:
         """voice · speed 는 ``user_setting`` 의 tts_voice · tts_speed (SLOW/NORMAL/FAST).
         device 는 sounddevice 출력 장치 번호다. None 이면 기본 스피커.
+        output · gate 는 브라우저 스피커로 읽을 때 넘긴다(``Speaker`` 와 같다, ``remote.py``).
         fallback_model 은 합성이 멈춰서 speak() 가 한 번 더 요청할 때 쓰는 모델이다.
 
         client 는 테스트에서 가짜 API 를 끼울 때만 넘긴다.
@@ -77,7 +83,7 @@ class TextToSpeech:
         self.fallback_model = fallback_model
         self.voice = voice
         self.speed = speed
-        self.speaker = Speaker(device)
+        self.speaker = Speaker(device, gate, output=output)
         self.client = client or OpenAI(
             api_key=config.OPENAI_API_KEY or None, timeout=TIMEOUT, max_retries=RETRIES
         )
