@@ -55,8 +55,9 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      # 팀원이 학습한 가리킴 검출기(#167). 정식 릴리스(초안 · Pre-release 빼고) 중 가장 최근에 낸 것에서
-      # detector*.pt 를 고른다. 없으면 빈 값 → 이미지는 사전학습 yolov8n.pt 를 쓴다.
+      # 팀원이 학습한 모델 두 가지를 정식 릴리스(초안 · Pre-release 빼고) 중 가장 최근에 낸 것에서 각각 고른다.
+      #   detector     detector*.pt   가리킴 검출기(#167). 없으면 이미지는 사전학습 yolov8n.pt 를 쓴다
+      #   wakeword     jarviseo*.onnx 호출어(#218 브라우저용). 없으면 이미지는 models-v1 을 받는다
       # SHA256 은 GitHub 이 파일마다 붙이는 digest 로, Dockerfile.web 이 받은 뒤 맞춰 본다.
       # 릴리스를 올리거나 고치면 model-release.yml 이 이 워크플로를 다시 부른다.
       - name: 팀 모델 찾기 (릴리스)
@@ -67,13 +68,14 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" | python3 -c '
           import json, re, sys
           releases = [r for r in json.load(sys.stdin) if not r["draft"] and not r["prerelease"]]
-          for r in sorted(releases, key=lambda r: r["published_at"], reverse=True):
-              for a in r["assets"]:
-                  if re.fullmatch(r"detector.*\.pt", a["name"]):
-                      print("tag=" + r["tag_name"])
-                      print("url=" + a["browser_download_url"])
-                      print("sha256=" + (a.get("digest") or "").removeprefix("sha256:"))
-                      sys.exit()
+          releases.sort(key=lambda r: r["published_at"], reverse=True)
+          for key, pattern in (("detector", r"detector.*\.pt"), ("wakeword", r"jarviseo.*\.onnx")):
+              for r, a in ((r, a) for r in releases for a in r["assets"]):
+                  if re.fullmatch(pattern, a["name"]):
+                      print(key + "_tag=" + r["tag_name"])
+                      print(key + "_url=" + a["browser_download_url"])
+                      print(key + "_sha256=" + (a.get("digest") or "").removeprefix("sha256:"))
+                      break
           ' | tee -a "$GITHUB_OUTPUT"
 
       - name: 팀 웹 이미지 빌드 · ECR 에 올리기
@@ -82,8 +84,10 @@ jobs:
           context: .
           file: Dockerfile.web
           build-args: |
-            DETECTOR_URL=${{ steps.models.outputs.url }}
-            DETECTOR_SHA256=${{ steps.models.outputs.sha256 }}
+            DETECTOR_URL=${{ steps.models.outputs.detector_url }}
+            DETECTOR_SHA256=${{ steps.models.outputs.detector_sha256 }}
+            WAKEWORD_URL=${{ steps.models.outputs.wakeword_url }}
+            WAKEWORD_SHA256=${{ steps.models.outputs.wakeword_sha256 }}
           push: true
           tags: |
             ${{ steps.ecr.outputs.registry }}/jarviseo-web:${{ github.sha }}

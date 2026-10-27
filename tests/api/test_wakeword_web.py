@@ -66,6 +66,8 @@ def test_wakeword_models_are_served(client, models):
     for name in (*main.WAKEWORD_FEATURES, main.WAKEWORD_FILE):
         r = c.get(f"/models/wakeword/{name}")
         assert r.status_code == 200 and r.content == name.encode()
+        # 릴리스로 모델을 바꿔 배포하면 다음 새로고침에 새 파일을 받아야 한다(#232)
+        assert r.headers["cache-control"] == "no-cache"
     assert c.get("/wakeword.js").text.startswith("/* 브라우저 호출어")
 
 
