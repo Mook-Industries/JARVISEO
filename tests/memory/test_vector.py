@@ -11,7 +11,7 @@ import pytest
 from openai import OpenAIError
 
 from jarviseo.memory import FakeEmbedder, MemoryStore, VectorMemory
-from jarviseo.memory.models import Observation
+from jarviseo.memory.models import Observation, SessionTurn
 from jarviseo.types import AssistantResponse, Intent, Utterance
 
 SCENES = ["책상 위 검은 백팩", "냉장고 옆 초록 물병", "현관 신발장 우산"]
@@ -163,3 +163,77 @@ def test_yesterday_question_finds_only_yesterday(store: MemoryStore, memory: Vec
     hits = memory.search(user_id, "어제 본 검은 카드 지갑", now=now)
 
     assert [h.memory_id for h in hits] == [str(ids[2])]
+
+
+def _asked(
+    store: MemoryStore, session_id: int, question: str, answer: str, minutes_ago: float
+) -> int:
+    """질문 한 번을 minutes_ago 분 전에 한 것으로 기록한다."""
+    utterance = Utterance(text=question, started_at=0.0, ended_at=1.0)
+    turn_id = store.log_turn(
+        session_id, utterance, AssistantResponse(text=answer, intent=Intent.GENERAL)
+    )
+    with store.session() as db:
+        db.get(SessionTurn, turn_id).asked_at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
+    return turn_id
+
+
+def test_recent_dialog_question_adds_last_turns_in_time_order(
+    store: MemoryStore, memory: VectorMemory
+):
+    """방금 물어본 것을 물으면 마지막 3턴을 시간순으로 붙인다. 기억에 안 넣은 턴(사과)도 넣는다."""
+    user_id = store.ensure_user()
+    session_id = store.start_session(user_id)
+    _asked(store, session_id, "이 컵 뭐야?", "빨간 머그컵이에요.", 30)
+    _asked(store, session_id, "이거 뭐야?", "검은 백팩이에요.", 20)
+    _asked(store, session_id, "이거 먹어도 돼?", "죄송해요, 성분표를 읽지 못했어요.", 10)
+    last = _asked(store, session_id, "마우스 어디 있어?", "책상 왼쪽에 있어요.", 1)
+
+    hits = memory.search(user_id, "방금 물어봤던거 뭐지?")
+
+    assert [h.kind for h in hits] == ["turn"] * 3
+    assert [h.text.splitlines()[0] for h in hits] == [
+        "질문: 이거 뭐야?",
+        "질문: 이거 먹어도 돼?",
+        "질문: 마우스 어디 있어?",
+    ]
+    assert hits[-1].text == "질문: 마우스 어디 있어?\n대답: 책상 왼쪽에 있어요."
+    assert hits[-1].metadata == {"turn_id": last}
+    assert hits[0].observed_at < hits[1].observed_at < hits[2].observed_at
+    assert memory.last_latency_ms is not None
+
+
+def test_recent_turns_skip_other_users_and_yesterday(store: MemoryStore, memory: VectorMemory):
+    """다른 사용자의 턴과 아까 범위 밖(어제) 턴은 붙이지 않는다."""
+    me, other = store.ensure_user(), store.ensure_user("other@jarviseo.local", "other")
+    mine = store.start_session(me)
+    _asked(store, mine, "어제 물은 것", "어제 대답", 60 * 30)
+    _asked(store, store.start_session(other), "남의 질문", "남의 대답", 1)
+    _asked(store, mine, "오늘 물은 것", "오늘 대답", 5)
+
+    hits = memory.search(me, "아까 내가 뭐라고 물어봤지?")
+
+    assert [h.text.splitlines()[0] for h in hits] == ["질문: 오늘 물은 것"]
+
+
+def test_recent_turn_replaces_same_turn_found_by_meaning(store: MemoryStore):
+    """뜻으로도 찾힌 턴은 한 번만 넣는다(최근 턴 쪽)."""
+    memory = VectorMemory(store, FakeEmbedder(), min_score=0.0)
+    user_id = store.ensure_user()
+    turn_id = _asked(store, store.start_session(user_id), "그거 뭐야?", "검은 백팩이에요.", 1)
+    memory.remember_observation(user_id, turn_id, "질문: 그거 뭐야?\n대답: 검은 백팩이에요.")
+
+    hits = memory.search(user_id, "방금 그거 뭐였지?")
+
+    assert [(h.kind, h.metadata["turn_id"]) for h in hits] == [("turn", turn_id)]
+
+
+def test_recent_turns_come_even_if_embedding_fails(store: MemoryStore):
+    """임베딩이 실패해도 최근 턴은 붙인다. 최근 턴은 임베딩 없이 읽는다."""
+    memory = VectorMemory(store, _BrokenEmbedder())
+    user_id = store.ensure_user()
+    _asked(store, store.start_session(user_id), "이거 뭐야?", "검은 백팩이에요.", 1)
+
+    hits = memory.search(user_id, "방금 뭐 물어봤지?")
+
+    assert [h.text for h in hits] == ["질문: 이거 뭐야?\n대답: 검은 백팩이에요."]

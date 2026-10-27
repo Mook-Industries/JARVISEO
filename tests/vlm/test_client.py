@@ -96,6 +96,20 @@ def test_memories_add_records_and_current_time():
     assert "찾은 기록 없음" in sent(client)[0]
 
 
+def test_recent_turns_add_time_order_rule():
+    """최근 턴을 붙였으면(지난 대화를 물음) 기록이 시간순이고 맨 아래가 직전이라고 알린다."""
+    client = FakeClient()
+    vlm = VLMClient(client=client)
+    record = "질문: 이거 뭐야?\n대답: 컵이에요."
+    turn = MemoryHit(memory_id="turn-1", kind="turn", text=record, score=0.0)
+
+    vlm.ask(None, "방금 물어봤던거 뭐지?", memories=[turn])
+    assert "맨 아래가 지금 질문 바로 전의 대화" in sent(client)[0]
+
+    vlm.ask(None, "아까 본 가방 어디 있었지?", memories=[hit(record)])
+    assert "맨 아래" not in sent(client)[0]
+
+
 def test_api_failure_returns_none_without_crash():
     """API 가 실패하면 None 을 주고 멈추지 않는다."""
     vlm = VLMClient(client=FakeClient(error=OpenAIError("연결 끊김")))

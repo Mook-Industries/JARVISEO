@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
-from jarviseo.memory.when import time_range
+from jarviseo.memory.when import recent_dialog_range, time_range
 
 KST = timezone(timedelta(hours=9))
 NOW = datetime(2026, 10, 20, 15, 0, tzinfo=KST)
@@ -65,3 +65,40 @@ def test_returns_utc():
     start, _ = time_range("아까", NOW)
     assert start.tzinfo == UTC
     assert start == datetime(2026, 10, 19, 15, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "방금 물어봤던거 뭐지?",
+        "아까 뭐라고 했지?",
+        "좀 전에 내가 뭐 물어봤어?",
+        "방금 그거 뭐였지?",
+    ],
+)
+def test_recent_dialog_question_gets_recent_range(query):
+    """지난 대화 자체를 아까 · 방금으로 물으면 "아까"와 같은 범위를 준다."""
+    assert kst(recent_dialog_range(query, NOW)) == (TODAY, None)
+
+
+@pytest.mark.parametrize("query", ["마지막으로 물어본 게 뭐였지?", "직전에 뭐라고 했어?"])
+def test_last_word_counts_as_recent(query):
+    """때 낱말 없이 마지막 · 직전으로 물어도 "아까"와 같은 범위다."""
+    assert kst(recent_dialog_range(query, NOW)) == (TODAY, None)
+
+
+def test_yesterday_dialog_question_gets_yesterday():
+    """어제 대화를 물으면 어제 하루 범위다."""
+    assert kst(recent_dialog_range("어제 내가 뭐 물어봤지?", NOW)) == (
+        TODAY - timedelta(days=1),
+        TODAY,
+    )
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["아까 본 지갑 기억나?", "검은 지갑 어디 뒀더라?", "뭐라고 했지?", "아까워서 그거 못 버렸지"],
+)
+def test_object_or_timeless_question_is_not_recent_dialog(query):
+    """물건을 묻거나(아까 본 지갑) 때가 없으면(뭐라고 했지?) 최근 턴을 붙이지 않는다."""
+    assert recent_dialog_range(query, NOW) is None

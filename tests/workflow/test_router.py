@@ -232,3 +232,30 @@ def test_joined_words_are_not_read():
 def test_ingredient_and_recall_still_come_first(text, intent):
     """고르는 말이 있어도 성분 · 기억 낱말이 먼저다."""
     assert classify_intent(text) is intent
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "방금 물어봤던거 뭐지?",
+        "방금 뭐라고 했지?",
+        "방금 그거 뭐였지?",
+        "마지막으로 물어본 게 뭐였지?",
+    ],
+)
+def test_recent_dialog_questions_are_recall(text):
+    """지난 대화 자체를 물으면 기억으로 보낸다. 전에는 GENERAL · POINTING 으로 빠졌다."""
+    assert classify_intent(text) is Intent.RECALL
+
+
+@pytest.mark.parametrize(
+    ("text", "intent"),
+    [
+        ("방금 들어온 거 뭐야?", Intent.GENERAL),
+        ("방금 질문 하나 할게", Intent.GENERAL),
+        ("그거 뭐야?", Intent.POINTING),
+    ],
+)
+def test_recent_words_alone_are_not_recall(text, intent):
+    """방금만 있거나(대화를 묻지 않음) 때 없이 그거만 있으면 기억이 아니다."""
+    assert classify_intent(text) is intent

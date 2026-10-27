@@ -5,7 +5,8 @@
 
 위에서부터 먼저 걸리는 쪽으로 간다.
 - INGREDIENT : 먹어도·성분·알레르기·알러지. "이거 먹어도 돼?"에 지시어도 있어서 가리킴보다 먼저 본다
-- RECALL     : 지난 일을 묻는 말. "아까 본 그거"에 지시어도 있어서 가리킴보다 먼저 본다
+- RECALL     : 지난 일을 묻는 말. "아까 본 그거"에 지시어도 있어서 가리킴보다 먼저 본다.
+               지난 대화 자체를 묻는 말("방금 뭐라고 했지?")도 여기다(memory/when.py)
 - POINTING   : 물건 하나를 집는 말 — 지시어(이거·이건·쟤), "저기"(저기요는 빼고),
                위치 말 바로 뒤의 거(왼쪽꺼·위에 있는 거), "가리키", 아무것도 안 붙은 "뭐야?",
                고르는 말(이 병 · 왼쪽 컵 · 빨간 거 · 보라색 뭐야?, #166)
@@ -25,6 +26,7 @@ from __future__ import annotations
 
 import re
 
+from jarviseo.memory.when import recent_dialog_range
 from jarviseo.pointing.cues import lang_role
 from jarviseo.types import Intent
 
@@ -122,7 +124,9 @@ def classify_intent(text: str) -> Intent:
     compact = "".join(text.split())
     if any(word in compact for word in _INGREDIENT):
         return Intent.INGREDIENT
-    if any(word in compact for word in _RECALL):
+    # 지난 대화 자체를 묻는 말("방금 뭐라고 했지?" · "마지막으로 물어본 거")도 기억이다.
+    # 낱말표에 "방금"을 넣으면 "방금 들어온 거 뭐야?"까지 빠져서 대화를 묻는 말과 같이 볼 때만
+    if any(word in compact for word in _RECALL) or recent_dialog_range(text) is not None:
         return Intent.RECALL
     if _points_at_one(compact):
         return Intent.POINTING

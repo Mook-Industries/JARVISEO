@@ -35,14 +35,17 @@ from sqlalchemy.types import UserDefinedType
 
 from jarviseo import config
 from jarviseo.memory.embed import FakeEmbedder, TextEmbedder
-from jarviseo.memory.models import Observation, SessionTurn
+from jarviseo.memory.models import ChatSession, Observation, SessionTurn
 from jarviseo.memory.store import MemoryStore
-from jarviseo.memory.when import time_range
+from jarviseo.memory.when import recent_dialog_range, time_range
 from jarviseo.types import MemoryHit
 
-__all__ = ["VectorMemory"]
+__all__ = ["RECENT_TURNS", "VectorMemory"]
 
 log = logging.getLogger(__name__)
+
+# 지난 대화 자체를 물을 때("방금 물어봤던 거 뭐지?") 덧붙이는 최근 턴 수
+RECENT_TURNS = 3
 
 
 class VectorMemory:
@@ -95,9 +98,45 @@ class VectorMemory:
         기억 검색이 안 돼도 답은 나가야 하기 때문이다.
 
         query 에 때 낱말("아까", "어제")이 있으면 그때 기록만 찾는다(memory/when.py).
+        지난 대화 자체를 물으면("방금 물어봤던 거 뭐지?") 그때의 최근 턴 RECENT_TURNS 개를
+        덧붙이고 전부 시간순(오래된 것 먼저)으로 준다. 물건 이름이 없어 뜻으로는 못 찾기 때문이다.
+        최근 턴은 임베딩 없이 읽으므로 임베딩이 실패해도 나온다.
         now 는 테스트에서 지금 시각을 정할 때만 넘긴다.
         """
         self.last_latency_ms = None
+        started = time.perf_counter()
+        hits = self._similar(user_id, query, top_k, now)
+        dialog_window = recent_dialog_range(query, now)
+        if dialog_window is not None:
+            hits = _merge(hits, self.recent_turns(user_id, *dialog_window))
+            self.last_latency_ms = (time.perf_counter() - started) * 1000
+        return hits
+
+    def recent_turns(
+        self, user_id: int, start: datetime, end: datetime | None = None, limit: int = RECENT_TURNS
+    ) -> list[MemoryHit]:
+        """user_id 가 start 이후(end 전)에 한 질문 중 마지막 limit 개를 시간순으로 준다.
+
+        observation 이 아니라 session_turn 을 읽는다. 모른다는 대답 · 미리 정한 안내 · 기억 질문도
+        기억에는 안 넣지만(dialog.py), "방금 뭐 물어봤지?"의 답은 그 질문이라 빼면 안 된다.
+        지금 질문은 대답한 뒤에 기록하므로 여기 안 나온다.
+        """
+        found = (
+            select(SessionTurn)
+            .join(ChatSession, SessionTurn.session_id == ChatSession.session_id)
+            .where(ChatSession.user_id == user_id, SessionTurn.question_text != "")
+            .where(SessionTurn.asked_at >= start)
+        )
+        if end is not None:
+            found = found.where(SessionTurn.asked_at < end)
+        found = found.order_by(SessionTurn.asked_at.desc(), SessionTurn.turn_id.desc()).limit(limit)
+        with self.store.session() as db:
+            return [_turn_hit(turn) for turn in reversed(list(db.scalars(found)))]
+
+    def _similar(
+        self, user_id: int, query: str, top_k: int, now: datetime | None
+    ) -> list[MemoryHit]:
+        """query 와 뜻이 가까운 기록. 임베딩이 실패하면 빈 목록이다."""
         started = time.perf_counter()  # monotonic 은 윈도우에서 15.6ms 단위라 못 쓴다
         vector = self._embed(query)
         if vector is None:
@@ -135,6 +174,29 @@ class VectorMemory:
         except OpenAIError as e:
             log.warning("임베딩 실패: %s", e)
             return None
+
+
+def _merge(similar: list[MemoryHit], recent: list[MemoryHit]) -> list[MemoryHit]:
+    """뜻으로 찾은 기록과 최근 턴을 합쳐 시간순으로 둔다. 같은 턴이면 최근 턴 쪽만 남긴다."""
+    recent_ids = {hit.metadata["turn_id"] for hit in recent}
+    merged = [hit for hit in similar if hit.metadata.get("turn_id") not in recent_ids] + recent
+    return sorted(merged, key=lambda hit: hit.observed_at or 0.0)
+
+
+def _turn_hit(turn: SessionTurn) -> MemoryHit:
+    """최근 턴 하나를 기억 검색 결과 모양으로. 글은 dialog.dialog_text 와 같은 모양이다."""
+    asked_at = turn.asked_at
+    if asked_at is not None and asked_at.tzinfo is None:
+        asked_at = asked_at.replace(tzinfo=UTC)  # SQLite 는 시간대를 빼고 돌려준다
+    return MemoryHit(
+        memory_id=f"turn-{turn.turn_id}",
+        kind="turn",
+        text=f"질문: {turn.question_text}\n대답: {turn.answer_text or '(대답 없음)'}",
+        score=0.0,  # 뜻으로 찾은 것이 아니다
+        observed_at=asked_at.timestamp() if asked_at is not None else None,
+        image_path=Path(turn.image_path) if turn.image_path else None,
+        metadata={"turn_id": turn.turn_id},
+    )
 
 
 def _binary_vector(db: OrmSession, vector: list[float]) -> BindParameter:
