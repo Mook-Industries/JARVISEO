@@ -258,3 +258,47 @@ def test_wake_word_only_reprompts_then_hears_question(ws_app):
     result = next(m for m in seen if m["type"] == "result")["data"]
     assert result["question"] == "이거 뭐야?"
     assert "네, 말씀하세요." in fake.spoken
+
+
+class NeverReads:
+    """늘 성분표를 못 읽는 판정기."""
+
+    synonyms: dict = {}
+
+    def check(self, image, allergens, *args, **kwargs):
+        from jarviseo.nutrition.response import RETAKE_SHOW_INGREDIENTS
+        from jarviseo.nutrition.service import IngredientCheck
+        from jarviseo.types import AllergenJudgement, AllergenVerdict
+
+        j = AllergenJudgement(verdict=AllergenVerdict.UNDETERMINED, reason="no_ingredients")
+        msg = RETAKE_SHOW_INGREDIENTS
+        return IngredientCheck(judgement=j, message=msg, retake=msg)
+
+    def close(self):
+        pass
+
+
+def test_ingredient_retake_ladder_like_web_question(tmp_path):
+    """성분표를 잇달아 못 읽으면 두 번째부터 다시 찍어 달라고 한다(웹 질문 · 음성 모드와 같다)."""
+    import base64
+
+    import cv2
+
+    from jarviseo.nutrition.response import RETAKE_AGAIN, RETAKE_SHOW_INGREDIENTS
+
+    store = MemoryStore(database_url=f"sqlite:///{tmp_path / 'web.db'}")
+    store.init_schema()
+    user = store.ensure_user()
+    web = WebAssistant(store, None, user, vlm=FakeVLMClient(["네."]), detector=NoObjects())
+    fake = FakeOpenAI()
+    app = main.create_app(store=store, checker=NeverReads(), assistant=web, openai_client=fake)
+    image = np.full((240, 320, 3), 200, np.uint8)
+    url = "data:image/jpeg;base64," + base64.b64encode(cv2.imencode(".jpg", image)[1]).decode()
+    sounds: list = []
+    with TestClient(app) as c, c.websocket_connect("/api/voice/ws") as ws:
+        until(ws, "ready", sounds)
+        for _ in range(2):
+            ws.send_json({"type": "ask", "question": "이거 먹어도 돼?", "image": url})
+            until(ws, "idle", sounds)
+    assert RETAKE_SHOW_INGREDIENTS in fake.spoken and RETAKE_AGAIN in fake.spoken
+    assert fake.spoken.index(RETAKE_SHOW_INGREDIENTS) < fake.spoken.index(RETAKE_AGAIN)

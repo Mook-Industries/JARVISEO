@@ -41,7 +41,7 @@ import cv2
 import numpy as np
 
 from jarviseo import config
-from jarviseo.api.assistant_web import WHOLE_LABEL, _RetryWholeFrame, save_photos
+from jarviseo.api.assistant_web import WHOLE_LABEL, RetakeLadder, _RetryWholeFrame, save_photos
 from jarviseo.capture import FrameBuffer
 from jarviseo.types import BBox, Detection, Frame, Intent
 
@@ -194,6 +194,8 @@ class BrowserVoice:
         self.retried_whole = False  # 지난 턴에 크롭을 못 읽어 장면 전체로 다시 읽었나
         self.judged_image: np.ndarray | None = None  # 지난 턴 성분 판정에 쓴 사진
         self.turn = _Turn()
+        # 성분표를 잇달아 못 읽으면 다시 찍어 달라고 한다(웹 질문 · 팀 음성 모드와 같다)
+        self.ladder = RetakeLadder()
         self.session_id: int | None = None
         self._asks: queue.SimpleQueue[tuple[str, np.ndarray | None]] = queue.SimpleQueue()
         self._stop = threading.Event()
@@ -255,7 +257,9 @@ class BrowserVoice:
             detector=_TurnDetector(shared["detector"], self.lock, self.turn),
             hands=_Locked(hands, self.lock) if hands is not None else None,
             resolve=shared["resolve"],
-            checker=_TurnChecker(self.checker, self.lock, self.turn) if self.checker else None,
+            checker=self.ladder.wrap(
+                _TurnChecker(self.checker, self.lock, self.turn) if self.checker else None
+            ),
             store=self.store,
             memory=dialog.memory if dialog is not None else None,
             dialog=dialog,
