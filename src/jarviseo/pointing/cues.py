@@ -30,6 +30,7 @@ __all__ = [
     "COLOR_RANGES",
     "POINT_SIGMA_DEG",
     "LangQuery",
+    "lang_role",
     "parse_lang",
     "refers_back",
     "score_center",
@@ -173,6 +174,26 @@ def _lookup[T](token: str, table: dict[str, T]) -> T | None:
     for particle in PARTICLES:
         if len(token) > len(particle) and token.endswith(particle):
             return table.get(token[: -len(particle)])
+    return None
+
+
+def lang_role(token: str) -> str | None:
+    """낱말 하나가 말 단서에서 맡는 역할. 없으면 None.
+
+    역할은 "kind" · "color" · "relation" · "position" · "size" 다. 라우터가 "왼쪽 컵"처럼
+    물건을 고르는 말인지 볼 때 쓴다. 표와 보는 순서를 parse_lang 과 같게 둬서, 라우터가
+    가리킴으로 보낸 말을 말 단서도 같은 뜻으로 읽는다. 끝의 조사는 한 번 뗀다("위에" → 위치).
+    """
+    tables = (
+        ("kind", KIND_WORDS),
+        ("color", COLOR_WORDS),
+        ("relation", RELATION_WORDS),
+        ("position", POSITION_WORDS),
+        ("size", SIZE_WORDS),
+    )
+    for role, table in tables:
+        if _lookup(token, table) is not None:
+            return role
     return None
 
 

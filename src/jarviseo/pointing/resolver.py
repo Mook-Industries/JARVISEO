@@ -13,8 +13,9 @@ cues.py 가 매긴 단서별 점수를 가중치로 합쳐 후보 순위를 정�
 켜진 나머지 단서로 다시 나눈다(10/14 요구사항: 손이 없어도 대상을 골라야 한다).
 말 단서(v4)도 같다. 질문에 쓸 말이 없거나, 관계 말("컵 옆에")이거나, 후보를 못 가르면 기권한다.
 이어 묻기 단서(v5)는 직전 대상이 없거나, 되가리키는 말("그거")이 없거나, 후보를 못 가르면 기권한다.
-두 단서는 config.ENABLE_LANGUAGE_CUE · ENABLE_CONTEXT_CUE 가 켜져 있을 때만 기본으로 켠다
-(말 · 맥락 세션 s04 로 잰 뒤 켬).
+말 단서는 말 · 맥락 세션(s04)에서 R0 · R2 모두 늘어난 정답이 늘어난 확신 오답보다 많아
+기본으로 켰다(#166). 이어 묻기 단서는 같은 기준을 못 넘어 config.ENABLE_CONTEXT_CUE 가
+켜져 있을 때만 기본으로 켠다.
 
 후보가 하나뿐이면 비교 상대가 없어 margin 이 1.0 이다. 그래서 1위 총점 자체가 낮으면(화면 가장자리
 물건 하나뿐) 단정하지 않는다(#215).
@@ -88,8 +89,7 @@ def resolve_target(
             "그거"를 이 대상으로 읽는다. None 이면 이어 묻기 단서는 기권한다.
         replies: 되묻기 대답들, 받은 순서대로. 후보를 걸러내는 데만 쓴다.
         enabled_cues: 켤 단서. **ablation 의 스위치.** None 이면 구현된 단서 전부
-            (말 · 이어 묻기 단서는 ``config.ENABLE_LANGUAGE_CUE`` · ``ENABLE_CONTEXT_CUE`` 가
-            켜져 있을 때만).
+            (이어 묻기 단서는 ``config.ENABLE_CONTEXT_CUE`` 가 켜져 있을 때만).
             구현 안 된 단서가 있으면 ValueError — 조용히 빼면 v2 줄이 v1 숫자가 된다.
         margin_threshold: 1위-2위 점수차가 이 값보다 작으면 되묻는다.
             기본값은 ``config.CLARIFY_MARGIN_THRESHOLD`` 다(두 곳에 적으면 어긋난다).
@@ -103,11 +103,9 @@ def resolve_target(
     candidates 칸에는 걸러낸 뒤의 순위를 담는다. chosen 이 그 안에 있어야 DB 기록이 맞는다.
     """
     if enabled_cues is None:
-        # 실제 비서의 기본값. 말 단서는 말 세트(s04)로 잰 뒤 라우터 보강과 같이 켠다.
+        # 실제 비서의 기본값. 이어 묻기 단서는 s04 에서 기준을 못 넘어 꺼 둔다(#166).
         # 설정을 부를 때 읽어야 테스트 · 실행 중에 바꾼 값이 따라온다.
         active = IMPLEMENTED_CUES
-        if not config.ENABLE_LANGUAGE_CUE:
-            active -= {CueKind.LANG}
         if not config.ENABLE_CONTEXT_CUE:
             active -= {CueKind.CTX}
     else:

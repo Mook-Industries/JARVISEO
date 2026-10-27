@@ -12,6 +12,7 @@ import pytest
 from jarviseo.pointing.cues import (
     POINT_SIGMA_DEG,
     LangQuery,
+    lang_role,
     parse_lang,
     refers_back,
     score_center,
@@ -205,6 +206,25 @@ def test_parse_lang_without_words_is_empty():
     """ "그거"처럼 쓸 말이 없으면 비어 있다(이어 묻기는 v5 몫)."""
     assert parse_lang("그거 먹어도 돼?").empty
     assert not parse_lang("파란 거 먹어도 돼?").empty
+
+
+@pytest.mark.parametrize(
+    ("token", "role"),
+    [
+        ("컵", "kind"),
+        ("텀블러", "kind"),  # 별칭도 종류
+        ("컵을", "kind"),  # 조사를 떼고 찾는다
+        ("노란", "color"),
+        ("옆에", "relation"),
+        ("왼쪽에", "position"),
+        ("작은", "size"),  # "은"을 먼저 떼면 "작"이 된다
+        ("날씨", None),
+        ("병원", None),  # "병"으로 시작해도 다른 낱말
+    ],
+)
+def test_lang_role_names_each_word(token, role):
+    """라우터가 쓰는 낱말 역할. parse_lang 과 같은 표 · 같은 조사 떼기로 읽는다."""
+    assert lang_role(token) == role
 
 
 # --- 말 단서 (v4): 점수 --------------------------------------------------------------
