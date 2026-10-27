@@ -40,8 +40,8 @@ FULL = (1080, 1920, 3)
 # 아래 왼쪽 컵 박스 (400,500)-(700,900) 300×400 에 사방 15% 여백. 긴 변 520 이라 VLM 에도 그대로
 CROP = (520, 390, 3)
 QUESTION = "왼쪽 컵이요, 오른쪽 컵이요?"
-# 가리킨 질문이 VLM 에 갈 때의 모양(크롭이라는 맥락 + 검출기 추정 이름 + 원래 질문)
-PROMPT = POINTING_CONTEXT.format(name="컵", question="저거 뭐야?")
+# 가리킨 질문이 VLM 에 갈 때의 모양(크롭이라는 맥락 + 원래 질문)
+PROMPT = POINTING_CONTEXT.format(question="저거 뭐야?")
 TWO_CUPS = [
     Detection("cup", 0.9, BBox(400, 500, 700, 900)),
     Detection("cup", 0.9, BBox(1200, 500, 1500, 900)),
@@ -126,6 +126,24 @@ def test_pointing_question_sends_chosen_crop_to_vlm():
     assert result["response"].target is result["target"]
     assert deps.tts.spoken == ["컵이에요."]
     assert {"route", "detect", "resolve", "crop"} <= set(result["latency_ms"])
+
+
+def test_pointing_context_leaves_out_detector_name():
+    """VLM 맥락 문장에 검출 이름을 넣지 않는다(#229).
+
+    팔을 cat 으로 잘못 잡은 모의 루프 턴 22 처럼 이름이 틀려도, VLM 에는 크롭이라는 맥락과
+    질문만 간다. 이름을 넣었을 때는 "고양이는 아니고…"처럼 그 이름을 꺼냈다.
+    """
+    arm = Detection("cat", 0.9, BBox(378, 235, 805, 715))
+    deps = _deps(["저거 뭐야?"], detections=[arm])
+
+    result = build_graph(deps).invoke({})
+
+    assert result["target"].chosen.detection is arm
+    ((_, question, _),) = deps.vlm.asked
+    assert question == POINTING_CONTEXT.format(question="저거 뭐야?")
+    assert "고양이" not in question
+    assert "cat" not in question
 
 
 def test_vlm_gets_crop_shrunk_to_768():
@@ -849,7 +867,7 @@ def test_general_question_with_pointing_hand_goes_pointing():
     assert result["target"].chosen.detection is TWO_CUPS[1]
     ((sent, question, _),) = deps.vlm.asked
     assert sent.image.shape == CROP  # 사진 전체가 아니라 고른 컵의 크롭
-    assert question == POINTING_CONTEXT.format(name="컵", question="이 약 하루에 몇 번 먹어야 돼?")
+    assert question == POINTING_CONTEXT.format(question="이 약 하루에 몇 번 먹어야 돼?")
 
 
 @pytest.mark.parametrize("seen", [[], [_hand(pointing=False)]], ids=["no_hand", "resting_hand"])
