@@ -77,8 +77,9 @@ u.urlretrieve(oww + 'embedding_model.onnx', 'data/models/embedding_model.onnx')"
     | sha256sum -c -
 
 # 팀원이 학습한 가리킴 물체 검출기(#167). 레포 릴리스에 올린 .pt 를 받아 config.DETECTOR_WEIGHTS 로 쓴다.
-# 비워 두면 받지 않고 위의 사전학습 yolov8n.pt 를 그대로 쓴다. 새 회차로 바꿀 때는 아래 두 줄만 고친다
-# (docs/deploy.md "팀 모델을 서버에 올릴 때"). SHA256 이 다르면 빌드가 멈춰 서버는 전 버전 그대로다.
+# 값은 Deploy 워크플로가 최신 정식 릴리스에서 찾아 --build-arg 로 넘긴다. 여기 기본값은 손대지 않는다
+# (docs/deploy.md "팀 모델을 서버에 올릴 때"). 비면 받지 않고 위의 사전학습 yolov8n.pt 를 그대로 쓴다.
+# SHA256 이 다르면 빌드가 멈춰 서버는 전 버전 그대로다.
 ARG DETECTOR_URL=""
 ARG DETECTOR_SHA256=""
 RUN if [ -n "$DETECTOR_URL" ]; then \

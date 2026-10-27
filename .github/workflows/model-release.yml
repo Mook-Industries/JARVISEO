@@ -1,0 +1,34 @@
+name: Model release
+
+# 담당: 문태현 (배포)
+#
+# 팀원이 학습한 가리킴 검출기(detector*.pt)를 레포 릴리스로 올리면 서버에 바로 반영한다(#167).
+# 배포 자체는 Deploy 워크플로가 한다. 여기서는 그것을 main 기준으로 다시 부르기만 한다.
+# 릴리스 이벤트에서 바로 AWS 역할을 빌리면 막힌다 — 그 역할은 main 에서 돈 워크플로만 믿는다(docs/deploy.md).
+#
+#   released   정식 릴리스로 냈거나, Pre-release 를 정식으로 바꿨다 → 새 모델로 배포
+#   edited     정식을 Pre-release 로 돌렸다(되돌리기) 등 → 그다음 최신 정식 모델로 배포
+#   deleted    릴리스를 지웠다 → 남은 것 중 최신 정식 모델(없으면 yolov8n.pt)로 배포
+# Pre-release 로만 올린 것은 released 가 오지 않아 배포하지 않는다. 시험용으로 올려 둘 때 쓴다.
+
+on:
+  release:
+    types: [released, edited, deleted]
+
+permissions:
+  actions: write # Deploy 를 workflow_dispatch 로 부른다
+
+jobs:
+  deploy:
+    # 검출기 파일이 붙은 릴리스만. 호출어 모델(models-v1)을 고칠 때는 배포하지 않는다.
+    if: contains(join(github.event.release.assets.*.name, ' '), 'detector')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy 부르기
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          ACTION: ${{ github.event.action }}
+        run: |
+          echo "릴리스 $TAG ($ACTION) → Deploy (main)"
+          gh workflow run deploy.yml --repo "$GITHUB_REPOSITORY" --ref main

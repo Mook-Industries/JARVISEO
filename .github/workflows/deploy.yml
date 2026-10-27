@@ -55,11 +55,35 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      # 팀원이 학습한 가리킴 검출기(#167). 정식 릴리스(초안 · Pre-release 빼고) 중 가장 최근에 낸 것에서
+      # detector*.pt 를 고른다. 없으면 빈 값 → 이미지는 사전학습 yolov8n.pt 를 쓴다.
+      # SHA256 은 GitHub 이 파일마다 붙이는 digest 로, Dockerfile.web 이 받은 뒤 맞춰 본다.
+      # 릴리스를 올리거나 고치면 model-release.yml 이 이 워크플로를 다시 부른다.
+      - name: 팀 모델 찾기 (릴리스)
+        id: models
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" | python3 -c '
+          import json, re, sys
+          releases = [r for r in json.load(sys.stdin) if not r["draft"] and not r["prerelease"]]
+          for r in sorted(releases, key=lambda r: r["published_at"], reverse=True):
+              for a in r["assets"]:
+                  if re.fullmatch(r"detector.*\.pt", a["name"]):
+                      print("tag=" + r["tag_name"])
+                      print("url=" + a["browser_download_url"])
+                      print("sha256=" + (a.get("digest") or "").removeprefix("sha256:"))
+                      sys.exit()
+          ' | tee -a "$GITHUB_OUTPUT"
+
       - name: 팀 웹 이미지 빌드 · ECR 에 올리기
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.web
+          build-args: |
+            DETECTOR_URL=${{ steps.models.outputs.url }}
+            DETECTOR_SHA256=${{ steps.models.outputs.sha256 }}
           push: true
           tags: |
             ${{ steps.ecr.outputs.registry }}/jarviseo-web:${{ github.sha }}

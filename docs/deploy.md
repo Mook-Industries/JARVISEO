@@ -185,21 +185,21 @@ python scripts/start.py --db postgresql+psycopg://jarviseo:jarviseo@localhost:54
 
 ## 팀 모델을 서버에 올릴 때 (모델 담당자)
 
-지금은 가리킴 물체 검출기(#167)만 이 길로 올린다. 비워 두면 서버는 사전학습 `yolov8n.pt` 를 쓴다.
-배포 담당 없이 모델 담당자가 혼자 할 수 있다. AWS 계정은 필요 없다.
+지금은 가리킴 물체 검출기(#167)만 이 길로 올린다. **릴리스를 정식으로 내면 서버까지 자동으로 바뀐다.**
+PR · 배포 담당 · AWS 계정은 필요 없다. 정식 릴리스가 하나도 없으면 서버는 사전학습 `yolov8n.pt` 를 쓴다.
 
 1. 기존 모델보다 나아진 것을 같은 실행으로 확인한다(`run_ablation.py --weights yolov8n.pt data/models/detector_rN.pt`).
-2. GitHub 레포 **Releases → Draft a new release** 로 `.pt` 를 올린다. 태그는 `models-v2` 처럼 새로 만든다.
-3. 파일의 SHA256 을 구한다. 윈도우 cmd: `certutil -hashfile detector_rN.pt SHA256`, 맥: `shasum -a 256 detector_rN.pt`.
-4. `Dockerfile.web` 의 두 줄만 고쳐 PR 을 올린다. PR 본문에 1번 비교 결과를 붙인다.
-   ```dockerfile
-   ARG DETECTOR_URL="https://github.com/Mook-Industries/JARVISEO/releases/download/models-v2/detector_rN.pt"
-   ARG DETECTOR_SHA256="<3번 값>"
-   ```
-5. PR 의 Docker 체크(web image)가 초록불이면 파일을 받았고 SHA256 도 맞은 것이다. 틀리면 빨간불이고 서버는 그대로다.
-   머지하면 Deploy 가 서버에 올린다(약 3분). Deploy 가 초록불이면 끝이다.
+   **정식으로 내는 순간 서버에 들어가므로 이 확인이 유일한 검사다.**
+2. GitHub 레포 **Releases → Draft a new release** 로 올린다. 파일 이름은 `detector` 로 시작하는 `.pt`(예: `detector_r3.pt`),
+   태그는 새로(예: `detector-r3`). 본문에 1번 비교 결과를 적는다.
+3. 시험용이면 **Set as a pre-release** 를 켜고 낸다 → 서버는 그대로다. 서버에 쓸 것이면 끄고 낸다.
+   Pre-release 를 나중에 서버에 쓰려면 릴리스를 Edit 해서 pre-release 를 끄면 된다.
+4. Actions 탭에서 **Model release → Deploy** 가 초록불이면 끝이다(약 3분). Deploy 의 "팀 모델 찾기" 단계에 고른 태그가 찍힌다.
+   받은 파일의 SHA256 이 GitHub 값과 다르면 빨간불이고 서버는 전 버전 그대로다.
 
-되돌릴 때는 그 PR 을 Revert 하거나 두 줄을 전 값(또는 `""`)으로 돌린다. 옛 릴리스는 지우지 않는다.
+서버는 정식 릴리스 중 **가장 최근에 낸 것**의 `detector*.pt` 를 쓴다. main 에 다른 PR 이 머지돼 다시 배포돼도 같다.
+되돌릴 때는 지금 릴리스를 Edit 해서 pre-release 로 바꾼다 → 그 전 정식 릴리스로 다시 배포된다.
+옛 릴리스는 지우지 말고 pre-release 로 둔다. 지우면 되돌릴 파일이 없어진다.
 노트북에서 같은 모델을 쓰려면 파일을 `data/models/` 에 두고 `.env` 에 `JARVISEO_DETECTOR_WEIGHTS=data/models/detector_rN.pt`.
 
 ---
