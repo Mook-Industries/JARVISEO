@@ -78,3 +78,26 @@ def test_no_mic_fails_before_loading_models(monkeypatch):
         with pytest.raises(RuntimeError, match="기본 입력 장치 없음"):
             loop.start()
     assert made == [] and not loop.running
+
+
+def test_voice_settings_before_start_are_kept_for_start():
+    """켜기 전에 받은 환경설정은 들고 있다가 켤 때 쓴다(없는 칸은 그대로)."""
+    loop = make_loop()
+    loop.configure_voice(voice="nova", speed=1.3, volume=None)
+    loop.configure_voice(volume=0.5)
+    assert loop.voice_settings == {"voice": "nova", "speed": 1.3, "volume": 0.5}
+
+
+def test_voice_settings_api(tmp_path):
+    """POST /api/voice/settings 는 팀 음성 모드에 넘기고, 범위 밖 값은 422."""
+    from fastapi.testclient import TestClient
+
+    from jarviseo.api.main import create_app
+    from jarviseo.memory import MemoryStore
+
+    store = MemoryStore(database_url=f"sqlite:///{tmp_path / 'web.db'}")
+    store.init_schema()
+    with TestClient(create_app(store=store)) as c:
+        r = c.post("/api/voice/settings", json={"voice": "onyx", "speed": 0.7, "volume": 0.3})
+        assert r.json() == {"on": False, "voice": "onyx", "speed": 0.7, "volume": 0.3}
+        assert c.post("/api/voice/settings", json={"speed": 3}).status_code == 422

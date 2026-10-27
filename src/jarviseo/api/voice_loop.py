@@ -62,6 +62,8 @@ class VoiceLoop:
         self._ev_lock = threading.Lock()
         self._stop = threading.Event()
         self._parts: dict = {}
+        # 대시보드 환경설정(목소리 · 속도 · 소리 크기). 켜기 전에 받으면 켤 때 쓴다
+        self.voice_settings: dict = {}
         self._failed: str | None = None  # 못 켠 이유(다시 시도하지 않는다)
         # 성분표를 잇달아 못 읽으면 다시 찍어 달라고 한다(입력창과 같은 횟수를 쓴다)
         from jarviseo.api.assistant_web import RetakeLadder
@@ -110,6 +112,13 @@ class VoiceLoop:
             state = build_graph(deps).invoke(info)
         save_photos(state, PHOTO_DIR)
         return self.to_result(state, t0, self)
+
+    def configure_voice(self, **settings) -> None:
+        """환경설정 AI 음성(voice · speed · volume)을 PC 스피커 대답에 쓴다. 다음 읽기부터."""
+        self.voice_settings.update({k: v for k, v in settings.items() if v is not None})
+        tts, collector = self._parts.get("tts"), self._parts.get("collector")
+        if tts is not None and tts.configure(**settings) and collector is not None:
+            collector.refresh_filler()
 
     def call(self) -> None:
         """화면의 호출 버튼. "자비서"라고 부른 것과 같다(읽는 중이면 끼어들기)."""
@@ -173,6 +182,7 @@ class VoiceLoop:
         p["vlm"] = VLMClient()
         p["dialog"] = DialogMemory(VectorMemory(self.store))
         p["tts"] = TextToSpeech(device=speaker_device)
+        p["tts"].configure(**self.voice_settings)  # "잠깐만요"(collector)도 이 목소리로 만든다
         p["chime"] = chime = Chime(device=speaker_device)
         p["barge"] = barge = BargeIn(p["tts"])
         p["collector"] = ResponseCollector(p["tts"], called_since=barge.called_since)

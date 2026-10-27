@@ -126,10 +126,9 @@ export class VoiceLink {
     this._flush(0);
   }
 
-  /** 환경설정 읽기 속도(0.5~2배) → 노트북 TTS 속도 SLOW · NORMAL · FAST. */
-  setRate(rate) {
-    const value = rate < 0.9 ? "SLOW" : rate > 1.1 ? "FAST" : "NORMAL";
-    if (this.open) this.ws.send(JSON.stringify({ type: "speed", value }));
+  /** 환경설정 보이스(OpenAI 목소리 이름)와 말하기 속도(0.5~2배). 서버가 다음 읽기부터 바꾼다. */
+  setVoice(voice, speed) {
+    if (this.open) this.ws.send(JSON.stringify({ type: "voice", voice, speed }));
   }
 
   setVolume(v) {
