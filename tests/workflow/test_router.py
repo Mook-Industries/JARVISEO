@@ -259,3 +259,33 @@ def test_recent_dialog_questions_are_recall(text):
 def test_recent_words_alone_are_not_recall(text, intent):
     """방금만 있거나(대화를 묻지 않음) 때 없이 그거만 있으면 기억이 아니다."""
     assert classify_intent(text) is intent
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "방금 본 책 뭐야?",
+        "오늘 본 책 뭐야?",
+        "최근에 본 책 뭐야?",
+        "금방 본 책 뭐야?",
+        "오늘 봤던 우산 무슨 색이었지?",
+        "방금 그 책 뭐였지?",
+    ],
+)
+def test_time_word_with_seen_or_was_is_recall(text):
+    """때 낱말 뒤의 본 · 봤, 방금 뒤의 였은 기억이다. 전에는 GENERAL · POINTING 이었다(#237)."""
+    assert classify_intent(text) is Intent.RECALL
+
+
+@pytest.mark.parametrize(
+    ("text", "intent"),
+    [
+        ("오늘 날씨 뭐야?", Intent.GENERAL),
+        ("오늘 볼 영화 추천해줘", Intent.GENERAL),  # 볼 · 보는은 지난 일이 아니다
+        ("방금 보이는 거 뭐야?", Intent.GENERAL),
+        ("이거 오늘 산 거야?", Intent.POINTING),
+    ],
+)
+def test_time_word_without_seen_is_not_recall(text, intent):
+    """때 낱말이 있어도 본 · 봤 · 였이 없으면 기억이 아니다."""
+    assert classify_intent(text) is intent

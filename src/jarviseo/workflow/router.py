@@ -6,7 +6,8 @@
 위에서부터 먼저 걸리는 쪽으로 간다.
 - INGREDIENT : 먹어도·성분·알레르기·알러지. "이거 먹어도 돼?"에 지시어도 있어서 가리킴보다 먼저 본다
 - RECALL     : 지난 일을 묻는 말. "아까 본 그거"에 지시어도 있어서 가리킴보다 먼저 본다.
-               지난 대화 자체를 묻는 말("방금 뭐라고 했지?")도 여기다(memory/when.py)
+               지난 대화 자체를 묻는 말("방금 뭐라고 했지?")도 여기다(memory/when.py).
+               때 낱말 뒤에 본 · 봤이 오거나("방금 본 책") 방금 뒤에 였이 와도("방금 그 책 뭐였지?")
 - POINTING   : 물건 하나를 집는 말 — 지시어(이거·이건·쟤), "저기"(저기요는 빼고),
                위치 말 바로 뒤의 거(왼쪽꺼·위에 있는 거), "가리키", 아무것도 안 붙은 "뭐야?",
                고르는 말(이 병 · 왼쪽 컵 · 빨간 거 · 보라색 뭐야?, #166)
@@ -58,6 +59,12 @@ _RECALL = (
     "있었지",
     "있었더라",
 )
+# 때 낱말 바로 뒤의 본 · 봤("방금 본 책" · "오늘 본 우산" · "최근에 봤던"). 위 낱말표의 "본거"는
+# 물건 이름이 바로 붙으면("본책") 안 걸렸다(#237). "방금" 혼자는 넣지 않는다 —
+# "방금 들어온 거 뭐야?"는 지금 보이는 것을 묻는 말이다.
+_WHEN_SEEN = re.compile(r"(방금|금방|오늘|최근|좀전|조금전)(에|에도)?(본|봤)")
+# 방금 · 금방 뒤의 지난 꼴 "였"("방금 그 책 뭐였지?"). 지금 보이는 것이면 "뭐야"로 묻는다
+_JUST_WAS = re.compile(r"(방금|금방).*였")
 # "뭐야"는 넣지 않는다. 넣으면 "오늘 날씨 뭐야?"까지 가리킴으로 빠진다(단독 "뭐야?"는 아래 _BARE).
 # "그건"은 "그건 그렇고"에 걸려 넣지 않는다.
 _POINTING = (
@@ -126,7 +133,12 @@ def classify_intent(text: str) -> Intent:
         return Intent.INGREDIENT
     # 지난 대화 자체를 묻는 말("방금 뭐라고 했지?" · "마지막으로 물어본 거")도 기억이다.
     # 낱말표에 "방금"을 넣으면 "방금 들어온 거 뭐야?"까지 빠져서 대화를 묻는 말과 같이 볼 때만
-    if any(word in compact for word in _RECALL) or recent_dialog_range(text) is not None:
+    if (
+        any(word in compact for word in _RECALL)
+        or _WHEN_SEEN.search(compact)
+        or _JUST_WAS.search(compact)
+        or recent_dialog_range(text) is not None
+    ):
         return Intent.RECALL
     if _points_at_one(compact):
         return Intent.POINTING
