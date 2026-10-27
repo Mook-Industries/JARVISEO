@@ -1,110 +1,11 @@
 {
+  "target": "ingredients_and_contains_notice",
+  "status": "experimental; historical ingredient-only metrics do not apply",
   "selected": {
     "params": {
       "min_evidence": 2,
       "pad": 0.02,
       "penalty": 1
-    },
-    "mean_iou": 0.3329002699864177
-  },
-  "validation_grid": [
-    {
-      "params": {
-        "min_evidence": 1,
-        "pad": 0.02,
-        "penalty": 1
-      },
-      "mean_iou": 0.3065523446678948
-    },
-    {
-      "params": {
-        "min_evidence": 1,
-        "pad": 0.02,
-        "penalty": 2
-      },
-      "mean_iou": 0.3065523446678948
-    },
-    {
-      "params": {
-        "min_evidence": 1,
-        "pad": 0.06,
-        "penalty": 1
-      },
-      "mean_iou": 0.30693903182586874
-    },
-    {
-      "params": {
-        "min_evidence": 1,
-        "pad": 0.06,
-        "penalty": 2
-      },
-      "mean_iou": 0.30693903182586874
-    },
-    {
-      "params": {
-        "min_evidence": 2,
-        "pad": 0.02,
-        "penalty": 1
-      },
-      "mean_iou": 0.3329002699864177
-    },
-    {
-      "params": {
-        "min_evidence": 2,
-        "pad": 0.02,
-        "penalty": 2
-      },
-      "mean_iou": 0.3329002699864177
-    },
-    {
-      "params": {
-        "min_evidence": 2,
-        "pad": 0.06,
-        "penalty": 1
-      },
-      "mean_iou": 0.3300840292820156
-    },
-    {
-      "params": {
-        "min_evidence": 2,
-        "pad": 0.06,
-        "penalty": 2
-      },
-      "mean_iou": 0.3300840292820156
-    },
-    {
-      "params": {
-        "min_evidence": 3,
-        "pad": 0.02,
-        "penalty": 1
-      },
-      "mean_iou": 0.3329002699864177
-    },
-    {
-      "params": {
-        "min_evidence": 3,
-        "pad": 0.02,
-        "penalty": 2
-      },
-      "mean_iou": 0.3329002699864177
-    },
-    {
-      "params": {
-        "min_evidence": 3,
-        "pad": 0.06,
-        "penalty": 1
-      },
-      "mean_iou": 0.3300840292820156
-    },
-    {
-      "params": {
-        "min_evidence": 3,
-        "pad": 0.06,
-        "penalty": 2
-      },
-      "mean_iou": 0.3300840292820156
     }
-  ],
-  "selection_split": "val: 03,09,15",
-  "source_sha256": "881630359786daa1a6b6a799907d4d167036ff30b79d5c3b1bc14634f1c65846"
+  }
 }
