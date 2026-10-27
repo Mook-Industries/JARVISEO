@@ -38,6 +38,9 @@ __all__ = ["BargeIn", "Wake"]
 
 log = logging.getLogger(__name__)
 
+# 호출어 모델이 점수를 내는 한 단위(80ms). 감지한 이 구간이 재생 중이었으면 끼어든 호출로 본다.
+DETECT_FRAME_SEC = 0.08
+
 
 class Wake(NamedTuple):
     """호출어 감지 한 번. t 는 호출어가 끝난 시각(monotonic), ``listen(since=t)`` 에 넘긴다."""
@@ -80,7 +83,10 @@ class BargeIn:
             return None
         while not self._wakes.empty():
             wake = self._wakes.get_nowait()
-        if not self.gate.is_open(wake.t):
+        # 감지 시각 하나만 보면, 감지와 거의 같은 순간에 재생을 끊었을 때(브라우저 마이크는 소리를
+        # 받은 시각이 곧 감지 시각이다) 그 시각에는 이미 열려 있어서 거슬러 열지 않았다. 그러면
+        # "자비서"와 이어 말한 질문 앞부분이 무음으로 남아 질문을 못 들었다(#218 실측 7번 중 2번).
+        if not (self.gate.is_open(wake.t) and self.gate.is_open(wake.t - DETECT_FRAME_SEC)):
             self.gate.reopen(wake.t - config.WAKE_LOOKBACK_SEC)
         return wake
 
