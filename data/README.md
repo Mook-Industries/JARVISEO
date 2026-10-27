@@ -63,7 +63,8 @@ datasets/detector/
 │   └── d04/            frames/ 에서 뺀 사진(알아볼 수 없음 · 얼굴). label · build 는 frames/ 만 읽는다
 ├── auto/               자동 라벨(R1) — labels/*.txt · tasks.json(Label Studio) · label_config.xml
 ├── review/             사람 검수(R2) — tasks.json · label_config.xml(review) · labels/(검수 결과) · auto_labels/(대조군, import)
-└── yolo_r1/            회차 하나 = 폴더 하나 — images/{train,val} · labels/{train,val} · data.yaml. R2 는 yolo_r2 · yolo_r2auto
+├── review_r3/          R3 검수(새 영상 d07~d09, R2 가중치 초안) — 구조는 review/ 와 같다
+└── yolo_r1/            회차 하나 = 폴더 하나 — images/{train,val} · labels/{train,val} · data.yaml. R2 는 yolo_r2 · yolo_r2auto, R3 는 yolo_r3
 ```
 
 **종류 10개** (`src/jarviseo/pointing/detector.py` 의 `FINETUNE_CLASSES`, 순서 = 라벨 번호. 바꾸지 않고 새 종류는 맨 뒤에만)

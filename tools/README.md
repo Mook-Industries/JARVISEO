@@ -169,16 +169,70 @@ cd data/datasets/detector && zip -qr JARVISEO_R2_data.zip yolo_r2 yolo_r2auto pr
 | 그린다 | 예 |
 |---|---|
 | bottle | 페트병 · 소스병 · 텀블러 (병 모양이면 내용물 상관없이) |
-| cup | 머그 · 종이컵 · 유리컵 |
+| cup | 머그 · 종이컵 · 유리컵 · 뚜껑 덮인 투명 플라스틱 컵 |
 | bowl | 그릇 · **햇반 용기** |
 | product | 캔(참치 · 감자칩 통 · 음료) · 과자 봉지 · 컵라면 · 병조림 · 파우치 · 상자 포장 식품 |
 | tv | 모니터 · TV |
 | laptop · mouse · keyboard · cell phone · book | 이름 그대로 |
 
-- **안 그린다**: 10종 밖 물건(안경 · 안경 케이스 · 시계 · 리모컨 · 사람 · 손 · 의자 · 칫솔 등), 짧은 변 40px 미만(1280×720 기준),
+- **안 그린다**: 10종 밖 물건(안경 · 안경 케이스 · 시계 · 리모컨 · 태블릿 · 사람 · 손 · 의자 · 칫솔 등), 짧은 변 40px 미만(1280×720 기준),
   절반 넘게 가려진 것, 애매한 것.
 - **하나씩 그린다**: 쌓여 있어도 하나하나 구분되면 하나씩. "묶음 전체를 박스 하나로"는 가리킴 정답표에만 쓰는 규칙이다.
 - **물건이 하나도 없는 사진도 제출(Submit)한다.** 빈 제출이 곧 "물건 없음" 라벨이다. 건너뛰기(Skip)는 쓰지 않는다 — 검수 안 한 사진으로 빠진다.
 - 초안 박스는 지우거나 · 고치거나 · 이름을 바꾸고, 빠진 물건은 새로 그린다. 사진 위에 "remote … 뺐습니다"가 보이면 그 자리 물건을 다시 본다.
 - 어두운 d04(밤 공원)는 밝기 · 대비 조절로 본다. 편의점 d06 은 한 장에 상품이 수십 개라 장당 2~3분 걸릴 수 있다.
 - 검수 시간은 정해 두고 끊는다(R2 는 총 3시간). 다 못 봐도 제출한 사진만 학습에 쓴다.
+
+## R3 실패 장면 보강 — 새 영상 → 가중치 초안 → 검수 → 학습 묶음 (#167)
+
+R2 의 d05 검증에서 약했던 종류(재현율 mouse 0.11 · keyboard 0.00 · cell phone 0.00 · book 0.33 · cup 0.38)와,
+학습 박스가 product(1323)의 10% 에도 못 미친 종류(mouse 97 · keyboard 120 · cell phone 32 · book 93)를 보강한다.
+R2 의 학습 사진 · 라벨은 그대로 두고 **새 사진만 더한다**. 바뀌는 것이 하나라 R2 가 그대로 대조군이다.
+
+- 새 영상은 valid(s01 · s02) · test(s03) · d05 와 다른 곳, d01~d06 과도 다른 곳에서 찍는다(이미 학습한 장면은 새로 배울 게 적다).
+  10/26: `d07_librarya`(도서관 자리 1) · `d08_libraryb`(도서관 자리 2, 책 위주) · `d09_cafe`(카페, 끝 40초 손에 든 식품).
+- 식품은 이미 가장 많아서(product 1323) 손에 든 모습만 짧게 찍었다. 진열대 사진만 있고 "들고 묻는" 장면이 거의 없었다.
+
+### 1. 사진 뽑기 · 검수 작업 만들기 (레포 맨 위 폴더에서, 팀 환경)
+
+```bash
+python tools/extract_frames.py
+python tools/auto_label.py review --weights data/models/detector_r2.pt --videos d07 d08 d09 \
+    --out data/datasets/detector/review_r3
+```
+
+- `extract_frames.py` 는 이미 뽑은 영상(d01~d06)을 건너뛰고 새 영상만 뽑는다. 영상 이름은 `d07_library` 처럼
+  **장소에 숫자를 넣지 않는다**(`library1` 은 이름 규칙에 걸려 멈춘다).
+- `review --weights`: R2 가중치(10종)로 초안을 그린다. 글귀를 안 읽어서 CLIP 이 필요 없고, 팀 환경에서 돈다.
+  - 왜 R2 가중치인가: 가리킴 valid 정답 박스를 R2 는 61.3% 잡고, R1 의 선생(YOLO-World)은 59.7% · 식품 0/11 이었다.
+    초안이 좋을수록 고칠 곳이 적다. 최종 라벨은 사람이 고치므로 회차 비교에서 바뀌는 것은 "새 사진" 하나다.
+  - 가중치의 종류가 10종 표와 다르면(R1 의 11종 · 사전학습 COCO) 멈춘다. 초안 기준이 회차마다 흔들리지 않게.
+  - 신뢰도 기준은 0.25(비서의 실제 검출과 같게), 짧은 변 40px 미만은 뺀다. 작업의 모델 이름에 가중치 파일 이름이 남는다.
+  - 순서는 d07 짝수 → d08 짝수 → d09 짝수 → 홀수로 번갈아 나온다(검수가 끊겨도 세 장소가 고르게 들어간다).
+  - `--out` 폴더가 있으면 멈춘다. `review/` 는 R2 검수 원본이라 R3 는 `review_r3/` 에 쓴다.
+
+### 2. Label Studio — 새 프로젝트 "JARVISEO R3 검수"
+
+R2 와 같은 컨테이너에서 프로젝트만 새로 만든다. 사진 폴더(`frames/`)가 통째로 붙어 있어서 새 영상도 그대로 보인다.
+
+1. 프로젝트를 만들고, 라벨 설정에 `review_r3/label_config.xml` 을 붙여넣는다(R2 와 같은 설정).
+2. 설정 → Cloud Storage → Local files, 경로 `/label-studio/files/frames` 를 **이 프로젝트에도** 추가한다(저장소는 프로젝트마다 따로다). Sync 는 누르지 않는다.
+3. 가져오기로 `review_r3/tasks.json` 을 올린다. 규칙은 위 "검수 규칙" 그대로다.
+4. 끝나면 내보내기 → **JSON**.
+
+### 3. 학습 묶음 → Colab
+
+```bash
+mv data/datasets/detector/prep_report.txt data/datasets/detector/prep_report_r2.txt
+python tools/auto_label.py import --export <내보낸 JSON> --out data/datasets/detector/review_r3/labels | tee data/datasets/detector/prep_report.txt
+python tools/auto_label.py build --labels data/datasets/detector/review/labels data/datasets/detector/review_r3/labels \
+    --val d05 --out data/datasets/detector/yolo_r3 | tee -a data/datasets/detector/prep_report.txt
+cd data/datasets/detector && zip -qr JARVISEO_R3_data.zip yolo_r3 prep_report.txt
+```
+
+- 첫 줄은 R2 때 남긴 기록을 보관한다. 노트북이 zip 안의 `prep_report.txt` 를 읽어서 R3 도 같은 이름을 쓰기 때문이다.
+- `build --labels` 는 폴더를 여러 개 받는다. 사진마다 라벨이 있는 폴더 하나에서 읽고, **두 폴더에 다 있으면 멈춘다**
+  (한쪽을 조용히 고르면 R2 라벨이 바뀌어 회차 비교가 깨진다). 폴더마다 가져온 장수를 찍는다.
+- 검증은 R2 검수본에 든 d05 짝수 31장 그대로다.
+- 노트북 `notebooks/detector_finetune.ipynb` 는 셀 1 이 `ROUND = "r3"` · `RUNS = ["r3"]` 이다. 결과는 `data/models/detector_r3.pt` 로 받아
+  `run_ablation.py --weights yolov8n.pt data/models/detector_r2.pt data/models/detector_r3.pt` 로 R0 · R2 와 한 실행에서 잰다.

@@ -375,6 +375,159 @@ def test_review_stops_when_draft_photo_is_missing(monkeypatch, tmp_path):
         auto_label.main()
 
 
+# --- 가중치 초안 (R3) ----------------------------------------------------------------
+
+
+def test_weight_class_table_accepts_our_ten_classes_in_any_order():
+    names = dict(enumerate(reversed(FINETUNE_CLASSES)))
+    assert auto_label.weight_class_table(names) == names
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        dict(enumerate([*FINETUNE_CLASSES[:7], "remote", *FINETUNE_CLASSES[7:]])),  # R1 의 11종
+        {0: "person", 1: "bicycle", 2: "bottle"},  # 사전학습 COCO 처럼 product 가 없다
+    ],
+)
+def test_weight_class_table_rejects_r1_or_coco_weights(names):
+    """R1(remote 포함)이나 COCO 가중치로 초안을 그리면 초안 기준이 회차마다 흔들린다."""
+    with pytest.raises(SystemExit, match="10종 표와 다릅니다"):
+        auto_label.weight_class_table(names)
+
+
+def _weights_root(tmp_path: Path) -> Path:
+    """d07 사진 2장 · d08 사진 1장 · 고르지 않을 d01 사진 1장 · 가중치 파일."""
+    for name in ("d07/d07_0001", "d07/d07_0002", "d08/d08_0001", "d01/d01_0001"):
+        _write_jpg(tmp_path / "frames" / f"{name}.jpg")
+    (tmp_path / "detector_r2.pt").write_bytes(b"fake weights")
+    return tmp_path
+
+
+def _fake_weight_teacher(weights: Path, conf: float):
+    """mouse 하나와 짧은 변 20px 짜리 cup 하나를 찾는 가중치."""
+    return lambda image: [
+        _det("mouse", (10, 10, 70, 60), 0.8),
+        _det("cup", (100, 10, 120, 30), 0.7),  # 짧은 변 20px — 뺀다
+    ]
+
+
+def _weights_argv(monkeypatch, root: Path, *videos: str) -> None:
+    _set_argv(
+        monkeypatch,
+        "review",
+        "--root",
+        str(root),
+        "--weights",
+        str(root / "detector_r2.pt"),
+        "--videos",
+        *(videos or ("d07", "d08")),
+        "--out",
+        str(root / "review_r3"),
+    )
+
+
+def test_review_with_weights_drafts_only_chosen_videos(monkeypatch, tmp_path, capsys):
+    root = _weights_root(tmp_path)
+
+    def fail(*args, **kwargs):
+        raise AssertionError("R3 초안은 CLIP · YOLOE 를 부르지 않는다")
+
+    monkeypatch.setattr(auto_label, "require_clip", fail)
+    monkeypatch.setattr(auto_label, "make_product_finder", fail)
+    seen = {}
+
+    def teacher(weights: Path, conf: float):
+        seen["args"] = (weights.name, conf)
+        return _fake_weight_teacher(weights, conf)
+
+    monkeypatch.setattr(auto_label, "make_weight_teacher", teacher)
+    _weights_argv(monkeypatch, root)
+    auto_label.main()
+
+    out = root / "review_r3"
+    tasks = json.loads((out / "tasks.json").read_text(encoding="utf-8"))
+    # 고르지 않은 d01 은 빠지고, 영상을 번갈아 나온다(영상 안에서는 짝수 번 먼저).
+    assert [auto_label.task_file(t) for t in tasks] == [
+        "frames/d07/d07_0002.jpg",
+        "frames/d08/d08_0001.jpg",
+        "frames/d07/d07_0001.jpg",
+    ]
+    assert [(t["data"]["video"], t["data"]["order"], t["data"]["note"]) for t in tasks] == [
+        ("d07", 1, ""),
+        ("d08", 2, ""),
+        ("d07", 3, ""),
+    ]
+    (prediction,) = tasks[0]["predictions"]
+    assert prediction["model_version"] == "detector_r2"
+    assert [box["value"]["rectanglelabels"][0] for box in prediction["result"]] == ["mouse"]
+    assert seen["args"] == ("detector_r2.pt", auto_label.CONF)
+    assert (out / "label_config.xml").exists()
+    assert not (root / "review").exists()  # R2 검수 원본 자리는 건드리지 않는다
+
+    printed = capsys.readouterr().out
+    assert "검수 작업 3장 (d07 2장 · d08 1장) · 초안 박스 3개" in printed
+    assert "  mouse: 3" in printed
+    assert "초안: detector_r2.pt (conf 0.25) · 짧은 변 40px 미만이라 뺀 박스 3개" in printed
+
+
+def test_review_with_weights_refuses_existing_out(monkeypatch, tmp_path):
+    """R3 작업도 Label Studio 로 가져간 뒤 덮어쓰면 어긋난다."""
+    root = _weights_root(tmp_path)
+    (root / "review_r3").mkdir()
+    monkeypatch.setattr(auto_label, "make_weight_teacher", _fake_weight_teacher)
+    _weights_argv(monkeypatch, root)
+    with pytest.raises(SystemExit, match="이미 있습니다"):
+        auto_label.main()
+
+
+def test_review_with_weights_stops_before_loading_when_video_folder_is_missing(
+    monkeypatch, tmp_path
+):
+    """d09 사진을 아직 안 뽑았으면 가중치를 읽기 전에 멈춘다."""
+    root = _weights_root(tmp_path)
+
+    def must_not_load(weights: Path, conf: float):
+        pytest.fail("가중치를 읽기 전에 멈춰야 한다")
+
+    monkeypatch.setattr(auto_label, "make_weight_teacher", must_not_load)
+    _weights_argv(monkeypatch, root, "d07", "d09")
+    with pytest.raises(SystemExit, match="d09"):
+        auto_label.main()
+    assert not (root / "review_r3").exists()
+
+
+def test_review_with_weights_stops_when_weights_file_is_missing(monkeypatch, tmp_path):
+    root = _weights_root(tmp_path)
+    (root / "detector_r2.pt").unlink()
+    monkeypatch.setattr(auto_label, "make_weight_teacher", _fake_weight_teacher)
+    _weights_argv(monkeypatch, root)
+    with pytest.raises(SystemExit, match="가중치가 없습니다"):
+        auto_label.main()
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["review", "--weights", "w.pt"],  # 영상을 안 고름
+        ["review", "--videos", "d07"],  # 가중치 없이 영상만
+        ["review", "--weights", "w.pt", "--videos", "7"],  # 영상 번호 모양이 아님
+    ],
+)
+def test_parse_args_review_weights_and_videos_go_together(monkeypatch, args):
+    _set_argv(monkeypatch, *args)
+    with pytest.raises(SystemExit):
+        auto_label.parse_args()
+
+
+def test_parse_args_review_conf_default_depends_on_draft_source(monkeypatch):
+    """가중치 초안은 비서 검출과 같은 0.25, R2 갈래(YOLOE 식품 박스)는 그대로 0.1."""
+    _set_argv(monkeypatch, "review", "--weights", "w.pt", "--videos", "d07")
+    assert auto_label.parse_args().conf == auto_label.CONF
+    _set_argv(monkeypatch, "review")
+    assert auto_label.parse_args().conf == auto_label.REVIEW_CONF
+
+
 # --- 선생 비교 ---------------------------------------------------------------------
 
 
@@ -771,6 +924,61 @@ def test_build_reads_validation_labels_from_val_labels_folder(monkeypatch, tmp_p
     printed = capsys.readouterr().out
     assert "학습 1장 · 검증 1장" in printed
     assert f"검증 라벨은 {human} 에서 읽음" in printed
+
+
+def _r3_argv(monkeypatch, root: Path, out: Path, *labels: Path) -> None:
+    _set_argv(
+        monkeypatch,
+        "build",
+        "--root",
+        str(root),
+        "--labels",
+        *map(str, labels),
+        "--val",
+        "d05",
+        "--out",
+        str(out),
+    )
+
+
+def test_build_reads_labels_from_several_folders(monkeypatch, tmp_path, capsys):
+    """R3 = R2 검수본 + R3 검수본. 사진마다 라벨이 있는 폴더 하나에서 읽는다."""
+    root = _build_root(tmp_path)
+    r2 = root / "review" / "labels"
+    r3 = root / "review_r3" / "labels"
+    _write_label(r2 / "d01_0001.txt", "0 0.5 0.5 0.2 0.2\n")
+    _write_label(r2 / "d05_0001.txt", "9 0.5 0.5 0.2 0.2\n")
+    _write_label(r3 / "d02_0001.txt", "4 0.5 0.5 0.2 0.2\n")
+    out = root / "yolo_r3"
+    _r3_argv(monkeypatch, root, out, r2, r3)
+    auto_label.main()
+
+    assert sorted(p.name for p in (out / "images" / "train").iterdir()) == [
+        "d01_0001.jpg",
+        "d02_0001.jpg",
+    ]
+    assert (out / "labels" / "train" / "d02_0001.txt").read_text(encoding="utf-8") == (
+        "4 0.5 0.5 0.2 0.2\n"
+    )
+    assert [p.name for p in (out / "images" / "val").iterdir()] == ["d05_0001.jpg"]
+    printed = capsys.readouterr().out
+    assert "학습 2장 · 검증 1장 (검증 영상 d05) · 라벨 없어 뺀 사진 1장" in printed
+    assert f"라벨을 가져온 폴더: {r2} 2장 · {r3} 1장" in printed
+
+
+def test_build_stops_when_photo_has_labels_in_two_folders(monkeypatch, tmp_path):
+    """같은 사진의 라벨이 두 폴더에 있으면 한쪽을 조용히 고르지 않고, 쓰기 전에 멈춘다."""
+    root = _build_root(tmp_path)
+    r2 = root / "review" / "labels"
+    r3 = root / "review_r3" / "labels"
+    _write_label(r2 / "d01_0001.txt", "0 0.5 0.5 0.2 0.2\n")
+    _write_label(r2 / "d05_0001.txt", "9 0.5 0.5 0.2 0.2\n")
+    _write_label(r3 / "d01_0001.txt", "1 0.5 0.5 0.2 0.2\n")
+    out = root / "yolo_r3"
+    _r3_argv(monkeypatch, root, out, r2, r3)
+    with pytest.raises(SystemExit, match="두 폴더에 있습니다: d01_0001"):
+        auto_label.main()
+    assert not out.exists()
 
 
 # --- 검수 결과 → YOLO 라벨 (import) ---------------------------------------------------
