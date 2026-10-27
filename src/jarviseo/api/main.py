@@ -235,11 +235,15 @@ def create_app(
 
     @app.get("/models/wakeword/{name}", include_in_schema=False)
     def wakeword_model(name: str) -> FileResponse:
-        """브라우저 호출어 모델 3개(약 2.6MB). 대시보드가 켤 때 한 번 받는다."""
+        """브라우저 호출어 모델 3개(약 2.6MB). 대시보드가 켤 때 한 번 받는다.
+
+        no-cache: 릴리스로 모델을 바꿔 배포하면(#232) 다음 새로고침에 새 파일을 받게 한다.
+        그대로면 ETag 로 304 만 오가서 다시 받지 않는다.
+        """
         path = wakeword_file(name)
         if path is None:
             raise HTTPException(404, "없는 호출어 모델입니다")
-        return FileResponse(path, media_type="application/octet-stream")
+        return FileResponse(path, media_type="application/octet-stream", headers=NO_CACHE)
 
     @app.get("/sounds/{name}", include_in_schema=False)
     def sound(name: str) -> FileResponse:

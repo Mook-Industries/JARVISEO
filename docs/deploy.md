@@ -175,13 +175,34 @@ python scripts/start.py --db postgresql+psycopg://jarviseo:jarviseo@localhost:54
 | `[주의] 푸드QR` | 바코드 조회 없이 성분표 OCR 로 간다. 키는 portal.foodqr.kr |
 | 1/5 가 "건너뜀 — Not possible to fast-forward" | 이 노트북에서 커밋을 했다. `git status` 로 보고 팀에 물어본다 |
 
-## 호출어 모델을 바꿀 때 (담당자)
+## 팀 모델을 서버에 올릴 때 (모델 담당자)
 
-1. 새 모델을 GitHub 레포 **Releases → Draft a new release** 로 올린다. 태그는 `models-v2` 처럼 새로, 파일 이름은 `jarviseo.onnx`.
-2. `scripts/download_models.py` 의 `RELEASE_URL` 태그와 `WAKEWORD_SHA256` 을 바꾸고, `data/README.md` 의 호출어 모델 절도 고친다.
-3. PR 로 머지한다. 각 노트북은 `data/models/jarviseo.onnx` 를 지우고 `download_models.py` 를 다시 돌린다.
+**릴리스를 정식으로 내면 서버까지 자동으로 바뀐다(#232).** PR · 배포 담당 · AWS 계정은 필요 없다.
 
-옛 릴리스는 지우지 않는다. 새 모델이 나쁘면 태그만 되돌리면 된다.
+| 모델 | 릴리스 파일 이름 | 정식 릴리스가 없으면 서버는 |
+|---|---|---|
+| 가리킴 검출기(#167) | `detector` 로 시작하는 `.pt` (예: `detector_r3.pt`) | 사전학습 `yolov8n.pt` |
+| 호출어(대시보드 브라우저 호출어, #218) | `jarviseo` 로 시작하는 `.onnx` (예: `jarviseo.onnx`) | `models-v1` 의 r6 |
+
+1. 기존 모델보다 나아진 것을 같은 실행으로 확인한다.
+   검출기는 `run_ablation.py --weights yolov8n.pt data/models/detector_rN.pt`, 호출어는 `scripts/wakeword/evaluate.py`.
+   **정식으로 내는 순간 서버에 들어가므로 이 확인이 유일한 검사다.**
+2. GitHub 레포 **Releases → Draft a new release** 로 위 이름의 파일을 올린다. 태그는 새로(예: `detector-r3`, `models-v2`).
+   본문에 1번 비교 결과를 적는다.
+3. 시험용이면 **Set as a pre-release** 를 켜고 낸다 → 서버는 그대로다. 서버에 쓸 것이면 끄고 낸다.
+   Pre-release 를 나중에 서버에 쓰려면 릴리스를 Edit 해서 pre-release 를 끄면 된다.
+4. Actions 탭에서 **Model release → Deploy** 가 초록불이면 끝이다(약 3분). Deploy 의 "팀 모델 찾기" 단계에 고른 태그가 찍힌다.
+   받은 파일의 SHA256 이 GitHub 값과 다르면 빨간불이고 서버는 전 버전 그대로다.
+
+서버는 두 모델 각각 정식 릴리스 중 **가장 최근에 낸 것**의 파일을 쓴다. main 에 다른 PR 이 머지돼 다시 배포돼도 같다.
+되돌릴 때는 지금 릴리스를 Edit 해서 pre-release 로 바꾼다 → 그 전 정식 릴리스로 다시 배포된다.
+옛 릴리스는 지우지 말고 pre-release 로 둔다. 지우면 되돌릴 파일이 없어진다.
+
+- 호출어 임계값(0.97, `config.WAKEWORD_THRESHOLD`)은 릴리스로 안 바뀐다. 새 모델에 다른 값이 맞으면 PR 로 바꾼다.
+  대시보드는 새로고침 한 번이면 새 호출어 모델을 받는다.
+- 노트북은 자동으로 안 바뀐다. 검출기는 파일을 `data/models/` 에 두고 `.env` 에 `JARVISEO_DETECTOR_WEIGHTS=data/models/detector_rN.pt`.
+  호출어는 `scripts/download_models.py` 의 `RELEASE_URL` 태그와 `WAKEWORD_SHA256` 을 바꿔 PR 로 머지하고,
+  각 노트북은 `data/models/jarviseo.onnx` 를 지우고 `download_models.py` 를 다시 돌린다.
 
 ---
 

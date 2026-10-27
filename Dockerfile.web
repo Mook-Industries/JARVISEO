@@ -63,18 +63,35 @@ RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')" \
     && python -c "import urllib.request as u; u.urlretrieve('https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task', 'data/models/hand_landmarker.task')"
 
 # 브라우저 호출어(#218) 모델 3개(약 2.6MB). 서버는 돌리지 않고 대시보드에 내려주기만 한다(/models/wakeword/).
-# 팀 모델은 레포 릴리스, 공용 특징 모델 2개는 openWakeWord 릴리스. 받은 파일이 바뀌었으면 빌드를 멈춘다.
-# jarviseo.onnx 를 바꾸면 scripts/download_models.py 의 주소 · SHA256 과 같이 바꾼다.
-RUN python -c "import urllib.request as u; \
+# 팀 모델(jarviseo.onnx)은 Deploy 워크플로가 최신 정식 릴리스에서 찾아 --build-arg 로 넘긴다(아래 검출기와 같다).
+# 안 넘기면(PR 의 Docker 체크 · 손 빌드) 처음 올린 models-v1 을 받는다. 공용 특징 모델 2개는 openWakeWord
+# 릴리스로 고정. 받은 파일의 SHA256 이 다르면 빌드를 멈춘다.
+ARG WAKEWORD_URL=""
+ARG WAKEWORD_SHA256=""
+RUN url="${WAKEWORD_URL:-https://github.com/Mook-Industries/JARVISEO/releases/download/models-v1/jarviseo.onnx}" \
+    && sum="${WAKEWORD_SHA256:-4686db10ae2febb837cadccf0e51e10b3bb9bccfdcc4b4820164fb73dd272b46}" \
+    && python -c "import sys, urllib.request as u; \
 oww = 'https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/'; \
-u.urlretrieve('https://github.com/Mook-Industries/JARVISEO/releases/download/models-v1/jarviseo.onnx', 'data/models/jarviseo.onnx'); \
+u.urlretrieve(sys.argv[1], 'data/models/jarviseo.onnx'); \
 u.urlretrieve(oww + 'melspectrogram.onnx', 'data/models/melspectrogram.onnx'); \
-u.urlretrieve(oww + 'embedding_model.onnx', 'data/models/embedding_model.onnx')" \
+u.urlretrieve(oww + 'embedding_model.onnx', 'data/models/embedding_model.onnx')" "$url" \
     && printf '%s\n' \
-        "4686db10ae2febb837cadccf0e51e10b3bb9bccfdcc4b4820164fb73dd272b46  data/models/jarviseo.onnx" \
+        "$sum  data/models/jarviseo.onnx" \
         "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f  data/models/melspectrogram.onnx" \
         "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f  data/models/embedding_model.onnx" \
-    | sha256sum -c -
+    | sha256sum --strict -c -
+
+# 팀원이 학습한 가리킴 물체 검출기(#167). 레포 릴리스에 올린 .pt 를 받아 config.DETECTOR_WEIGHTS 로 쓴다.
+# 값은 Deploy 워크플로가 최신 정식 릴리스에서 찾아 --build-arg 로 넘긴다. 여기 기본값은 손대지 않는다
+# (docs/deploy.md "팀 모델을 서버에 올릴 때"). 비면 받지 않고 위의 사전학습 yolov8n.pt 를 그대로 쓴다.
+# SHA256 이 다르면 빌드가 멈춰 서버는 전 버전 그대로다.
+ARG DETECTOR_URL=""
+ARG DETECTOR_SHA256=""
+RUN if [ -n "$DETECTOR_URL" ]; then \
+        python -c "import sys, urllib.request as u; u.urlretrieve(sys.argv[1], 'data/models/detector.pt')" "$DETECTOR_URL" \
+        && echo "$DETECTOR_SHA256  data/models/detector.pt" | sha256sum --strict -c -; \
+    fi
+ENV JARVISEO_DETECTOR_WEIGHTS=${DETECTOR_URL:+/app/data/models/detector.pt}
 
 # 성분 판정이 읽는 알레르기 동의어 사전(레포에 있다).
 COPY data/datasets/allergen_synonyms.json data/datasets/
