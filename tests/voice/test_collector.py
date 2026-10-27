@@ -103,3 +103,24 @@ def test_dropped_answer_is_not_prefetched_later():
     assert collector.collect(answer_after(0.5, "새 답")) == "새 답"  # 버린 답은 0.3초에 온다
 
     assert tts.prefetched == ["새 답"]
+
+
+def test_refresh_filler_prepares_new_voice_in_background():
+    """`refresh_filler()` 는 "잠깐만요"를 다른 스레드에서 다시 만들고, 다음 필러부터 읽는다."""
+
+    class CountingTTS(FakeTextToSpeech):
+        made = 0
+
+        def prepare(self, text):
+            self.made += 1
+            return f"{text}#{self.made}".encode()
+
+    tts = CountingTTS()
+    collector = ResponseCollector(tts, after_sec=0.05)
+    collector.refresh_filler()
+    deadline = time.monotonic() + 2
+    while tts.made < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    collector.collect(answer_after(0.3))
+    assert tts.spoken == [f"{FILLER}#2"]

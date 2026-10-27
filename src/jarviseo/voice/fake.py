@@ -130,6 +130,15 @@ class FakeTextToSpeech:
         self.spoken.append(pcm.decode())
         self.last_interrupted = False
 
+    def configure(
+        self,
+        voice: str | None = None,
+        speed: str | float | None = None,
+        volume: float | None = None,
+    ) -> bool:
+        """목소리가 없는 가짜라 바뀌는 소리가 없다."""
+        return False
+
     def stop(self) -> None:
         """바로 끝나는 speak() 이라 끊을 것이 없다."""
 

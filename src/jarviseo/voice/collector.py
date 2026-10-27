@@ -17,6 +17,7 @@ VLM 답이 ``config.FILLER_AFTER_SEC``(1.5초) 안에 안 오면 "잠깐만요"�
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -52,7 +53,9 @@ class ResponseCollector:
         self.tts = tts
         self.called_since = called_since or (lambda t: False)
         self.after_sec = after_sec
+        self._filler_text = filler
         self._filler = tts.prepare(filler)
+        self._filler_gen = 0  # refresh_filler() 를 부를 때마다 하나씩 는다
         # 버린 답의 요청은 끝까지 돌게 둔다. 일꾼이 하나면 그게 끝날 때까지 다음 질문이 막힌다.
         self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="answer")
         # 마지막 collect() 의 결과
@@ -94,6 +97,22 @@ class ResponseCollector:
             self.dropped = True
             return None
         return future.result()
+
+    def refresh_filler(self) -> None:
+        """목소리 · 속도를 바꿨을 때 부른다(``TextToSpeech.configure``). 바로 돌아온다.
+
+        "잠깐만요"를 다른 스레드에서 새 목소리로 다시 만든다. 다 될 때까지는 앞의 것을 읽고,
+        잇달아 바꾸면 마지막에 바꾼 것만 남긴다. 새로 만들기를 실패하면 앞의 것을 그대로 둔다.
+        """
+        self._filler_gen += 1
+        gen = self._filler_gen
+
+        def prepare() -> None:
+            pcm = self.tts.prepare(self._filler_text)
+            if pcm and gen == self._filler_gen:
+                self._filler = pcm
+
+        threading.Thread(target=prepare, name="filler", daemon=True).start()
 
     def close(self) -> None:
         """받아 오던 답을 기다려 마치고 닫는다. 프로그램을 끝낼 때 부른다."""
