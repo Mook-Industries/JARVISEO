@@ -1,7 +1,8 @@
 /* 브라우저 호출어 감지 ("자비서", #218).  담당: 문태현
 
    노트북 voice/wakeword.py 와 같은 모델 3개를 onnxruntime-web 으로 브라우저에서 돌린다.
-   상시 듣는 것은 이 브라우저 안에서만 돌고, 서버로 가는 것은 호출된 뒤의 질문뿐이다.
+   상시 듣는 것은 이 브라우저 안에서만 돌고, 서버로 가는 것은 호출 직전 몇 초와 그 턴 동안의 소리뿐이다
+   (voicelink.js 가 onAudio 로 받아 보낸다).
 
      마이크 16kHz → 80ms(1280샘플)씩
        → melspectrogram.onnx  (openWakeWord 공용) 소리 → 멜 스펙트로그램(32칸), x/10 + 2
@@ -131,8 +132,11 @@ function downsampler(rate) {
 }
 
 /**
- * 마이크를 열고 "자비서"가 들릴 때마다 onDetect(score, clip) 를 부른다. 돌려준 stop() 으로 멈춘다.
- * clip 은 감지한 80ms 까지 직전 clipSec 초(Int16Array) — 2단계 확인(서버 받아쓰기)에 보낸다.
+ * 마이크를 열고 "자비서"가 들릴 때마다 onDetect(score, clip, pos) 를 부른다. 돌려준 stop() 으로 멈춘다.
+ * clip 은 감지한 80ms 까지 직전 clipSec 초(Int16Array), pos 는 그 80ms 끝의 샘플 번호.
+ * onAudio(frame, pos) 는 80ms(1280샘플, Int16Array)마다 순서대로 부른다. pos 는 그 80ms 첫 샘플이
+ * 마이크를 연 뒤 몇 번째인지다(서버가 이 번호로 시각을 맞춘다).
+ * detect=false 면 모델을 읽지 않고 마이크만 연다(휴대폰 · 모델 없는 서버 — 호출 버튼으로만 부른다).
  *
  * 대답을 읽는 동안(isPlaying() 이 참이거나 끝난 뒤 0.3초)은 playbackThreshold 를 쓴다(gate.py 와 같은 뜻).
  * 읽는 중에도 계속 들어 "자비서"로 끼어들 수 있다. 한 번 깨어나면 refractory 초는 다시 깨지 않는다.
@@ -147,10 +151,12 @@ export async function listenForWakeWord({
   refractory = 2.0,
   clipSec = 1.6,
   isPlaying = () => false,
-  onDetect,
+  onDetect = () => {},
   onScore = () => {},
+  onAudio = () => {},
+  detect = true,
 }) {
-  const scorer = await WakeWordScorer.load(ort, base);
+  const scorer = detect ? await WakeWordScorer.load(ort, base) : null;
   const aec = new URLSearchParams(location.search).get("aec") !== "0";
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: aec, noiseSuppression: false, autoGainControl: false },
@@ -178,6 +184,7 @@ export async function listenForWakeWord({
   let stopped = false;
   const recent = []; // 점수를 낸 최근 80ms 들(clipSec 초어치)
   const keep = Math.ceil((clipSec * SAMPLE_RATE) / FRAME);
+  let pos = 0; // 다음 80ms 첫 샘플의 번호
   tap.port.onmessage = ({ data }) => {
     const block = shrink(data);
     const joined = new Float32Array(pending.length + block.length);
@@ -188,6 +195,10 @@ export async function listenForWakeWord({
       const f = pending.slice(0, FRAME);
       pending = pending.slice(FRAME);
       const frame = Int16Array.from(f, (v) => Math.max(-32768, Math.min(32767, Math.round(v * 32767))));
+      const at = pos;
+      pos += FRAME;
+      onAudio(frame, at);
+      if (!scorer) continue;
       const now = performance.now() / 1000;
       if (isPlaying()) playedAt = now;
       const limit = now - playedAt < 0.3 ? playbackThreshold : threshold;
@@ -202,7 +213,7 @@ export async function listenForWakeWord({
           quietUntil = now + refractory;
           const clip = new Int16Array(recent.length * FRAME);
           recent.forEach((f, i) => clip.set(f, i * FRAME));
-          onDetect(s, clip);
+          onDetect(s, clip, at + FRAME);
         }
       });
     }
@@ -212,6 +223,9 @@ export async function listenForWakeWord({
   return {
     label: track?.label || "기본 마이크",
     aec,
+    get pos() {
+      return pos; // 지금까지 받은 샘플 수(호출 버튼을 누른 순간의 번호)
+    },
     // 페이지를 한 번도 누르지 않았으면 브라우저가 오디오를 멈춰 둔다. 누를 때 resume() 한다
     get suspended() {
       return ctx.state === "suspended";

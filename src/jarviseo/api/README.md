@@ -52,31 +52,37 @@ python -m jarviseo.api          # http://localhost:8000 이 열린다. 끄려면
 
 - 필요한 것: `OPENAI_API_KEY`, 호출어 모델 `data/models/jarviseo.onnx`(받는 법은 `data/README.md`),
   손 모델(선택, 위 2-1). 마이크 · 스피커는 `.env` 의 `JARVISEO_MIC` · `JARVISEO_SPEAKER`(비면 기본 장치).
-- 키나 마이크가 없으면 예전처럼 브라우저 받아쓰기 · 읽기로 돈다(콘솔에 `[voice] 팀 음성 모드 꺼짐`).
+- 키나 마이크가 없으면 아래 브라우저 음성으로 돈다(콘솔에 `[voice] 팀 음성 모드 꺼짐`).
+  노트북에서 브라우저 음성을 시험하려면 주소 끝에 `?voice=browser`.
 
-### 브라우저 호출어 (#218)
+### 브라우저 음성 (#218)
 
-서버에 마이크가 없을 때(클라우드 `jarviseo.duckdns.org`) 대시보드 탭이 직접 "자비서"를 듣는다(`pages/wakeword.js`).
-노트북과 같은 모델 3개를 onnxruntime-web 1.20.1(jsDelivr)로 돌린다. 평소 소리는 서버로 가지 않는다.
+서버에 마이크가 없을 때(클라우드 `jarviseo.duckdns.org` · 휴대폰) 대시보드 탭의 마이크 · 스피커로 **팀 음성
+모드와 같은 서버 부품**이 돈다(`api/browser_voice.py`, `voice/remote.py`, `pages/voicelink.js`).
+Chrome 받아쓰기 · 브라우저 목소리는 쓰지 않는다.
 
 ```
-노트북 마이크(유선 카메라) → 브라우저: melspectrogram → embedding → jarviseo.onnx (80ms 마다 점수)
-  "자비서" 감지 → 시작음 → 브라우저 받아쓰기 → POST /api/ask (사진 + 질문) → 서버 그래프 → 브라우저가 읽음
+브라우저: "자비서" 감지(wakeword.js, 노트북과 같은 모델 3개 · onnxruntime-web 1.20.1)
+  → WebSocket /api/voice/ws 로 직전 4초 + 그 턴 동안의 마이크 소리 · 카메라 장면(초당 4장)
+서버: 2단계 확인(voice/wakecheck.py) → 시작음 → OpenAI 받아쓰기(1.5초 앞 읽기) → 그래프(가리킴 · 되묻기 ·
+      성분 · 기억) → "잠깐만요" → OpenAI 목소리(tts_text 정리) → 끼어들기
+  → 소리(PCM 24kHz)를 브라우저로 보내고, 브라우저가 받은 순서대로 낸다
 ```
 
+- 평소 소리는 서버로 가지 않는다. 호출(호출어 · 버튼 · 스페이스바)부터 턴이 끝날 때(서버 `idle`)까지만 보낸다.
+- 대답을 읽는 중에도 듣는다. "자비서"가 들리면 서버가 읽기를 끊고(브라우저에 `flush`) 새 질문을 받는다.
+  그 턴은 `trigger_type=BARGE_IN`. 입력칸 질문도 서버 목소리로 읽는다.
 - 서버는 모델을 `GET /models/wakeword/<이름>` 으로 내려주고, `GET /api/wakeword` 가 켤 수 있는지와 임계값
   (config 의 `WAKEWORD_THRESHOLD` · `WAKEWORD_PLAYBACK_THRESHOLD`, 지금 둘 다 0.97)을 알려 준다.
   웹 이미지(`Dockerfile.web`)가 빌드 때 세 모델을 `data/models/` 에 넣는다. 노트북은 `scripts/download_models.py` 가 받은 것을 쓴다.
-- 2단계 확인(노트북 #149 와 같은 `voice/wakecheck.py`): 깨어나면 감지까지 직전 1.6초(`JARVISEO_WAKE_CHECK_SEC`)를
-  `POST /api/wake-check`(16kHz 모노 int16 PCM, 5초까지)로 보낸다. 서버가 OpenAI 로 받아써 "자비서"가 없으면 거절 →
-  브라우저는 듣기를 멈추고 아무 말 없이 다시 기다린다. 질문을 듣는 동안 같이 돌아 진짜 호출은 늦어지지 않는다.
-  키가 없거나 받아쓰기가 실패 · 3초 넘게 걸리면 통과. 키는 브라우저로 가지 않는다. 콘솔에 `[wake] 2단계 확인 통과 · 거절`.
-- 대답을 읽는 중에도 듣는다. "자비서"가 들리면 읽기를 끊고 새 질문을 받는다. 그 턴은 `trigger_type=BARGE_IN`.
 - 마이크는 브라우저 기본 마이크. 유선 카메라 마이크를 쓰려면 주소창 왼쪽 사이트 설정 → 마이크에서 고른다.
-  잡음 제거 · 자동 음량은 끄고 에코 제거는 켠다(주소 끝에 `?aec=0` 이면 에코 제거도 끈다). 콘솔에 `[wake] 브라우저 호출어 켜짐 · <마이크 이름>`.
-- 켜지지 않는 경우(콘솔 `[wake] 브라우저 호출어 꺼짐: <이유>`): 휴대폰, https 가 아님, 마이크 권한 거부, 서버에 모델 없음.
-  그때 화면 문구는 "호출 버튼이나 스페이스바로 불러 주세요."
-- 노트북 파이썬과 점수가 같은지는 `scripts/wakeword/compare_browser.py` 로 잰다(Node + onnxruntime-web).
+  잡음 제거 · 자동 음량은 끄고 에코 제거는 켠다(주소 끝에 `?aec=0` 이면 에코 제거도 끈다).
+  콘솔에 `[voice] 브라우저 음성 켜짐`, `[wake] 브라우저 마이크 · <마이크 이름> · … · 호출어 true`.
+- 휴대폰은 호출어를 켜지 않고, 호출 버튼을 처음 누를 때 마이크를 연다.
+- 서버에 OpenAI 키가 없으면(콘솔 `[voice] 브라우저 음성 꺼짐`) 음성은 꺼지고 입력칸 질문(`POST /api/ask`)만 된다.
+- 환경설정 음량은 서버가 보낸 소리에, 읽기 속도는 서버 목소리 속도(0.9 아래 SLOW, 1.1 위 FAST)에 쓴다.
+- 노트북 파이썬과 호출어 점수가 같은지는 `scripts/wakeword/compare_browser.py` 로 잰다(Node + onnxruntime-web).
+- `POST /api/wake-check` 는 예전 방식(브라우저가 확인 구간만 보냄)과 `scripts/wakeword/verify_browser.py` 용으로 남겨 둔다.
 
 ### 질문 하나가 도는 곳
 

@@ -71,6 +71,22 @@ def test_call_during_playback_reopens_gate_back_to_question():
     assert gate.is_open(wake.t - config.WAKE_LOOKBACK_SEC)
 
 
+def test_call_heard_as_playback_stopped_still_reopens_gate():
+    """끊은 시각이 감지 시각과 같아도(브라우저 마이크) 거슬러 연다. 감지한 80ms 는 재생 중이었다."""
+    gate = MicGate(grace_sec=0.3)
+    barge = BargeIn(StopCounter(), gate=gate)
+    with gate.playing():
+        time.sleep(0.2)  # 대답을 읽는 중에
+        t = time.monotonic()
+        barge.on_detect(t, 0.995)
+    gate.reopen(t)  # 끊은 시각 = 감지 시각
+    assert gate.is_open(t) and not gate.is_open(t - 0.1)
+
+    wake = barge.wait(timeout=0.1)
+
+    assert gate.is_open(wake.t - 0.1)  # "자비서"와 그 앞도 들린다
+
+
 def test_call_outside_playback_leaves_gate():
     """재생 중이 아닐 때 들린 호출은 게이트를 건드리지 않는다."""
     gate = MicGate(grace_sec=0.3)
