@@ -86,18 +86,3 @@ def test_voice_settings_before_start_are_kept_for_start():
     loop.configure_voice(voice="nova", speed=1.3, volume=None)
     loop.configure_voice(volume=0.5)
     assert loop.voice_settings == {"voice": "nova", "speed": 1.3, "volume": 0.5}
-
-
-def test_voice_settings_api(tmp_path):
-    """POST /api/voice/settings 는 팀 음성 모드에 넘기고, 범위 밖 값은 422."""
-    from fastapi.testclient import TestClient
-
-    from jarviseo.api.main import create_app
-    from jarviseo.memory import MemoryStore
-
-    store = MemoryStore(database_url=f"sqlite:///{tmp_path / 'web.db'}")
-    store.init_schema()
-    with TestClient(create_app(store=store)) as c:
-        r = c.post("/api/voice/settings", json={"voice": "onyx", "speed": 0.7, "volume": 0.3})
-        assert r.json() == {"on": False, "voice": "onyx", "speed": 0.7, "volume": 0.3}
-        assert c.post("/api/voice/settings", json={"speed": 3}).status_code == 422

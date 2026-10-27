@@ -197,6 +197,15 @@ def test_voice_settings_change_server_voice_and_filler(ws_app):
     assert fake.voices.count(("onyx", 1.5)) == 2  # 대답 + 새로 만든 "잠깐만요"
 
 
+def test_voice_settings_api_goes_to_team_voice_mode(ws_app):
+    """POST /api/voice/settings 는 팀 음성 모드(PC 스피커)에 넘기고, 범위 밖 값은 422."""
+    make, _, _ = ws_app
+    with make() as c:
+        r = c.post("/api/voice/settings", json={"voice": "onyx", "speed": 0.7, "volume": 0.3})
+        assert r.json() == {"on": False, "voice": "onyx", "speed": 0.7, "volume": 0.3}
+        assert c.post("/api/voice/settings", json={"speed": 3}).status_code == 422
+
+
 def test_without_key_says_off(tmp_path, monkeypatch):
     """OpenAI 키가 없으면 켤 수 없다고 알리고 닫는다(페이지는 입력칸만 쓴다)."""
     from jarviseo import config
