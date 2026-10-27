@@ -960,6 +960,7 @@
       const r = await (await fetch("/api/voice/start", { method: "POST" })).json();
       if (!r.on) throw new Error(r.reason || "꺼짐");
       voiceMode = true;
+      sendVoiceSettings();
       setText("#core-sub", "“자비서”라고 부르면 대화를 시작합니다.");
       setText("#reason-a", `팀 음성 모드 · 가리킴 ${r.pointing} · 대답은 PC 스피커로 읽어요.`);
       console.info("[voice] 팀 음성 모드 켜짐 · 가리킴", r.pointing);
@@ -1065,7 +1066,7 @@
       const r = await l.connect();
       link = l;
       link.setVolume(Number(volume.value) / 100);
-      link.setRate(Number(rate.value));
+      link.setVoice(voicePick.value, Number(rate.value));
       console.info("[voice] 브라우저 음성 켜짐 · 가리킴", r.pointing, "· 기억", r.recall);
     } catch (err) {
       l?.close();
@@ -1217,8 +1218,25 @@
     input.style.setProperty("--p", `${p}%`);
   };
 
+  // AI 음성(소리 크기 · 말하기 속도 · 보이스)은 이 브라우저에 저장하고 지금 도는 음성에 바로 쓴다.
+  //   브라우저 음성: 소리 크기는 받은 소리에 곱하고(voicelink.js), 목소리 · 속도는 서버 합성이 바꾼다
+  //   팀 음성 모드: 셋 다 서버에 보내 PC 스피커 대답에 쓴다(/api/voice/settings)
   const volume = $("#volume");
   const rate = $("#rate");
+  const voicePick = $("#voice");
+  volume.value = store.get("jarviseo.volume", 70);
+  rate.value = store.get("jarviseo.rate", 1);
+  voicePick.value = store.get("jarviseo.voice", "coral");
+  if (!voicePick.value) voicePick.selectedIndex = 0; // 저장된 값이 목록에 없다
+  const sendVoiceSettings = () => {
+    if (!voiceMode) return;
+    const body = { voice: voicePick.value, speed: Number(rate.value), volume: Number(volume.value) / 100 };
+    fetch("/api/voice/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => {});
+  };
   const syncVolume = () => {
     fillRange(volume);
     $("#volume-out").textContent = Number(volume.value) === 0 ? "음소거" : `${volume.value}%`;
@@ -1229,9 +1247,19 @@
   };
   volume.addEventListener("input", syncVolume);
   rate.addEventListener("input", syncRate);
-  // 브라우저 음성: 서버가 보낸 소리의 음량, 서버 목소리 속도(SLOW · NORMAL · FAST)
-  volume.addEventListener("change", () => link?.setVolume(Number(volume.value) / 100));
-  rate.addEventListener("change", () => link?.setRate(Number(rate.value)));
+  volume.addEventListener("change", () => {
+    store.set("jarviseo.volume", Number(volume.value));
+    link?.setVolume(Number(volume.value) / 100);
+    sendVoiceSettings();
+  });
+  const changeVoice = () => {
+    store.set("jarviseo.rate", Number(rate.value));
+    store.set("jarviseo.voice", voicePick.value);
+    link?.setVoice(voicePick.value, Number(rate.value));
+    sendVoiceSettings();
+  };
+  rate.addEventListener("change", changeVoice);
+  voicePick.addEventListener("change", changeVoice);
   syncVolume();
   syncRate();
 

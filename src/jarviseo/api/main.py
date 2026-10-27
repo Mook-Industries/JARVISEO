@@ -117,6 +117,14 @@ class Allergens(BaseModel):
     allergens: list[str]
 
 
+class VoiceSettings(BaseModel):
+    """환경설정 AI 음성. 없는 칸은 그대로 둔다. voice 는 voice/tts.py VOICES 중 하나."""
+
+    voice: str | None = None
+    speed: float | None = Field(None, ge=0.5, le=2.0)  # 말하기 속도 배수
+    volume: float | None = Field(None, ge=0.0, le=1.0)  # 소리 크기
+
+
 class Ask(BaseModel):
     question: str
     image: str | None = None  # data URL 또는 base64 JPEG/PNG. 없으면 사진 없이 묻는다
@@ -338,6 +346,13 @@ def create_app(
         """화면의 호출 버튼 = "자비서"라고 부른 것."""
         request.app.state.voice.call()
         return {"ok": True}
+
+    @app.post("/api/voice/settings")
+    def voice_settings(body: VoiceSettings, request: Request) -> dict:
+        """환경설정 AI 음성을 팀 음성 모드(PC 스피커)에 쓴다. 켜기 전에 보내면 켤 때 쓴다."""
+        voice = request.app.state.voice
+        voice.configure_voice(**body.model_dump())
+        return {"on": voice.running, **voice.voice_settings}
 
     @app.get("/api/voice/events")
     def voice_events(request: Request, after: int = 0) -> dict:

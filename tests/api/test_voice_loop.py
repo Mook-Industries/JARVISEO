@@ -78,3 +78,11 @@ def test_no_mic_fails_before_loading_models(monkeypatch):
         with pytest.raises(RuntimeError, match="기본 입력 장치 없음"):
             loop.start()
     assert made == [] and not loop.running
+
+
+def test_voice_settings_before_start_are_kept_for_start():
+    """켜기 전에 받은 환경설정은 들고 있다가 켤 때 쓴다(없는 칸은 그대로)."""
+    loop = make_loop()
+    loop.configure_voice(voice="nova", speed=1.3, volume=None)
+    loop.configure_voice(volume=0.5)
+    assert loop.voice_settings == {"voice": "nova", "speed": 1.3, "volume": 0.5}

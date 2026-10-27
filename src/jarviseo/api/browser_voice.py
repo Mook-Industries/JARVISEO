@@ -21,7 +21,7 @@
     브라우저 → 서버  바이트: [종류 1][pos float64][내용]  1 = 마이크(16kHz int16), 2 = 장면 JPEG
                      pos 는 마이크를 연 뒤 몇 번째 샘플인지(장면은 찍은 순간까지 센 수)
                      글자(JSON): wake{id, pos, score, button, camera} · ask{question, image} · stop
-                                 · speed{value}
+                                 · voice{voice, speed}  (환경설정 보이스 선택 · 말하기 속도 배수)
     서버 → 브라우저  바이트: [채널 1][PCM 24kHz int16],  글자(JSON): 위의 알림, flush{ch}
 """
 
@@ -55,7 +55,6 @@ AUDIO, FRAME = 1, 2
 TTS_CHANNEL, CHIME_CHANNEL = 0, 1
 # 호출 직전 소리가 마이크 버퍼에 다 들어올 때까지 기다리는 최대 시간(초)
 CATCH_UP_SEC = 0.5
-SPEEDS = ("SLOW", "NORMAL", "FAST")
 
 
 class _Turn:
@@ -335,8 +334,10 @@ class BrowserVoice:
                 self._asks.put((question, msg.get("image")))
         elif kind == "stop":
             p["tts"].stop()  # 화면을 떠났다
-        elif kind == "speed" and msg.get("value") in SPEEDS:
-            p["tts"].speed = msg["value"]
+        elif kind == "voice":
+            # 환경설정. 소리 크기는 브라우저가 받은 소리에 곱한다(voicelink.js)
+            if p["tts"].configure(voice=msg.get("voice"), speed=msg.get("speed")):
+                p["collector"].refresh_filler()
 
     # ---- 듣고 답하는 스레드 (voice_loop.py · assistant.run 과 같다) ----
 

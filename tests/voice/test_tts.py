@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 import httpx2
+import numpy as np
 import openai
 import pytest
 
@@ -441,6 +442,46 @@ def test_converts_tts_speed_to_speed(speed, value):
     list(TextToSpeech(speed=speed, client=client).synthesize("안녕하세요."))
 
     assert client.requests[0].get("speed") == value  # NORMAL 은 아예 안 보낸다
+
+
+@pytest.mark.parametrize(("speed", "value"), [(1.5, 1.5), (0.5, 0.5), (1.0, None), (9, 4.0)])
+def test_sends_speed_multiplier_within_openai_range(speed, value):
+    """환경설정 배수는 그대로 보내고, OpenAI 범위(0.25~4) 밖이면 자른다."""
+    client = FakeClient()
+
+    list(TextToSpeech(speed=speed, client=client).synthesize("안녕하세요."))
+
+    assert client.requests[0].get("speed") == value
+
+
+def test_configure_changes_voice_and_speed_for_next_request():
+    """`configure()` 는 아는 목소리 · 속도만 바꾸고, 합성 소리가 달라질 때만 True 다."""
+    client = FakeClient()
+    tts = TextToSpeech(client=client)
+
+    assert tts.configure(voice="onyx", speed=1.5) is True
+    list(tts.synthesize("안녕하세요."))
+    assert (client.requests[0]["voice"], client.requests[0]["speed"]) == ("onyx", 1.5)
+    assert tts.configure(voice="onyx", speed=1.5) is False  # 그대로다
+    assert tts.configure(voice="모르는목소리", speed="빠르게") is False
+    assert (tts.voice, tts.speed) == ("onyx", 1.5)
+    assert tts.configure(volume=0.4) is False  # 소리 크기는 합성과 상관없다
+    assert tts.volume == 0.4
+    tts.configure(volume=3)
+    assert tts.volume == 1.0
+
+
+def test_volume_scales_played_sound(played):
+    """소리 크기만큼 조각에 곱해 재생한다. 1 이면 받은 그대로."""
+    loud = np.full(CHUNK_BYTES // 2, 1000, "<i2").tobytes()
+    tts = TextToSpeech(client=FakeClient(chunks=lambda size: iter([loud])))
+
+    tts.configure(volume=0.5)
+    tts.speak("안녕하세요.")
+    tts.play(loud)
+
+    pcm = np.frombuffer(b"".join(played), "<i2")
+    assert len(pcm) == CHUNK_BYTES and set(pcm.tolist()) == {500}
 
 
 @pytest.mark.parametrize(

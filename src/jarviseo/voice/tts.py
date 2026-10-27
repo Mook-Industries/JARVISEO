@@ -19,7 +19,7 @@ import logging
 import queue
 import threading
 import time
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from contextlib import AbstractContextManager
 from typing import Any
 
@@ -32,7 +32,7 @@ from jarviseo.voice.gate import MicGate
 from jarviseo.voice.speaker import SAMPLE_RATE, Speaker
 from jarviseo.voice.tts_text import normalize
 
-__all__ = ["SAMPLE_RATE", "TextToSpeech", "trim_silence"]
+__all__ = ["SAMPLE_RATE", "VOICES", "TextToSpeech", "speed_value", "trim_silence"]
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +40,10 @@ CHUNK_BYTES = SAMPLE_RATE * 2 // 10  # 100ms 씩 받는다
 # user_setting.tts_speed → OpenAI speed 값. instructions 로 "천천히"를 부탁하면 같은 문장도
 # 길이가 ±0.6초씩 흔들려 효과가 안 보였고, speed 는 0.8 → 1.31배, 1.25 → 0.79배로 일정했다.
 SPEEDS = {"SLOW": 0.85, "NORMAL": 1.0, "FAST": 1.2}
+# 대시보드 환경설정은 배수(0.5~2.0)를 그대로 보낸다. OpenAI 가 받는 범위로 자른다.
+SPEED_MIN, SPEED_MAX = 0.25, 4.0
+# 고를 수 있는 목소리(OpenAI tts-1 이 받는 것). 대시보드 보이스 선택이 이 중 하나를 보낸다.
+VOICES = frozenset({"alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"})
 # 한 번 기다리는 최대 시간(초)과 다시 보내는 횟수.
 # 받는 쪽(read)은 따로 짧게 건다. 첫 조각은 보통 0.6~1.5초에 오는데(D12 21턴), 서버가 느릴 때
 # 10초를 다 기다리고 다시 보내서 첫 소리까지 18.4초가 걸린 적이 있다(D5). 응답이 없는 서버로
@@ -73,6 +77,7 @@ class TextToSpeech:
         gate: MicGate | None = None,
     ) -> None:
         """voice · speed 는 ``user_setting`` 의 tts_voice · tts_speed (SLOW/NORMAL/FAST).
+        speed 는 배수(1.0 = 보통)로 줘도 된다. 대시보드 환경설정이 그렇게 보낸다(``configure``).
         device 는 sounddevice 출력 장치 번호다. None 이면 기본 스피커.
         output · gate 는 브라우저 스피커로 읽을 때 넘긴다(``Speaker`` 와 같다, ``remote.py``).
         fallback_model 은 합성이 멈춰서 speak() 가 한 번 더 요청할 때 쓰는 모델이다.
@@ -82,7 +87,9 @@ class TextToSpeech:
         self.model = model
         self.fallback_model = fallback_model
         self.voice = voice
-        self.speed = speed
+        self.speed: str | float = speed
+        # 읽는 소리의 크기(0~1). 조각마다 곱한다. 브라우저로 보낼 때는 브라우저가 줄이니 1 로 둔다
+        self.volume = 1.0
         self.speaker = Speaker(device, gate, output=output)
         self.client = client or OpenAI(
             api_key=config.OPENAI_API_KEY or None, timeout=TIMEOUT, max_retries=RETRIES
@@ -122,7 +129,7 @@ class TextToSpeech:
         source = prefetched if prefetched is not None else _Prefetch(text, self._stream(text))
         chunks = _on_first(self._receive(text, source), first)
         try:
-            self.speaker.play(chunks)
+            self.speaker.play(self._at_volume(chunks))
         except (OpenAIError, httpx2.HTTPError) as e:
             # 요청 자체가 실패했거나(openai 가 이미 RETRIES 만큼 다시 보낸 뒤), 폴백 요청도 멈췄다.
             # 받은 소리까지만 내고, 음성 루프는 멈추지 않는다.
@@ -192,8 +199,39 @@ class TextToSpeech:
         """prepare() 로 만든 소리를 바로 재생한다. speak() 처럼 stop() 으로 끊긴다."""
         self.last_interrupted = False
         if pcm:
-            self.speaker.play([pcm])
+            self.speaker.play(self._at_volume([pcm]))
         self.last_interrupted = self.speaker.interrupted
+
+    def configure(
+        self,
+        voice: str | None = None,
+        speed: str | float | None = None,
+        volume: float | None = None,
+    ) -> bool:
+        """대시보드 환경설정(보이스 선택 · 말하기 속도 · 소리 크기)을 다음 읽기부터 쓴다.
+
+        모르는 목소리 · 숫자가 아닌 값은 무시한다. 목소리나 속도가 바뀌어 합성 소리가 달라지면
+        True 다. 그때는 미리 만들어 둔 "잠깐만요"도 새로 만들어야 한다(``ResponseCollector``).
+        소리 크기는 읽는 도중에 바꿔도 다음 조각부터 바로 들린다.
+        """
+        before = (self.voice, speed_value(self.speed))
+        if voice in VOICES:
+            self.voice = voice
+        if isinstance(speed, str) and speed.upper() in SPEEDS:
+            self.speed = speed.upper()
+        elif isinstance(speed, int | float) and not isinstance(speed, bool):
+            self.speed = speed_value(speed)
+        if isinstance(volume, int | float) and not isinstance(volume, bool):
+            self.volume = min(max(float(volume), 0.0), 1.0)
+        return (self.voice, speed_value(self.speed)) != before
+
+    def _at_volume(self, chunks: Iterable[bytes]) -> Generator[bytes]:
+        """조각마다 그때의 소리 크기를 곱해 낸다. 1 이면 그대로."""
+        for chunk in chunks:
+            volume = self.volume
+            if volume < 1.0 and len(chunk) % 2 == 0:
+                chunk = (np.frombuffer(chunk, "<i2") * volume).astype("<i2").tobytes()
+            yield chunk
 
     def stop(self) -> None:
         """읽던 것을 바로 멈춘다(끼어들기). 호출어 감지 스레드에서 부른다.
@@ -222,7 +260,7 @@ class TextToSpeech:
         model 을 안 주면 self.model 로 보낸다.
         객체의 상태(last_latency_ms 등)는 건드리지 않는다. prefetch() 가 다른 스레드에서 쓴다.
         """
-        speed = SPEEDS.get(self.speed.upper(), 1.0)
+        speed = speed_value(self.speed)
         with self.client.audio.speech.with_streaming_response.create(
             model=model or self.model,
             voice=self.voice,
@@ -233,6 +271,13 @@ class TextToSpeech:
             response_format="pcm",
         ) as response:
             yield from response.iter_bytes(CHUNK_BYTES)
+
+
+def speed_value(speed: str | float) -> float:
+    """tts_speed(SLOW/NORMAL/FAST, 모르는 값은 보통)나 배수를 OpenAI speed 값으로 바꾼다."""
+    if isinstance(speed, str):
+        return SPEEDS.get(speed.upper(), 1.0)
+    return min(max(float(speed), SPEED_MIN), SPEED_MAX)
 
 
 def _on_first(chunks: Generator[bytes], first: Callable[[], None]) -> Generator[bytes]:

@@ -50,6 +50,7 @@ class FakeOpenAI:
         self.wake, self.question = wake, question
         self.heard: list[str] = []
         self.spoken: list[str] = []
+        self.voices: list[tuple] = []  # 읽기 요청마다 (voice, speed)
         speech = SimpleNamespace(with_streaming_response=SimpleNamespace(create=self._speech))
         self.audio = SimpleNamespace(
             transcriptions=SimpleNamespace(create=self._transcribe), speech=speech
@@ -67,6 +68,7 @@ class FakeOpenAI:
     @contextmanager
     def _speech(self, **kwargs):
         self.spoken.append(kwargs["input"])
+        self.voices.append((kwargs["voice"], kwargs.get("speed")))
         chunk = b"\x10\x00" * 2400
         yield SimpleNamespace(iter_bytes=lambda size: iter([chunk, chunk]))
 
@@ -179,6 +181,29 @@ def test_typed_question_is_read_by_server_voice(ws_app):
     assert result["question"] == "오늘 뭐 했지?"
     assert ANSWER in fake.spoken
     assert fake.heard == []  # 받아쓰기는 안 했다
+
+
+def test_voice_settings_change_server_voice_and_filler(ws_app):
+    """환경설정 보이스 · 말하기 속도를 보내면 서버 목소리가 바뀌고 "잠깐만요"도 새로 만든다."""
+    make, store, fake = ws_app
+    sounds: list = []
+    with make() as c, c.websocket_connect("/api/voice/ws") as ws:
+        until(ws, "ready", sounds)
+        ws.send_json({"type": "voice", "voice": "onyx", "speed": 1.5})
+        ws.send_json({"type": "ask", "question": "오늘 뭐 했지?"})
+        until(ws, "idle", sounds)
+    said = dict(zip(fake.spoken, fake.voices, strict=True))
+    assert said[ANSWER] == ("onyx", 1.5)
+    assert fake.voices.count(("onyx", 1.5)) == 2  # 대답 + 새로 만든 "잠깐만요"
+
+
+def test_voice_settings_api_goes_to_team_voice_mode(ws_app):
+    """POST /api/voice/settings 는 팀 음성 모드(PC 스피커)에 넘기고, 범위 밖 값은 422."""
+    make, _, _ = ws_app
+    with make() as c:
+        r = c.post("/api/voice/settings", json={"voice": "onyx", "speed": 0.7, "volume": 0.3})
+        assert r.json() == {"on": False, "voice": "onyx", "speed": 0.7, "volume": 0.3}
+        assert c.post("/api/voice/settings", json={"speed": 3}).status_code == 422
 
 
 def test_without_key_says_off(tmp_path, monkeypatch):
