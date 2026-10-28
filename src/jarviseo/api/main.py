@@ -88,6 +88,7 @@ from jarviseo.nutrition.allergen import (
 from jarviseo.nutrition.ocr import google_vision_key
 from jarviseo.nutrition.service import IngredientChecker, make_checker
 from jarviseo.types import IngredientSource
+from jarviseo.workflow.follow_up import FOLLOW_UP_TRIGGER
 
 # assistant.py 의 기본 DB 와 같아야 등록한 알레르기를 앱과 같이 쓴다.
 API_DB = os.environ.get("JARVISEO_API_DB", "sqlite:///data/assistant.db")
@@ -481,6 +482,7 @@ def _feed_item(t: SessionTurn) -> dict:
         "answer": t.answer_text,
         "target": t.inference.target_label if t.inference is not None else None,
         "total_ms": t.total_ms,
+        "follow_up": t.trigger_type == FOLLOW_UP_TRIGGER,  # 앞 대화 밑에 붙인다
     }
 
 
@@ -658,6 +660,8 @@ def _result(s, question: str, state, spoken: list[str], t0: float) -> dict:
         "vlm_real": s.assistant.vlm_real,
         "pointing": getattr(s.assistant, "pointing", "v1"),  # v2 = 손끝 방향까지 본다
         "turn_id": state.get("turn_id"),
+        # 되물은 뒤 호출어 없이 이어 말한 대답이면 True. 대화 내역이 앞 대화 밑에 붙인다
+        "follow_up": state.get("trigger_type") == FOLLOW_UP_TRIGGER,
         # stt · tts · total 은 말하고 듣는 시간이라 웹(가짜 STT · TTS)에서는 뜻이 없다
         "latency_ms": {
             k: round(v)

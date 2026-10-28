@@ -285,6 +285,47 @@ def test_wake_word_only_reprompts_then_hears_question(ws_app):
     assert "네, 말씀하세요." in fake.spoken
 
 
+def test_reply_after_ask_back_is_heard_without_wake_word(tmp_path):
+    """자비서가 되물으면 idle 대신 이어 듣는다. 호출어 없이 한 대답이 앞 질문과 같이 간다."""
+    import time
+
+    store = MemoryStore(database_url=f"sqlite:///{tmp_path / 'web.db'}")
+    store.init_schema()
+    user = store.ensure_user()
+    ask_back = "어떤 물건을 말씀하시는지 알려 주시면 답해 드릴게요."
+    vlm = FakeVLMClient([ask_back, ANSWER])
+    web = WebAssistant(store, None, user, vlm=vlm, detector=NoObjects(), photo_dir=None)
+    fake = FakeOpenAI(question=["자비서, 이거 뭐야?", "빨간 컵"])
+    app = main.create_app(store=store, checker=_NoChecker(), assistant=web, openai_client=fake)
+    audio = recording()
+    reply = np.concatenate([audio[19200:], np.zeros(16000, np.int16)])
+    sounds: list = []
+    with TestClient(app) as c, c.websocket_connect("/api/voice/ws") as ws:
+        until(ws, "ready", sounds)
+        ws.send_bytes(HEADER.pack(AUDIO, 0) + audio.tobytes())
+        ws.send_json({"type": "wake", "id": 1, "pos": 11200, "score": 0.99, "camera": False})
+        first = until(ws, "wake", sounds)  # 호출 알림
+        first += until(ws, "wake", sounds)  # 대답 뒤 이어 듣기 알림(idle 이 아니다)
+        assert first[-1] == {"type": "wake", "follow_up": True}
+        assert "idle" not in [m["type"] for m in first]
+        pos = len(audio)
+        for i in range(0, len(reply), 1280):  # 브라우저처럼 80ms 마다 실시간으로
+            ws.send_bytes(HEADER.pack(AUDIO, pos + i) + reply[i : i + 1280].tobytes())
+            time.sleep(0.08)
+        seen = until(ws, "idle", sounds)
+    results = [m["data"] for m in first + seen if m["type"] == "result"]
+    assert [(r["question"], r["follow_up"]) for r in results] == [
+        ("이거 뭐야?", False),
+        ("빨간 컵", True),
+    ]
+    assert vlm.asked[1][1] == "이거 뭐야? 빨간 컵"
+    assert fake.spoken[-1] == ANSWER
+    with store.session() as db:
+        turns = db.query(SessionTurn).order_by(SessionTurn.turn_id).all()
+        assert [t.trigger_type for t in turns] == ["WAKEWORD", "CLARIFY_REPLY"]
+        assert len({t.session_id for t in turns}) == 1
+
+
 class NeverReads:
     """늘 성분표를 못 읽는 판정기."""
 

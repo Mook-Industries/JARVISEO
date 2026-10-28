@@ -63,16 +63,24 @@ class _Turn:
     def __init__(self) -> None:
         self.reset()
 
-    def reset(self) -> None:
+    def reset(self, follow_up_of: str | None = None) -> None:
         self.question: str | None = None
         self.frame: np.ndarray | None = None
         self.checker: _RetryWholeFrame | None = None
+        # 되물은 뒤 이어 듣는 턴이면 앞 질문. "다시 확인해줘"는 앞 질문을 붙여야 성분 질문이다
+        self.follow_up_of = follow_up_of
 
     @property
     def ingredient(self) -> bool:
+        from jarviseo.workflow.follow_up import follow_up_question
         from jarviseo.workflow.router import classify_intent
 
-        return self.question is not None and classify_intent(self.question) is Intent.INGREDIENT
+        if self.question is None:
+            return False
+        text = self.question
+        if self.follow_up_of is not None:
+            text = follow_up_question(self.follow_up_of, text)
+        return classify_intent(text) is Intent.INGREDIENT
 
 
 class _HeardSTT:
@@ -342,6 +350,8 @@ class BrowserVoice:
     # ---- 듣고 답하는 스레드 (voice_loop.py · assistant.run 과 같다) ----
 
     def _run(self) -> None:
+        from jarviseo.workflow.follow_up import follow_up_turn
+
         barge = self._p["barge"]
         trigger = "WAKEWORD"
         while not self._stop.is_set():
@@ -351,9 +361,16 @@ class BrowserVoice:
                     question, image = self._asks.get_nowait()
                 except queue.Empty:
                     continue
+                # 입력칸 질문은 브라우저가 마이크를 안 보내서 이어 듣지 않는다
                 state = self._ask_text(question, image)
             else:
                 state = self._voice_turn(wake, trigger)
+                # 자비서가 되물었으면(성분표 다시 보여 주기 등) 대기로 가지 않고 호출어 없이
+                # 이어 듣는다. idle 을 안 보냈으니 브라우저는 소리 · 장면을 계속 보낸다.
+                while state is not None and (follow := follow_up_turn(state)) is not None:
+                    if self._stop.is_set():
+                        break
+                    state = self._follow_up(follow)
             # 읽는 중에 "자비서"로 끊겼으면 그 호출이 다음 턴이다. 아니면 쌓인 호출은 버리고 대기로
             trigger = "BARGE_IN" if state is not None and state.get("interrupted") else "WAKEWORD"
             if trigger == "WAKEWORD":
@@ -373,7 +390,17 @@ class BrowserVoice:
         with self._wake_lock:
             camera = self._camera.pop(wake.t, True)
             self._camera.clear()  # 같이 쌓였다 버려진 호출
-        return self._invoke(self.graph if camera else self.graph_blind, info)
+        # 이어 듣는 턴도 이 호출과 같이 장면을 쓰거나 안 쓴다
+        self._turn_graph = self.graph if camera else self.graph_blind
+        return self._invoke(self._turn_graph, info)
+
+    def _follow_up(self, info: dict) -> dict | None:
+        """호출어 없이 이어 듣는 턴. 시작음은 그래프의 듣기가 낸다."""
+        with self._wake_lock:
+            # 대답을 읽기 전 장면이 다시 보여 준 장면 대신 뽑히지 않게. 새 장면은 이 뒤에 온다
+            self._p["frames"].clear()
+        self.send({"type": "wake", "follow_up": True})
+        return self._invoke(self._turn_graph, info)
 
     def _idle(self) -> None:
         """턴이 끝났다. 브라우저는 이 번호까지의 호출 뒤로는 소리 · 장면을 그만 보낸다."""
@@ -415,7 +442,7 @@ class BrowserVoice:
 
     def _invoke(self, graph, info: dict) -> dict | None:
         """그래프 한 턴. 결과를 브라우저에 알린다."""
-        self.turn.reset()
+        self.turn.reset(info.get("follow_up_of"))
         t0 = time.perf_counter()
         try:
             state = graph.invoke(info)
@@ -426,7 +453,7 @@ class BrowserVoice:
         if state.get("wake_rejected"):
             self.send({"type": "rejected", "text": state.get("wake_check_text")})
         elif state.get("utterance") is None:
-            self.send({"type": "no_question"})
+            self.send({"type": "no_question", "follow_up": "follow_up_of" in info})
         else:
             checker = self.turn.checker
             self.retried_whole = checker is not None and checker.retried

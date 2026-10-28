@@ -58,11 +58,19 @@ class JarviseoState(TypedDict, total=False):
     trigger_type: str
     # 호출어를 잡은 시각(monotonic). 듣기가 여기서부터 거슬러 읽는다.
     wake_at: float
+    # 되물은 뒤 호출어 없이 이어 듣는 턴(follow_up.py)이면 앞 턴에서 물은 글과 몇 번째 이어
+    # 듣기인지. 듣기가 시작음을 내고 FOLLOW_UP_SEC 동안 듣는다.
+    follow_up_of: str
+    follow_up_count: int
 
     # --- 듣기 ---
     utterance: Utterance
     # 호출어·필러를 빼기 전 받아쓴 원문 (turn_voice.stt_raw_text)
     stt_raw_text: str | None
+    # 이어 들은 짧은 대답("다시 확인해줘")에 앞 질문을 붙인 글. 의도 · 가리킴 · VLM · 기억이
+    # 이것으로 묻는다(follow_up.asked). 기록에는 utterance(실제로 한 말)가 남는다.
+    # 없으면 utterance 그대로.
+    question: str
     frame: Frame | None
     # 호출어 2단계 확인(voice/wakecheck.py)에서 호출어가 아니라고 본 턴이면 True.
     # 되묻기·대답·기록 없이 끝난다. 확인에서 받아쓴 글자는 통과한 턴에도 wake_check_text 에
