@@ -256,8 +256,11 @@ class VoiceLoop:
     # ---- 스레드 ----
 
     def _run(self, graph, barge, chime) -> None:
-        """assistant.run 과 같다: 호출어를 기다리다가 질문 한 번을 그래프로 돌린다."""
-        from jarviseo.api.assistant_web import save_photos
+        """assistant.run 과 같다: 호출어를 기다리다가 질문 한 번을 그래프로 돌린다.
+
+        자비서가 되물었으면(성분표 다시 보여 주기 등) 호출어 없이 이어 듣는 턴을 더 돌린다.
+        """
+        from jarviseo.workflow.follow_up import follow_up_turn
 
         trigger = "WAKEWORD"
         while not self._stop.is_set():
@@ -272,19 +275,33 @@ class VoiceLoop:
                 "wake_at": wake.t,
                 "trigger_type": trigger,
             }
-            t0 = time.perf_counter()
-            try:
-                with self.lock:  # 성분 판정기(OCR)를 성분 페이지와 같이 쓴다
-                    state = graph.invoke(info)
-            except Exception as e:
-                log.exception("질문 처리 실패")
-                self.emit("error", message=str(e))
+            state = self._turn(graph, info)
+            while state is not None and (follow := follow_up_turn(state)) is not None:
+                if self._stop.is_set():
+                    break
+                self.emit("wake", follow_up=True)  # 시작음은 그래프의 듣기가 낸다
+                state = self._turn(graph, follow)
+            if state is None:
                 continue
-            if state.get("utterance") is None:
-                self.emit("no_question")
-            else:
-                save_photos(state, PHOTO_DIR)
-                self.emit("result", data=self.to_result(state, t0, self))
             trigger = "BARGE_IN" if state.get("interrupted") else "WAKEWORD"
             if trigger == "WAKEWORD":
                 barge.clear()
+
+    def _turn(self, graph, info: dict) -> dict | None:
+        """그래프 한 턴. 결과를 화면에 알린다. 실패하면 None."""
+        from jarviseo.api.assistant_web import save_photos
+
+        t0 = time.perf_counter()
+        try:
+            with self.lock:  # 성분 판정기(OCR)를 성분 페이지와 같이 쓴다
+                state = graph.invoke(info)
+        except Exception as e:
+            log.exception("질문 처리 실패")
+            self.emit("error", message=str(e))
+            return None
+        if state.get("utterance") is None:
+            self.emit("no_question", follow_up="follow_up_of" in info)
+        else:
+            save_photos(state, PHOTO_DIR)
+            self.emit("result", data=self.to_result(state, t0, self))
+        return state

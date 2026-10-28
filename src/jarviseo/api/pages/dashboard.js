@@ -557,10 +557,27 @@
   let logNo = 0;
   const shownTurns = new Set(); // 이미 보인 서버 turn_id. 물은 턴과 불러온 턴이 두 번 뜨지 않게
   // turnId: 서버 기록 번호(있으면). at: 물은 시각. quiet: 켤 때 불러온 지난 기록이라 깜빡이지 않는다
-  const addLog = (tag, q, a, { turnId = null, at = new Date(), quiet = false } = {}) => {
+  const addLog = (tag, q, a, { turnId = null, at = new Date(), quiet = false, followUp = false } = {}) => {
     if (turnId != null) {
       if (shownTurns.has(turnId)) return;
       shownTurns.add(turnId);
+    }
+    // 되물은 뒤 호출어 없이 이어 말한 대답은 새 줄이 아니라 바로 앞 대화 밑에 붙인다(한 대화로 보인다)
+    const parent = followUp ? $(".log-item[data-id^='turn-']", logList) : null;
+    if (parent) {
+      const more = document.createElement("div");
+      more.className = "log-follow";
+      more.innerHTML = `<p class="log-q"></p><p class="log-a"></p>`;
+      $(".log-q", more).textContent = q;
+      $(".log-a", more).textContent = a;
+      parent.append(more);
+      if (!quiet) {
+        parent.classList.remove("is-new");
+        void parent.offsetWidth;
+        parent.classList.add("is-new");
+        logList.scrollTo({ top: 0 });
+      }
+      return;
     }
     const id = turnId != null ? `turn-${turnId}` : `t${++logNo}`;
     const item = { id, time: `${pad2(at.getHours())}:${pad2(at.getMinutes())}`, tag, q, a };
@@ -600,7 +617,12 @@
       const { turns } = await r.json();
       // 처음에는 새것부터 오고, 그 뒤에는 들어온 순서로 온다. 오래된 것부터 위에 쌓는다.
       (first ? turns.reverse() : turns).forEach((t) => {
-        addLog(t.where, t.question, t.answer || "(대답 없음)", { turnId: t.id, at: new Date(t.asked_at), quiet: first });
+        addLog(t.where, t.question, t.answer || "(대답 없음)", {
+          turnId: t.id,
+          at: new Date(t.asked_at),
+          quiet: first,
+          followUp: t.follow_up,
+        });
         lastTurnId = Math.max(lastTurnId ?? 0, t.id);
       });
       lastTurnId ??= 0;
@@ -651,7 +673,7 @@
     const whereIsCrop = d.ingredient && d.ingredient.where && d.crop && !d.retried_whole;
     const overlay = d.crop ? (whereIsCrop ? d.ingredient.where : d.crop) : null;
     if (overlay && !app.classList.contains("no-overlay")) showShot(overlay);
-    addLog(tag, question, answer, { turnId: d.turn_id });
+    addLog(tag, question, answer, { turnId: d.turn_id, followUp: d.follow_up });
     // 대답 소리는 서버가 읽었다(팀 음성 모드는 PC 스피커, 브라우저 음성은 이 브라우저로 보냄)
   }
 
@@ -909,7 +931,16 @@
   }
 
   const onVoiceEvent = (e) => {
-    if (e.type === "wake") {
+    if (e.type === "wake" && e.follow_up) {
+      // 자비서가 되물었다(성분표 다시 보여 주기 등). 호출어 없이 이어 듣는다. 되물은 말은 그대로 둔다
+      const asked = $("#core-title").textContent;
+      startMeter();
+      showShot(null);
+      setState("wake", { stages: ["run", "off", "off", "off", "off"] });
+      setText("#core-title", asked);
+      setText("#core-sub", "이어서 말씀하세요… (자비서를 다시 부르지 않아도 돼요)");
+      setText("#reason-q", "이어서 듣고 있어요");
+    } else if (e.type === "wake") {
       startMeter(); // 질문을 듣는 동안 목소리 크기로 파형을 그린다
       showShot(null);
       setState("wake", { stages: ["run", "off", "off", "off", "off"] });
@@ -926,7 +957,8 @@
     } else if (e.type === "no_question") {
       stopMeter();
       setState("idle");
-      setText("#core-sub", "말씀을 듣지 못했어요. 다시 불러 주세요.");
+      // 이어 듣기에서 말이 없었으면 사용자가 그냥 끝낸 것이다
+      setText("#core-sub", e.follow_up ? "더 물어보려면 자비서를 불러 주세요." : "말씀을 듣지 못했어요. 다시 불러 주세요.");
     } else if (e.type === "error") {
       setState("idle");
       setText("#core-title", "대답하지 못했어요.");

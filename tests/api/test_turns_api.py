@@ -125,3 +125,23 @@ def test_feed_lists_laptop_turns_then_new_ones(server, laptop):
     client.post("/api/turns", json={"source": "ab12cd34", "turns": turns[2:]}, headers=AUTH)
     later = client.get(f"/api/turns?after={first[0]['id']}").json()["turns"]
     assert [t["question"] for t in later] == ["셋째 질문"]
+
+
+def test_feed_marks_reply_after_ask_back(server, laptop):
+    """되물은 뒤 호출어 없이 이어 말한 턴(CLARIFY_REPLY)은 follow_up 이다(앞 대화에 붙인다)."""
+    client, _ = server
+    session = laptop.start_session(title="assistant")
+    for q, trigger in [("이거 먹어도 돼?", "WAKEWORD"), ("다시 확인해줘", "CLARIFY_REPLY")]:
+        now = time.monotonic()
+        utterance = Utterance(text=q, started_at=now - 1.5, ended_at=now - 0.5)
+        response = AssistantResponse(text=f"{q} 대답", intent=Intent.INGREDIENT)
+        laptop.log_turn(session, utterance, response, trigger_type=trigger)
+    turns = [turn_payload(t) for t in laptop.turns_after(0)]
+    client.post("/api/turns", json={"source": "ab12cd34", "turns": turns}, headers=AUTH)
+
+    feed = client.get("/api/turns").json()["turns"]
+
+    assert [(t["question"], t["follow_up"]) for t in feed] == [
+        ("다시 확인해줘", True),
+        ("이거 먹어도 돼?", False),
+    ]

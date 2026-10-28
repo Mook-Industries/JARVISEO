@@ -82,6 +82,9 @@
   html[data-theme="light"] .cam-dialog { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12); }
   /* 위쪽 막대의 블랙 · 화이트 버튼(어느 화면에서나 보인다) */
   .theme-seg button { padding: 4px 10px; font-size: 12px; }
+  /* 되물은 뒤 호출어 없이 이어 말한 대답(CLARIFY_REPLY 턴). 앞 대화 밑에 붙인다 */
+  .log-follow { margin-top: 10px; padding-left: 10px; border-left: 2px solid var(--line); }
+  .log-follow .log-q { margin-top: 0; }
 </style>
 <script>
   // 저장해 둔 테마를 그리기 전에 붙인다(블랙으로 번쩍였다 바뀌지 않게)

@@ -6,6 +6,9 @@
 부르면 시작음을, 질문하는 말이 끝나면(받아쓰기 전) 종료음을 낸다(JARVISEO_CHIME_VOLUME=0 이면 끔).
 되물을 때("왼쪽 컵이요, 오른쪽 컵이요?", "네, 말씀하세요")도 되묻는 말 뒤에 시작음,
 대답이 끝나면 종료음을 낸다.
+대답이 사용자에게 다시 해 달라는 말이면("원재료명 부분을 보여 주세요") 호출어 대기로 가지 않고
+시작음을 낸 뒤 호출어 없이 6초 듣는다. "다시 확인해줘"처럼 짧게 답하면 앞 질문에 이어 묻는다
+(workflow/follow_up.py, 잇달아 2번까지).
 OpenAI 키와 호출어 모델(data/models/jarviseo.onnx, data/README.md)이 필요하다.
 
 실행 (레포 맨 위 폴더에서):
@@ -70,6 +73,7 @@ from jarviseo.voice import (
 from jarviseo.voice.devices import device_name, find_device
 from jarviseo.voice.mic import MicStream
 from jarviseo.workflow import GraphDeps, JarviseoState, build_graph
+from jarviseo.workflow.follow_up import follow_up_turn
 
 STAGES = ("stt", "recall", "vlm", "tts", "total")
 DEFAULT_DB = "sqlite:///data/assistant.db"
@@ -110,6 +114,8 @@ def show(state: JarviseoState) -> None:
     raw = state.get("stt_raw_text")
     # 재촬영을 포기한 턴은 의도를 정하기 전에 끝나서 intent 가 없다
     print(f"  질문 {utterance.text!r} (원문 {raw!r}) → {state.get('intent')}")
+    if "question" in state:
+        print(f"  앞 질문에 이어 묻기 {state['question']!r}")
     memories = state.get("memories")
     if memories is not None:
         show_memories(utterance.text, memories)
@@ -218,6 +224,19 @@ def run(
     """
     trigger = "WAKEWORD"
     number = 0
+
+    def finish(state: JarviseoState) -> None:
+        """턴 하나를 찍고 사진을 남기고 클라우드에 알린다."""
+        nonlocal number
+        show(state)
+        number += 1
+        if photo_dir is not None:
+            save_photos(state, photo_dir, number, store)
+        if "turn_id" in state:
+            turns.append(state.get("latency_ms", {}))
+            if uploader is not None:
+                uploader.notify()  # 바로 돌아온다. 보내기는 다른 스레드가 한다
+
     while True:
         wake = barge.wait(timeout=0.5)
         if wake is None:
@@ -240,14 +259,13 @@ def run(
                 text = state["wake_check_text"]
                 shown = "받아쓰지 못함" if text is None else f"받아쓰기 {text!r}"
                 print(f"  2단계 확인 통과 ({shown})")
-            show(state)
-            number += 1
-            if photo_dir is not None:
-                save_photos(state, photo_dir, number, store)
-        if "turn_id" in state:
-            turns.append(state.get("latency_ms", {}))
-            if uploader is not None:
-                uploader.notify()  # 바로 돌아온다. 보내기는 다른 스레드가 한다
+            finish(state)
+        # 자비서가 되물었으면(성분표 다시 보여 주기 등) 호출어 없이 이어 듣는다.
+        # 시작음은 그래프의 듣기가 낸다
+        while (follow := follow_up_turn(state)) is not None:
+            print(f"\n이어 듣기 {follow['follow_up_count']}번째 (호출어 없이)")
+            state = graph.invoke(follow)
+            finish(state)
         # 대답을 읽다 끊겼거나 기다리는 동안(되묻는 중도) 다시 불렀으면 그 호출이 쌓여 있고,
         # 다음 턴이 된다.
         # 끝까지 읽었으면 질문하는 동안 다시 잡힌 호출어 같은 지난 감지는 버린다.
