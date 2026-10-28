@@ -111,7 +111,7 @@ class VoiceLoop:
                 state = build_graph(deps).invoke(info)
             finally:
                 self._typed = False
-        save_photos(state, PHOTO_DIR)
+        save_photos(state, PHOTO_DIR, self.store)
         return self.to_result(state, t0, self)
 
     def configure_voice(self, **settings) -> None:
@@ -319,6 +319,6 @@ class VoiceLoop:
         if state.get("utterance") is None:
             self.emit("no_question", follow_up="follow_up_of" in info)
         else:
-            save_photos(state, PHOTO_DIR)
+            save_photos(state, PHOTO_DIR, self.store)
             self.emit("result", data=self.to_result(state, t0, self))
         return state

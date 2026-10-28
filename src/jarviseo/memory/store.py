@@ -502,6 +502,16 @@ class MemoryStore:
             db.add(inference)
             return turn.turn_id
 
+    def set_image_path(self, turn_id: int, path: str) -> None:
+        """턴의 원본 사진 경로를 남긴다. 사진은 턴을 기록한 뒤에 저장해서 따로 적는다.
+
+        기억 질문 때 그 턴의 사진(같은 폴더의 ``<이름>_crop.jpg`` 가 있으면 크롭)을 다시 쓴다(#260).
+        """
+        with self.session() as db:
+            turn = db.get(SessionTurn, turn_id)
+            if turn is not None:
+                turn.image_path = path
+
     # -- 대시보드 ----------------------------------------------------------
 
     def latency_percentiles(self, stage: str, session_id: int | None = None) -> dict[str, float]:
