@@ -1,10 +1,11 @@
 """대상 결정 — 순위·margin·되묻기 문장, 후보 하나의 총점 하한, 되묻기 대답으로 후보 좁히기,
-단서 스위치, 손 · 말 · 이어 묻기 단서 기권, 말 · 이어 묻기 단서 플래그."""
+단서 스위치, 손 · 말 · 이어 묻기 단서 기권, 시선 · 이어 묻기 단서 플래그."""
 
 import numpy as np
 import pytest
 
 from jarviseo import config
+from jarviseo.pointing import resolver
 from jarviseo.pointing.hands import HandPose
 from jarviseo.pointing.resolver import MIN_SINGLE_SCORE, resolve_target
 from jarviseo.types import BBox, CueKind, Detection
@@ -249,8 +250,12 @@ def test_enabled_cues_center_matches_default():
 
 
 @pytest.mark.parametrize("cues", [{CueKind.CENTER, CueKind.GAZE}, set()])
-def test_unimplemented_or_empty_cues_raise(cues):
-    """구현 안 된 단서나 빈 스위치는 조용히 넘기지 않고 멈춘다(ablation 숫자가 거짓이 된다)."""
+def test_unimplemented_or_empty_cues_raise(cues, monkeypatch):
+    """구현 안 된 단서나 빈 스위치는 조용히 넘기지 않고 멈춘다(ablation 숫자가 거짓이 된다).
+
+    지금은 다섯 단서가 다 구현돼 있어서, 시선 단서를 뺀 표로 '구현 안 됨'을 흉내 낸다.
+    """
+    monkeypatch.setattr(resolver, "IMPLEMENTED_CUES", resolver.IMPLEMENTED_CUES - {CueKind.GAZE})
     with pytest.raises(ValueError):
         _resolve([_det("cup", MIDDLE)], enabled_cues=cues)
 
@@ -320,6 +325,48 @@ def test_reply_narrowing_keeps_hand():
 
     assert result.chosen.detection is right
     assert result.chosen.score_of(CueKind.POINT) > 0.9
+
+
+# --- 시선 단서 (v3) -----------------------------------------------------------------
+
+# 중심 (1210, 540) ≈ 0~1 좌표 (0.63, 0.5). MIDDLE 보다 조금 오른쪽이라
+# 가운데 단서로는 점수 차가 작다.
+NEAR_RIGHT = BBox(1110, 440, 1310, 640)
+
+
+def test_gaze_cue_is_off_by_default(monkeypatch):
+    """플래그가 꺼져 있으면(기본) 시선 단서를 안 쓴다. valid · s04 에서 기준을 못 넘었다(#245)."""
+    monkeypatch.setattr(config, "ENABLE_GAZE_CUE", False)
+
+    result = _resolve([_det("bottle", CORNER), _det("cup", MIDDLE)])
+
+    assert all(s.kind is not CueKind.GAZE for c in result.candidates for s in c.cue_scores)
+
+
+def test_gaze_cue_on_by_flag_records_in_ablation_order(monkeypatch):
+    """플래그를 켜면 기본값에 들어가고, 손이 없어도 기권하지 않는다. 기록은 v1~v5 순서다."""
+    monkeypatch.setattr(config, "ENABLE_GAZE_CUE", True)
+
+    result = _resolve([_det("bottle", CORNER), _det("cup", MIDDLE)])
+
+    assert result.chosen.detection.label == "cup"
+    assert [s.kind for s in result.chosen.cue_scores] == [CueKind.CENTER, CueKind.GAZE]
+
+
+def test_gaze_widens_margin_between_near_center_candidates():
+    """가운데 근처 두 후보에서 가운데 단서만이면 되묻는데, 시선 단서를 더하면 단정한다.
+
+    시선 점수는 평균 둘레에서 가파르게 떨어져 '조금 더 가운데'인 쪽이 크게 이긴다. 그 쪽이 정답이
+    아닐 때도 같이 밀어서, valid · s04 에서 확신 오답이 정답보다 많이 늘었다(#245).
+    """
+    candidates = [_det("cup", MIDDLE), _det("bottle", NEAR_RIGHT)]
+
+    center = _resolve(candidates, enabled_cues={CueKind.CENTER})
+    with_gaze = _resolve(candidates, enabled_cues={CueKind.CENTER, CueKind.GAZE})
+
+    assert center.needs_clarify
+    assert with_gaze.margin > center.margin
+    assert with_gaze.chosen.detection.label == "cup"
 
 
 # --- 종류 낱말 대답 (labels.KIND_WORDS) -------------------------------------------------

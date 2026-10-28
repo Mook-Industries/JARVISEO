@@ -1,4 +1,4 @@
-"""단서 점수 — 가운데(v1) · 손 방향(v2) · 말(v4) · 이어 묻기(v5) 단서가 맞는 후보에
+"""단서 점수 — 가운데(v1) · 손 방향(v2) · 시선(v3) · 말(v4) · 이어 묻기(v5) 단서가 맞는 후보에
 높은 점수를 주는지.
 
 말 단서는 질문 읽기(parse_lang)와 점수(score_lang)를 따로 본다. 색은 칠한 가짜 사진으로 잰다.
@@ -10,6 +10,8 @@ import numpy as np
 import pytest
 
 from jarviseo.pointing.cues import (
+    GAZE_COV,
+    GAZE_MEAN,
     POINT_SIGMA_DEG,
     LangQuery,
     lang_role,
@@ -17,6 +19,7 @@ from jarviseo.pointing.cues import (
     refers_back,
     score_center,
     score_ctx,
+    score_gaze,
     score_lang,
     score_point,
 )
@@ -145,6 +148,83 @@ def test_point_kind_and_order():
 def test_point_no_candidates():
     """후보가 없으면 빈 리스트다."""
     assert score_point([], RAY) == []
+
+
+# --- 시선 단서 (v3) ---------------------------------------------------------------
+
+
+def _spot(x: float, y: float, frame: tuple[int, int] = FRAME) -> Detection:
+    """0~1 좌표 (x, y) 에 중심이 오는 작은 박스."""
+    cx, cy = x * frame[0], y * frame[1]
+    return _det(cx - 10, cy - 10, cx + 10, cy + 10)
+
+
+def test_gaze_constants_are_a_valid_covariance():
+    """붙인 상수가 공분산 모양인지(대칭 · 양의 정부호) 본다. 잘못 붙이면 점수가 1 을 넘는다."""
+    cov = np.array(GAZE_COV)
+
+    assert cov[0, 1] == cov[1, 0]
+    assert np.all(np.linalg.eigvalsh(cov) > 0)
+    assert all(0.0 < m < 1.0 for m in GAZE_MEAN)
+
+
+def test_gaze_peaks_at_fitted_mean_not_screen_center():
+    """학습용 세션 분포의 평균 자리면 1점이다. 화면 정가운데가 기준인 가운데 단서와 다르다."""
+    at_mean, at_center = score_gaze([_spot(*GAZE_MEAN), _spot(0.5, 0.5)], FRAME)
+
+    assert at_mean.score == pytest.approx(1.0)
+    assert at_center.score < 1.0
+
+
+def test_gaze_drops_with_distance():
+    """평균에서 멀수록 낮고, 구석은 거의 0 이다."""
+    mx, my = GAZE_MEAN
+    near, far, corner = score_gaze(
+        [_spot(mx + 0.05, my), _spot(mx + 0.2, my), _spot(0.02, 0.02)], FRAME
+    )
+
+    assert near.score > far.score > corner.score
+    assert corner.score < 0.01
+
+
+def test_gaze_uses_spread_per_axis():
+    """세로 퍼짐이 가로보다 커서, 같은 만큼 세로로 벗어나면 가로보다 덜 깎인다."""
+    mx, my = GAZE_MEAN
+    sideways, vertical = score_gaze([_spot(mx + 0.1, my), _spot(mx, my + 0.1)], FRAME)
+
+    assert GAZE_COV[1][1] > GAZE_COV[0][0]
+    assert vertical.score > sideways.score
+
+
+def test_gaze_matches_mahalanobis_formula():
+    """점수는 exp(-d²/2), d 는 공분산 역행렬로 잰 거리다. numpy 로 따로 계산한 값과 같다."""
+    point = np.array([0.6, 0.4])
+    diff = point - np.array(GAZE_MEAN)
+    distance_sq = diff @ np.linalg.inv(np.array(GAZE_COV)) @ diff
+
+    [score] = score_gaze([_spot(*point)], FRAME)
+
+    assert score.score == pytest.approx(math.exp(-0.5 * distance_sq))
+    assert score.detail["distance"] == pytest.approx(math.sqrt(distance_sq))
+
+
+def test_gaze_same_spot_scores_same_across_resolutions():
+    """사진 크기로 나눠서 1920×1080 과 1280×720 의 같은 자리는 같은 점수다."""
+    small = (1280, 720)
+
+    [big_score] = score_gaze([_spot(0.7, 0.3)], FRAME)
+    [small_score] = score_gaze([_spot(0.7, 0.3, small)], small)
+
+    assert big_score.score == pytest.approx(small_score.score)
+
+
+def test_gaze_never_abstains_and_keeps_order():
+    """손 · 말 단서와 달리 기권(None)하지 않는다. 후보 순서대로, 후보가 없으면 빈 리스트다."""
+    scores = score_gaze([_spot(0.1, 0.1), _spot(*GAZE_MEAN)], FRAME)
+
+    assert [s.kind for s in scores] == [CueKind.GAZE] * 2
+    assert scores[0].score < scores[1].score
+    assert score_gaze([], FRAME) == []
 
 
 # --- 말 단서 (v4): 질문 읽기 ---------------------------------------------------------

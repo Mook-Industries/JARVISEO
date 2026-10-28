@@ -13,9 +13,12 @@ cues.py 가 매긴 단서별 점수를 가중치로 합쳐 후보 순위를 정�
 켜진 나머지 단서로 다시 나눈다(10/14 요구사항: 손이 없어도 대상을 골라야 한다).
 말 단서(v4)도 같다. 질문에 쓸 말이 없거나, 관계 말("컵 옆에")이거나, 후보를 못 가르면 기권한다.
 이어 묻기 단서(v5)는 직전 대상이 없거나, 되가리키는 말("그거")이 없거나, 후보를 못 가르면 기권한다.
+시선 단서(v3)는 화면 속 자리만 보므로 기권하지 않는다.
 말 단서는 말 · 맥락 세션(s04)에서 R0 · R2 모두 늘어난 정답이 늘어난 확신 오답보다 많아
 기본으로 켰다(#166). 이어 묻기 단서는 같은 기준을 못 넘어 config.ENABLE_CONTEXT_CUE 가
-켜져 있을 때만 기본으로 켠다.
+켜져 있을 때만 기본으로 켠다. 시선 단서도 valid · s04 에서 늘어난 확신 오답이 늘어난 정답보다
+많아 기준(정답률은 안 낮고 확신 오답률은 안 높을 것)을 못 넘어, config.ENABLE_GAZE_CUE 가
+켜져 있을 때만 기본으로 켠다(#245).
 
 후보가 하나뿐이면 비교 상대가 없어 margin 이 1.0 이다. 그래서 1위 총점 자체가 낮으면(화면 가장자리
 물건 하나뿐) 단정하지 않는다(#215).
@@ -29,7 +32,14 @@ from functools import partial
 import numpy as np
 
 from jarviseo import config
-from jarviseo.pointing.cues import parse_lang, score_center, score_ctx, score_lang, score_point
+from jarviseo.pointing.cues import (
+    parse_lang,
+    score_center,
+    score_ctx,
+    score_gaze,
+    score_lang,
+    score_point,
+)
 from jarviseo.pointing.hands import HandPose, Ray, pointing_ray
 from jarviseo.pointing.labels import KIND_WORDS, korean_name
 from jarviseo.types import (
@@ -53,7 +63,9 @@ WEIGHTS: dict[CueKind, float] = {
 }
 
 # 단서를 구현하면 여기와 _scorers 에 넣는다. ablation 은 여기 있는 단서를 직접 골라 켠다.
-IMPLEMENTED_CUES = frozenset({CueKind.CENTER, CueKind.POINT, CueKind.LANG, CueKind.CTX})
+IMPLEMENTED_CUES = frozenset(
+    {CueKind.CENTER, CueKind.POINT, CueKind.GAZE, CueKind.LANG, CueKind.CTX}
+)
 
 # 원래 후보가 하나인데 1위 총점이 이보다 낮으면 단정하지 않는다(되물을 문장 없이 다시 가리켜
 # 달라고). 개발 DB 의 후보 1개 12턴은 모두 margin 1.0 으로 단정했고, 확인된 오답이 0.219(천장을
@@ -82,14 +94,16 @@ def resolve_target(
     Args:
         candidates: 장면에서 찾은 후보 물체들.
         hand: 가리키는 손(hands.pick_pointing_hand 로 고른 것). None 이면 손 단서는 기권한다.
-        gaze_vector: 시선 단서(v3) 자리. v1 은 쓰지 않는다.
+        gaze_vector: 눈 추적 장치의 시선 방향 자리. 장치가 없어 쓰지 않는다 — 시선 단서(v3)는
+            후보가 화면 어디에 있는지로 매긴다(cues.score_gaze).
         text: 처음 질문 원문. 되묻기 대답은 넣지 않는다(``replies``). 말 단서(v4)가 읽는다.
         frame_size: (width, height).
         prev_target_label: 같은 세션에서 바로 전에 고른 대상의 검출 이름. 이어 묻기 단서(v5)가
             "그거"를 이 대상으로 읽는다. None 이면 이어 묻기 단서는 기권한다.
         replies: 되묻기 대답들, 받은 순서대로. 후보를 걸러내는 데만 쓴다.
         enabled_cues: 켤 단서. **ablation 의 스위치.** None 이면 구현된 단서 전부
-            (이어 묻기 단서는 ``config.ENABLE_CONTEXT_CUE`` 가 켜져 있을 때만).
+            (시선 · 이어 묻기 단서는 ``config.ENABLE_GAZE_CUE`` · ``ENABLE_CONTEXT_CUE`` 가
+            켜져 있을 때만).
             구현 안 된 단서가 있으면 ValueError — 조용히 빼면 v2 줄이 v1 숫자가 된다.
         margin_threshold: 1위-2위 점수차가 이 값보다 작으면 되묻는다.
             기본값은 ``config.CLARIFY_MARGIN_THRESHOLD`` 다(두 곳에 적으면 어긋난다).
@@ -103,9 +117,11 @@ def resolve_target(
     candidates 칸에는 걸러낸 뒤의 순위를 담는다. chosen 이 그 안에 있어야 DB 기록이 맞는다.
     """
     if enabled_cues is None:
-        # 실제 비서의 기본값. 이어 묻기 단서는 s04 에서 기준을 못 넘어 꺼 둔다(#166).
+        # 실제 비서의 기본값. 시선 · 이어 묻기 단서는 미리 정한 기준을 못 넘어 꺼 둔다(#245 · #166).
         # 설정을 부를 때 읽어야 테스트 · 실행 중에 바꾼 값이 따라온다.
         active = IMPLEMENTED_CUES
+        if not config.ENABLE_GAZE_CUE:
+            active -= {CueKind.GAZE}
         if not config.ENABLE_CONTEXT_CUE:
             active -= {CueKind.CTX}
     else:
@@ -159,7 +175,10 @@ def _scorers(
     fixed 는 좁히기 전에 후보 전체로 미리 매긴 점수(말 · 이어 묻기)다. 같은 후보 객체로 꺼내서
     되묻기 대답으로 후보가 줄어도 처음 질문의 점수가 그대로다.
     """
-    scorers: dict[CueKind, Scorer] = {CueKind.CENTER: partial(score_center, frame_size=frame_size)}
+    scorers: dict[CueKind, Scorer] = {
+        CueKind.CENTER: partial(score_center, frame_size=frame_size),
+        CueKind.GAZE: partial(score_gaze, frame_size=frame_size),
+    }
     if ray is not None:
         scorers[CueKind.POINT] = partial(score_point, ray=ray)
     for kind, scores in fixed.items():
