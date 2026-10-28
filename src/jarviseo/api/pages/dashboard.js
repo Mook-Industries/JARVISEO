@@ -1300,8 +1300,24 @@
     $("#trace-label").textContent = trace.checked ? "받기" : "받지 않기";
     $("#trace-warn").hidden = trace.checked;
   };
-  trace.addEventListener("change", syncTrace);
+  // 서버 설정(GET · PUT /api/trace)과 잇는다. 끄면 성분 판정이 함유만 말한다(api/trace.py)
+  trace.addEventListener("change", async () => {
+    syncTrace();
+    try {
+      await fetch("/api/trace", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ on: trace.checked }),
+      });
+    } catch (err) {
+      console.warn("[trace] 설정을 저장하지 못했어요", err);
+    }
+  });
   syncTrace();
+  fetch("/api/trace")
+    .then((r) => r.json())
+    .then((d) => { trace.checked = !!d.on; syncTrace(); })
+    .catch(() => {});
 
   // HUD 애니메이션 · 대상 검출 표시는 이 브라우저에 저장한다
   const prefHud = $("#pref-hud");

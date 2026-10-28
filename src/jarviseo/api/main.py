@@ -26,6 +26,7 @@ HTTP/WebSocket 으로 잇는다. 이 파일은 후자에 해당한다.
                              Colab 이 꺼져 있으면 페이지에 "Colab 열기" 버튼
     GET  /api/allergens      등록된 알레르기
     PUT  /api/allergens      알레르기 목록 바꾸기   {"allergens": ["계란", "땅콩"]}
+    GET · PUT /api/trace     미량 혼입 가능성 알림 {"on": true}. 끄면 함유만 말한다
     POST /api/ingredient     본문 = 사진 바이트(JPEG/PNG). ?allergens=계란,땅콩 이 없으면 등록된 것
                              알레르기에 '모두' · '테스트'를 넣으면 법정 알레르기 전체(시험용)
 
@@ -77,6 +78,7 @@ from jarviseo.api.assistant_web import WebAssistant, draw_boxes
 from jarviseo.api.browser_voice import FRAME, HEADER, BrowserVoice
 from jarviseo.api.marks import jpeg_data_url, mark_findings
 from jarviseo.api.report import report
+from jarviseo.api.trace import TraceChecker, get_trace, set_trace
 from jarviseo.api.voice_loop import VoiceLoop
 from jarviseo.memory import MemoryStore, SessionTurn
 from jarviseo.memory.store import UPLOAD_TITLE
@@ -126,6 +128,12 @@ class VoiceSettings(BaseModel):
     volume: float | None = Field(None, ge=0.0, le=1.0)  # 소리 크기
 
 
+class Trace(BaseModel):
+    """환경설정 '미량 혼입 가능성 알림'. on = 받기(혼입 가능까지 말함), off = 함유만."""
+
+    on: bool
+
+
 class Ask(BaseModel):
     question: str
     image: str | None = None  # data URL 또는 base64 JPEG/PNG. 없으면 사진 없이 묻는다
@@ -172,7 +180,11 @@ def create_app(
         app.state.store.init_schema()
         app.state.user_id = app.state.store.ensure_user()
         # OCR 모델 · 동의어 사전 · 푸드QR 연결을 한 번만 만든다.
-        app.state.checker = checker or make_checker(app.state.store)
+        # '미량 혼입 가능성 알림'을 끄면 함유만 말한다.
+        # 판정기 하나를 감싸 모든 길(웹 · 음성 · 성분 페이지)에 같게 한다(api/trace.py).
+        app.state.checker = TraceChecker(
+            checker or make_checker(app.state.store), app.state.store, app.state.user_id
+        )
         app.state.lock = threading.Lock()  # OCR 엔진 하나를 여러 요청이 동시에 쓰지 않게
         app.state.assistant = assistant or WebAssistant(
             app.state.store, app.state.checker, app.state.user_id
@@ -451,8 +463,22 @@ def create_app(
     def put_allergens(body: Allergens, request: Request) -> Allergens:
         s = request.app.state
         names = list(dict.fromkeys(a.strip() for a in body.allergens if a.strip()))
+        trace = get_trace(s.store, s.user_id)  # 새로 더한 알레르기도 같은 알림 설정을 따르게
         s.store.set_user_allergens(s.user_id, names)
+        set_trace(s.store, s.user_id, trace)
         return Allergens(allergens=s.store.get_user_allergens(s.user_id))
+
+    @app.get("/api/trace")
+    def get_trace_setting(request: Request) -> Trace:
+        """환경설정 '미량 혼입 가능성 알림'. true = 받기(혼입 가능까지 말함)."""
+        s = request.app.state
+        return Trace(on=get_trace(s.store, s.user_id))
+
+    @app.put("/api/trace")
+    def put_trace_setting(body: Trace, request: Request) -> Trace:
+        s = request.app.state
+        set_trace(s.store, s.user_id, body.on)
+        return Trace(on=get_trace(s.store, s.user_id))
 
     @app.post("/api/ingredient")
     async def analyze(request: Request, allergens: str | None = None) -> dict:
