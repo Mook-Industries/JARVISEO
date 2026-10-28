@@ -42,6 +42,9 @@
   (`MAX_AREA_RATIO` 0.5 — 가운데 단서에서 늘 1위라 정답이 후보에 없을 때 그 박스를 확신했다). 원래 후보가 하나뿐이면 margin 이 1.0 이라,
   그 후보의 총점이 `resolver.MIN_SINGLE_SCORE`(0.3) 미만이면 되물을 문장 없이 단정하지 않는다(화면 구석 물건 하나). 손끝이 박스 안이면
   손 점수를 1.0 으로 주는 규칙은 재 보니 나빠져서(valid 정답 13 → 12) 넣지 않았다.
+- **같은 물건 박스는 하나로**(#266): 검출기가 이름과 상관없이 IoU 0.7 넘게 겹친 박스를 확신 높은 하나만 남긴다(`predict(agnostic_nms=True)`).
+  기본 NMS 는 같은 이름끼리만 지워서, 컵 하나에 `bottle` · `product` 박스가 같이 남고 같은 자리라 점수 차가 0 이 돼 같은 물건을 둘로 되물었다.
+  노트북 위 휴대폰처럼 큰 박스 안의 작은 물건은 IoU 가 낮아 그대로 남는다. 실제 비서 설정은 ablation 임시 버전 `v2+lang+C` 로 잰다.
 - 실험 기록은 `docs/experiments.md`, 결과 적재는 `memory/models.py` 의
   `Detection` · `TargetResolution`.
 
