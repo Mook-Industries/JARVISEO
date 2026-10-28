@@ -30,7 +30,7 @@ import logging
 import os
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import cv2
 import numpy as np
@@ -618,3 +618,26 @@ def make_checker(store=None, **kwargs) -> IngredientChecker:
         kwargs.setdefault("auto_region", True)
         kwargs.setdefault("region_pad", REGION_PAD)
     return IngredientChecker(store=store, food_qr=make_food_qr_client(), **kwargs)
+
+
+def without_may_contain(
+    result: IngredientCheck, user_allergens: list[str], synonyms: dict[str, list[str]]
+) -> IngredientCheck:
+    """'미량 혼입 가능성 알림'을 끈 사용자에게: 혼입 가능은 빼고 함유만 말한다(api/trace.py).
+
+    함유가 있으면 함유 문장만, 혼입 가능뿐이면 미검출 문장으로 바꾼다. 뒤에 붙은 안내
+    (가려짐 · 글씨 작음)는 그대로 둔다. 다시 찍기 안내 · 확인 불가는 건드리지 않는다.
+    """
+    j = result.judgement
+    if result.retake or not j.may_contain_allergens:
+        return result
+    labels = user_labels(expand_allergens(user_allergens), synonyms)
+    old = build_message(j, labels=labels)
+    verdict = j.verdict
+    if verdict is AllergenVerdict.MAY_CONTAIN:
+        verdict = AllergenVerdict.NOT_DETECTED
+    nj = replace(j, verdict=verdict, may_contain_terms=[], may_contain_allergens=[])
+    new = build_message(nj, labels=labels)
+    message = new + result.message[len(old) :] if result.message.startswith(old) else new
+    nj.response_text = message
+    return replace(result, judgement=nj, message=message)
