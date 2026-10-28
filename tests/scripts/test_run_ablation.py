@@ -1,5 +1,5 @@
 """가리킴 ablation — 정답 표시 읽기(세션 고르기), 8분류 채점, v1 · v2 채점, v2+C(손 우선 크롭),
-v2+lang · v2+lang+ctx(말 · 이어 묻기 임시 버전, 색은 raw 사진에서),
+v2+lang · v2+lang+ctx(말 · 이어 묻기 임시 버전, 색은 raw 사진에서), v2+lang+C(실제 비서 설정),
 확신 오답 · 크롭 담김, 지표, DB 기록, 실행 조건(커밋 · 가중치 지문 · 세션) 기록과
 같은 조건끼리만 비교, 가중치끼리 후보 적중 변화.
 
@@ -336,10 +336,10 @@ ABOVE = BBox(860, 600, 1060, 800)
 
 
 def test_hand_crop_variant_is_ready_and_separate():
-    """v2+C 는 단서가 v2 와 같아 바로 돌고, 손 크롭을 켜는 버전은 v2+C 하나다."""
+    """v2+C 는 단서가 v2 와 같아 바로 돈다. 손 크롭을 켜는 버전은 v2+C 와 실제 설정 v2+lang+C 다."""
     assert run_ablation.implemented_variants(["v2", "v2+C"]) == (["v2", "v2+C"], [])
     assert run_ablation.VARIANTS["v2+C"] == run_ablation.VARIANTS["v2"]
-    assert run_ablation.HAND_CROP_VARIANTS == {"v2+C"}
+    assert run_ablation.HAND_CROP_VARIANTS == {"v2+C", "v2+lang+C"}
 
 
 def test_evaluate_v2c_crops_fingertip_when_no_candidate_on_line():
@@ -432,6 +432,43 @@ def test_evaluate_v2_lang_ctx_reads_previous_target():
 
     assert lang["clarified"]
     assert (ctx["outcome"], ctx["pred_label"]) == ("정답", "bottle")
+
+
+# --- 실제 비서 설정 (v2+lang+C, #266) ---------------------------------------------------------
+
+
+def test_real_assistant_variant_is_language_cue_plus_hand_crop():
+    """v2+lang+C 는 단서가 v2+lang 과 같고(이어 묻기는 꺼 둔 채) 손 크롭도 켠다."""
+    assert run_ablation.implemented_variants(["v2+lang+C"]) == (["v2+lang+C"], [])
+    assert run_ablation.VARIANTS["v2+lang+C"] == run_ablation.VARIANTS["v2+lang"]
+    assert "v2+lang+C" in run_ablation.HAND_CROP_VARIANTS
+
+
+def test_evaluate_real_assistant_variant_reads_color_like_v2_lang(tmp_path):
+    """ "노란 거"는 v2+lang 처럼 raw 사진의 색으로 노란 컵을 고른다(말 단서 쪽이 켜짐)."""
+    _write_photo(tmp_path / "s04" / "d.png", (LEFT, (0, 255, 255)), (RIGHT, (255, 0, 0)))
+    sample = {**_sample(gt=LEFT, file="s04/d.png"), "utterance": "노란 거 뭐야?"}
+    candidates = [_det(LEFT), _det(RIGHT)]
+
+    lang = _evaluate_one("v2+lang", sample, candidates, None, raw=tmp_path)
+    real = _evaluate_one("v2+lang+C", sample, candidates, None, raw=tmp_path)
+
+    assert (real["outcome"], real["correct"]) == ("정답", True)
+    del lang["resolve_ms"], real["resolve_ms"]
+    assert real == lang
+
+
+def test_evaluate_real_assistant_variant_crops_fingertip_like_v2c():
+    """선 위에 후보가 없으면 v2+C 처럼 손끝 방향을 자른다(손 크롭 쪽이 켜짐)."""
+    sample = _sample(gt=ABOVE, has_hand=True)
+    candidates = [_det(LEFT), _det(RIGHT)]
+
+    v2c = _evaluate_one("v2+C", sample, candidates, TO_UP)
+    real = _evaluate_one("v2+lang+C", sample, candidates, TO_UP)
+
+    assert (real["outcome"], real["hand_crop"]) == ("손 방향 크롭", True)
+    del v2c["resolve_ms"], real["resolve_ms"]
+    assert real == v2c
 
 
 def test_summarize_counts_hand_crops_apart_from_accuracy():
