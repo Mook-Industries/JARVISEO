@@ -227,6 +227,9 @@ class VoiceLoop:
                 start_chime=chime.start,
                 on_listen=lambda: self.emit("wake", score=1.0, barge_in=False, followup=True),
                 active=lambda: not self._typed,
+                detector=detector,
+                hands=hands,
+                resolve=resolve_target,
             )
             if self.checker is not None
             else None,

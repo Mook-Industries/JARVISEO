@@ -14,11 +14,21 @@ from jarviseo.nutrition.response import (
     RETAKE_SHOW_PANEL_AGAIN,
 )
 from jarviseo.nutrition.service import IngredientCheck
-from jarviseo.types import AllergenJudgement, AllergenVerdict, Frame
+from jarviseo.types import (
+    AllergenJudgement,
+    AllergenVerdict,
+    BBox,
+    Detection,
+    Frame,
+    TargetCandidate,
+    TargetResolution,
+)
 from jarviseo.voice import FakeSpeechToText, FakeTextToSpeech
 
 CROP = np.zeros((40, 40, 3), np.uint8)
-PANEL = np.full((120, 160, 3), 200, np.uint8)  # "여기"라고 할 때 보여 준 성분표
+PANEL = np.full((120, 160, 3), 200, np.uint8)  # "여기"라고 할 때 보여 준 장면
+BOX = BBox(40, 20, 100, 80)  # 그 장면에서 가리킨 성분표(60×60)
+SHOWN = (Detection("box", 0.9, BOX),)
 
 
 def miss() -> IngredientCheck:
@@ -44,13 +54,27 @@ class Scripted:
         return self.results.pop(0)
 
 
-def follow(checker, replies, active=None):
+class FakeDetector:
+    def __init__(self, found):
+        self.found = found
+
+    def detect(self, image):
+        return list(self.found)
+
+
+def first_candidate(candidates, **kwargs):
+    """resolve_target 대신. 첫 후보를 고른다."""
+    ranked = [TargetCandidate(detection=d, total_score=1.0) for d in candidates]
+    return TargetResolution(candidates=ranked, chosen=ranked[0], margin=1.0, needs_clarify=False)
+
+
+def follow(checker, replies, active=None, found=SHOWN):
     frames = FrameBuffer(4)
     frames.push(Frame(image=PANEL, timestamp=time.monotonic(), source_id="t"))
     tts, chimes = FakeTextToSpeech(), []
     fu = IngredientFollowUp(
         checker, tts, FakeSpeechToText(replies), frames, start_chime=lambda: chimes.append(1),
-        active=active,
+        active=active, detector=FakeDetector(found), resolve=first_candidate,
     )  # fmt: skip
     return fu, tts, chimes
 
@@ -62,13 +86,23 @@ def test_reads_crop_without_asking():
 
 
 def test_show_panel_then_reads_it():
-    """크롭에서 못 읽으면 보여 달라고 하고 시작음 뒤 '여기'를 듣고 그 장면으로 다시 읽는다."""
+    """크롭에서 못 읽으면 보여 달라고 하고 시작음 뒤 '여기'를 듣고 그 장면을 잘라 다시 읽는다."""
     checker = Scripted(miss(), found())
     fu, tts, chimes = follow(checker, ["여기"])
     r = fu.check(CROP, [])
     assert r.message == "해당 제품에는 밀이 들어 있어요." and not r.retake
     assert tts.spoken == [RETAKE_SHOW_PANEL] and chimes == [1]
-    assert checker.seen == [CROP.shape, PANEL.shape]  # 두 번째는 보여 준 장면 전체
+    # 두 번째는 보여 준 장면 전체(120×160)가 아니라 가리킨 박스를 여백 15% 넣어 자른 것(78×78)
+    assert checker.seen == [CROP.shape, (78, 78, 3)]
+
+
+def test_shown_scene_without_target_is_not_read_whole():
+    """보여 준 장면에 후보가 없으면 장면 전체로 읽지 않고 못 읽은 것으로 보아 다음 단계로 간다."""
+    checker = Scripted(miss())
+    fu, tts, _ = follow(checker, ["여기", "여기"], found=())
+    r = fu.check(CROP, [])
+    assert r.message == RETAKE_GAVE_UP and checker.seen == [CROP.shape]
+    assert tts.spoken == [RETAKE_SHOW_PANEL, RETAKE_SHOW_PANEL_AGAIN]
 
 
 def test_asks_again_then_gives_up():

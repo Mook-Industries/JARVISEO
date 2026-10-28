@@ -248,13 +248,16 @@ class BrowserVoice:
         dialog = shared["dialog"]
         hands = shared["hands"]
         self.pointing = "v2" if hands is not None else "v1"
+        # "여기" 장면 크롭(IngredientFollowUp)에는 장면 전체 박스를 만들지 않는 원래 탐지기를 준다
+        raw_detector = _Locked(shared["detector"], self.lock)
+        locked_hands = _Locked(hands, self.lock) if hands is not None else None
         self.deps = GraphDeps(
             stt=_HeardSTT(stt, self.turn),
             tts=tts,
             vlm=shared["vlm"],
             frames=frames,
             detector=_TurnDetector(shared["detector"], self.lock, self.turn),
-            hands=_Locked(hands, self.lock) if hands is not None else None,
+            hands=locked_hands,
             resolve=shared["resolve"],
             # 성분표를 못 읽으면 같은 턴 안에서 보여 달라고 하고 다시 읽는다(api/ingredient_turn.py)
             checker=IngredientFollowUp(
@@ -265,6 +268,9 @@ class BrowserVoice:
                 start_chime=chime.start,
                 on_listen=lambda: self.send({"type": "wake", "barge_in": False, "followup": True}),
                 active=lambda: not self._typed,
+                detector=raw_detector,
+                hands=locked_hands,
+                resolve=shared["resolve"],
             )
             if self.checker
             else None,
