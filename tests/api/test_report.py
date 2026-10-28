@@ -50,3 +50,20 @@ def test_api_report_route(tmp_path):
     with TestClient(create_app(store=s, checker=_NoChecker(), assistant=web)) as c:
         body = c.get("/api/report").json()
     assert body["turns"] == 0 and body["results"]
+
+
+def test_latency_skips_zero_and_negative(store):
+    """입력창 질문(받아쓰기 0ms) · 시계가 어긋난 턴(전체 음수)은 중앙값에서 뺀다."""
+    from jarviseo.memory.models import SessionTurn, TurnVoice
+
+    user = store.ensure_user()
+    session = store.start_session(user, title="t")
+    with store.session() as db:
+        for stt, total in ((0, 900), (0, -400), (800, 2000), (1000, 3000)):
+            turn = SessionTurn(session_id=session, question_text="q", total_ms=total)
+            db.add(turn)
+            db.flush()
+            db.add(TurnVoice(turn_id=turn.turn_id, stt_ms=stt))
+    rows = {r["stage"]: r for r in report(store)["latency"]}
+    assert rows["stt"]["count"] == 2 and rows["stt"]["p50"] == 1000.0
+    assert rows["total"]["count"] == 3 and rows["total"]["p50"] == 2000.0
