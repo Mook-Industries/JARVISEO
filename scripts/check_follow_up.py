@@ -4,7 +4,7 @@
 카메라 장면(250ms)을 실시간으로 계속 보낸다. 사용자 말은 OpenAI 목소리로 만든 녹음이다. 그 밖의
 받아쓰기 · 읽기 · VLM · 성분 판정(Google Vision 또는 Colab OCR)은 서버가 실제로 돌린다.
 사용자는 "자비서, …"를 이어 말하고, 호출은 "자비서"가 끝나고 감지가 늦는 만큼(WAKE_AT) 뒤에
-보낸다. 호출어 모델 대신이라 2단계 확인은 건너뛴다(button). 기록은 임시 SQLite 에 남는다.
+보낸다. 호출어 모델 대신이라 2단계 확인은 건너뛴다(button). 기록 · 턴 사진은 임시 폴더에 남는다.
 
     A  "자비서, 이거 먹어도 돼?" + 흔들려 흐린 성분표 사진 → 재촬영 안내 → (호출어 없이)
        성분표 사진으로 바꾸고 "다시 확인해줘" → 성분 판정
@@ -173,14 +173,19 @@ def main() -> None:
         blind = cv2.GaussianBlur(label, (0, 0), 9)
     elif (blind := cv2.imread(str(args.retake_photo))) is None:
         raise SystemExit(f"사진을 못 읽었습니다: {args.retake_photo}")
-    db = Path(tempfile.mkdtemp()) / "check_follow_up.db"
-    os.environ["JARVISEO_API_DB"] = f"sqlite:///{db.as_posix()}"
+    scratch = Path(tempfile.mkdtemp())
+    os.environ["JARVISEO_API_DB"] = f"sqlite:///{(scratch / 'check_follow_up.db').as_posix()}"
     from fastapi.testclient import TestClient
     from openai import OpenAI
 
     from jarviseo import config
+    from jarviseo.api import browser_voice
     from jarviseo.api.main import create_app
     from jarviseo.memory import SessionTurn
+
+    # 턴 사진도 임시 폴더에. 임시 DB 의 턴 번호(1, 2, …)로 data/captures/web 에 쓰면
+    # 실제 웹 턴 사진(turn1.jpg …)을 덮어쓴다(10/28 처음 돌렸을 때 덮어씀).
+    browser_voice.PHOTO_DIR = scratch / "captures"
 
     client = OpenAI(api_key=config.OPENAI_API_KEY)
     eat, again, what = (
