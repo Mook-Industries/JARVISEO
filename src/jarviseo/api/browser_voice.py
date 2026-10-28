@@ -477,6 +477,6 @@ class BrowserVoice:
             checker = self.turn.checker
             self.retried_whole = checker is not None and checker.retried
             self.judged_image = checker.used if checker is not None else None
-            save_photos(state, PHOTO_DIR)
+            save_photos(state, PHOTO_DIR, self.store)
             self.send({"type": "result", "data": self.to_result(state, t0, self)})
         return state

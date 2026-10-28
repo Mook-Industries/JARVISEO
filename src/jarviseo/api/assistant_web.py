@@ -295,7 +295,7 @@ class WebAssistant:
         self.retried_whole = isinstance(checker, _RetryWholeFrame) and checker.retried
         self.judged_image = checker.used if isinstance(checker, _RetryWholeFrame) else None
         if self.photo_dir is not None:
-            save_photos(state, self.photo_dir)
+            save_photos(state, self.photo_dir, self.store)
         return state, list(tts.spoken)
 
     def close(self) -> None:
@@ -331,23 +331,34 @@ def draw_boxes(state: JarviseoState) -> np.ndarray | None:
     return img
 
 
-def save_photos(state: JarviseoState, folder: Path = PHOTO_DIR) -> None:
+def save_photos(state: JarviseoState, folder: Path = PHOTO_DIR, store=None) -> None:
     """턴의 원본 · 후보 박스 · 크롭을 jpg 로 남긴다. 이름은 turn 번호.
 
+    store 를 주면 원본 경로를 session_turn.image_path 에 남긴다(assistant.py 와 같다). 기억 질문
+    때 그 턴의 크롭(없으면 원본)을 VLM 에 다시 보낸다(#260, vlm/client.py).
+    턴 번호는 DB 를 새로 만들면 1부터 다시 쓰므로, 이번 턴에 없는 박스 · 크롭 파일은 지운다.
+    남겨 두면 예전 턴의 크롭이 이 턴의 사진으로 쓰인다.
     못 쓰면(서버 tmpfs 200MB 가 꽉 참 등) 경고만 남긴다. 대답은 이미 나왔으니
     질문을 실패로 돌리지 않는다.
     """
     frame = state.get("frame")
     if frame is None:
         return
-    name = f"turn{state.get('turn_id', 'x')}"
+    turn_id = state.get("turn_id")
+    name = f"turn{turn_id if turn_id is not None else 'x'}"
     shots = (("", frame.image), ("_boxes", draw_boxes(state)), ("_crop", state.get("crop")))
     try:
         folder.mkdir(parents=True, exist_ok=True)
         for suffix, image in shots:
-            if image is not None:
-                ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
-                if ok:  # cv2.imwrite 는 윈도우 한글 경로를 못 쓴다
-                    (folder / f"{name}{suffix}.jpg").write_bytes(buf.tobytes())
+            path = folder / f"{name}{suffix}.jpg"
+            if image is None:
+                path.unlink(missing_ok=True)
+                continue
+            ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            if ok:  # cv2.imwrite 는 윈도우 한글 경로를 못 쓴다
+                path.write_bytes(buf.tobytes())
     except OSError as err:
         log.warning("턴 사진을 못 남김 (%s): %s", folder, err)
+        return
+    if store is not None and turn_id is not None:
+        store.set_image_path(turn_id, (folder / f"{name}.jpg").as_posix())
