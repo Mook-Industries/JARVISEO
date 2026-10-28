@@ -16,11 +16,14 @@ from jarviseo.memory.store import MemoryStore
 from jarviseo.nutrition.barcode import (
     NO_ALLERGEN_NOTICE,
     FoodQrClient,
+    digits_region,
     is_valid_gtin,
+    locate_barcodes,
     lookup_product,
+    read_barcode_digits,
     read_barcodes,
 )
-from jarviseo.types import IngredientSource
+from jarviseo.types import BBox, IngredientSource
 
 # 체크섬이 맞는 실제 형식의 번호 (880 = 대한민국)
 CODE = "8801234567893"
@@ -335,3 +338,48 @@ def test_lookup_code_uses_cache(store):
     store.save_product(info, status="verified")
     found = lookup_code(CODE, store=store)
     assert found.hit and found.barcode.code == CODE and found.barcode.symbology == "TEXT"
+
+
+# --- 줄무늬를 못 읽으면 바코드 아래 숫자 읽기 -------------------------------------------
+
+
+class DigitsReader:
+    """받은 사진의 크기를 남기고 정해 둔 숫자 줄을 돌려준다."""
+
+    def __init__(self, text: str):
+        self.text, self.seen = text, []
+
+    def readtext(self, image, **kwargs):
+        self.seen.append(image.shape[:2])
+        return [([[0, 0], [1, 0], [1, 1], [0, 1]], self.text, 0.99)]
+
+
+def test_digits_region_reaches_below_the_bars():
+    """박스를 좌우 · 위로 10%, 아래로 60% 넓혀 숫자 줄을 넣는다. 사진 밖은 버린다."""
+    r = digits_region(BBox(100, 50, 300, 150), (1000, 1000))
+    assert (r.x1, r.y1) == (80, 40) and r.x2 >= 320 and r.y2 >= 210
+    edge = digits_region(BBox(0, 0, 200, 100), (210, 120))
+    assert (edge.x1, edge.y1, edge.x2, edge.y2) == (0, 0, 210, 120)
+
+
+def test_reads_digits_under_located_barcode():
+    """바코드 위치를 찾아 그 아래까지 넓힌 부분만 OCR 해서 번호를 얻는다."""
+    scene = np.full((600, 900, 3), 200, np.uint8)
+    bars = draw_ean13(CODE, module=2, height=60)
+    scene[200 : 200 + bars.shape[0], 300 : 300 + bars.shape[1]] = bars
+    boxes = locate_barcodes(scene)
+    assert boxes, "그린 바코드의 위치를 찾아야 한다"
+    reader = DigitsReader("8 801234 567893")
+    assert read_barcode_digits(scene, reader) == CODE
+    (h, w), box = reader.seen[0], boxes[0]
+    assert h > box.height * 1.4 and w < 900 and h < 600  # 숫자 줄까지, 사진 전체는 아니다
+
+
+def test_digits_need_a_barcode_and_a_valid_number():
+    reader = DigitsReader("8 801234 567893")
+    assert read_barcode_digits(np.full((300, 400, 3), 255, np.uint8), reader) is None
+    assert reader.seen == []  # 바코드가 없으면 OCR 을 부르지 않는다
+    scene = np.full((400, 600, 3), 200, np.uint8)
+    bars = draw_ean13(CODE, module=2, height=60)
+    scene[100 : 100 + bars.shape[0], 100 : 100 + bars.shape[1]] = bars
+    assert read_barcode_digits(scene, DigitsReader("8 801234 567890")) is None  # 체크섬 틀림

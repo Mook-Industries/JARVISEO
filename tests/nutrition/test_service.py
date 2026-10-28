@@ -116,7 +116,8 @@ def test_judges_after_single_ocr_read(monkeypatch):
     assert r.judgement.verdict is V.MAY_CONTAIN and r.judgement.source is IngredientSource.OCR
     assert "같은 시설에서 쓰는 땅콩이" in r.message and r.retake is None
     assert r.ocr_conf == pytest.approx(0.9) and "원재료명" in r.ocr_text
-    assert set(r.timings_ms) == {"barcode", "ocr", "match"}
+    # 줄무늬를 못 읽어 숫자 줄부터 찾아봤다(바코드가 없어 OCR 은 부르지 않았다)
+    assert set(r.timings_ms) == {"barcode", "barcode_digits", "ocr", "match"}
 
 
 def test_low_confidence_reprocesses_same_photo(monkeypatch):
@@ -688,3 +689,41 @@ def test_ocr_unavailable_answers_without_retake(monkeypatch):
     assert r.judgement.verdict is V.UNDETERMINED
     assert r.judgement.source is IngredientSource.OCR
     assert NoOcr.calls == 1  # 같은 사진을 다시 읽으려 하지 않는다
+
+
+# --- 줄무늬를 못 읽으면 바코드 숫자로 찾기 ----------------------------------------------
+
+
+def test_barcode_digits_answer_without_panel_ocr(monkeypatch):
+    """줄무늬를 못 읽어도 바코드 아래 숫자로 찾으면 성분표 전체 OCR 없이 답한다."""
+    from jarviseo.nutrition.barcode import DIGITS
+
+    info = ProductInfo(barcode=CODE, product_name="컵라면", raw_ingredients="소맥분, 계란분말",
+                       allergen_notice="밀, 알류 함유", source=IngredientSource.CACHE)  # fmt: skip
+    monkeypatch.setattr(service, "lookup_product", miss())
+    monkeypatch.setattr(service, "read_barcode_digits", lambda image, reader: CODE)
+    looked = []
+
+    def by_code(code, store=None, food_qr=None, symbology="TEXT"):
+        looked.append((code, symbology))
+        return BarcodeLookup(BarcodeRead(code=code, symbology=symbology), info)
+
+    monkeypatch.setattr(service, "lookup_code", by_code)
+    reader = FakeReader((LABEL, 0.9))
+    r = checker(reader).check(CROP, ["계란"])
+    assert looked == [(CODE, DIGITS)] and reader.calls == 0  # 성분표는 읽지 않았다
+    assert r.message == "해당 제품에는 계란이 들어 있어요."
+    assert r.barcode.barcode.symbology == DIGITS and "barcode_digits" in r.timings_ms
+
+
+def test_unreadable_digits_fall_back_to_panel_ocr(monkeypatch):
+    """숫자도 못 읽거나 OCR 이 실패하면 지금처럼 성분표를 읽는다."""
+    monkeypatch.setattr(service, "lookup_product", miss())
+
+    def broken(image, reader):
+        raise RuntimeError("vision down")
+
+    monkeypatch.setattr(service, "read_barcode_digits", broken)
+    reader = FakeReader((LABEL, 0.9))
+    r = checker(reader).check(CROP, ["우유"])
+    assert reader.calls >= 1 and r.judgement.verdict is V.CONTAINS

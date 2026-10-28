@@ -45,18 +45,21 @@ from jarviseo.nutrition.allergen import (
     user_labels,
 )
 from jarviseo.nutrition.barcode import (
+    DIGITS,
     BarcodeLookup,
     FoodQrClient,
     find_gtin,
     lookup_code,
     lookup_product,
     make_food_qr_client,
+    read_barcode_digits,
 )
 from jarviseo.nutrition.occlusion import Borders, find_occlusion
 from jarviseo.nutrition.ocr import (
     OcrReader,
     OcrUnavailableError,
     PanelSections,
+    _get_reader,
     crop_and_upscale,
     google_vision_key,
     join_lines,
@@ -313,6 +316,13 @@ class IngredientChecker:
             if whole.barcode is not None:
                 lookup = whole
         timings["barcode"] = _ms(t0)
+        if lookup.barcode is None and not lookup.hit:
+            # 줄무늬를 못 읽었으면 바코드 아래 숫자만 읽어 찾는다. 성분표 OCR 보다 훨씬 빠르다.
+            t0 = time.perf_counter()
+            by_digits = self._lookup_digits(crop)
+            timings["barcode_digits"] = _ms(t0)
+            if by_digits is not None:
+                lookup = by_digits
 
         if lookup.hit:
             result = self._from_product(lookup, user_allergens, timings)
@@ -326,6 +336,17 @@ class IngredientChecker:
             # Vision · Colab 이 실패했고 이 컴퓨터 OCR 은 꺼 두었다(클라우드 서버). 500 대신 안내.
             log.warning("성분표 OCR 을 쓸 수 없어 판정하지 않는다: %s", e)
             return self._ocr_unavailable(lookup, user_allergens, retake_count, timings)
+
+    def _lookup_digits(self, crop: np.ndarray) -> BarcodeLookup | None:
+        """바코드 숫자 줄을 읽어 캐시 → 푸드QR 을 찾는다. 못 읽으면 None(성분표 OCR 로 간다)."""
+        try:
+            code = read_barcode_digits(crop, self.reader or _get_reader())
+        except Exception as e:  # noqa: BLE001 - 숫자를 못 읽어도 성분표 OCR 로 답한다
+            log.warning("바코드 숫자를 읽지 못함: %s", e)
+            return None
+        if code is None:
+            return None
+        return lookup_code(code, store=self.store, food_qr=self.food_qr, symbology=DIGITS)
 
     def _ocr_unavailable(
         self,

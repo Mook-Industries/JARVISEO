@@ -757,7 +757,11 @@ def barcode_steps(r) -> list[str]:
         no_panel = r.judgement.reason == "no_ingredients"
         last = "원재료명을 찾지 못함" if no_panel else "읽은 성분표로 판정"
         return [*steps, reasons.get(lookup.reason, "제품을 찾지 못함"), last]
-    steps = [f"바코드 {lookup.barcode.code} 읽음"]
+    if lookup.barcode.symbology == "DIGITS":
+        # 줄무늬는 못 읽고, 바코드 아래 숫자만 OCR 로 읽었다(barcode.read_barcode_digits)
+        steps = ["바코드 줄무늬를 못 읽음", f"바코드 숫자 {lookup.barcode.code} 읽음"]
+    else:
+        steps = [f"바코드 {lookup.barcode.code} 읽음"]
     if lookup.hit:
         where = "저장된 정보" if lookup.product.source is IngredientSource.CACHE else "푸드QR"
         steps.append(f"{where}에서 제품을 찾음")
