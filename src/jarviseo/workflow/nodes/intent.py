@@ -13,6 +13,7 @@ from typing import Literal
 from jarviseo.pointing.hands import HandPose, pick_pointing_hand
 from jarviseo.types import Intent
 from jarviseo.workflow.deps import GraphDeps, can_point
+from jarviseo.workflow.follow_up import asked
 from jarviseo.workflow.router import asks_whole_scene, classify_intent
 from jarviseo.workflow.state import JarviseoState
 
@@ -20,7 +21,7 @@ __all__ = ["after_crop", "after_route", "route"]
 
 
 def route(state: JarviseoState, deps: GraphDeps) -> dict:
-    text = state["utterance"].text
+    text = asked(state)  # 이어 들은 짧은 대답이면 앞 질문을 붙인 글
     intent = classify_intent(text)
     if intent is Intent.GENERAL:
         hand = _pointing_hand(state, deps, text)

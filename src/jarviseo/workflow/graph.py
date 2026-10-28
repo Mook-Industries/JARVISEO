@@ -27,6 +27,8 @@ resolve 의 chosen 에는 손 우선 크롭도 든다(가리키는 손이 있는
 든다(장면 · 찾기 · 영역 질문은 빼고, #217).
 노드가 하는 일은 nodes/ 의 각 파일 머리말에 있다.
 호출어 기다리기와 끼어들기는 그래프 밖(scripts/assistant.py)에서 한다.
+대답이 사용자에게 다시 해 달라는 말이면 그래프 밖 루프가 호출어 없이 이어 듣는 턴(follow_up_of)을
+한 번 더 부른다(follow_up.py). 그 턴의 listen 은 시작음을 내고 듣는다.
 """
 
 from __future__ import annotations

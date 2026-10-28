@@ -3,6 +3,7 @@
 듣기는 받아쓰고, 말을 시작한 순간 그 시각 근처에서 가장 선명한 사진을 고른다.
 호출어 2단계 확인(deps.wake_check)이 호출어가 아니라고 하면 되묻기·대답 없이 끝난다.
 호출어만 부르고 멈췄으면 "네, 말씀하세요"를 읽고 시작음(deps.start_chime)을 낸 뒤 한 번 더 듣는다.
+되물은 뒤 이어 듣는 턴(follow_up_of, workflow/follow_up.py)은 호출어 없이 시작음을 내고 듣는다.
 읽기는 답을 소리로 읽는다. 도중에 "자비서"가 들리면 바로 끊긴다.
 """
 
@@ -13,6 +14,7 @@ from typing import Literal
 
 from jarviseo.types import Frame
 from jarviseo.workflow.deps import GraphDeps
+from jarviseo.workflow.follow_up import FOLLOW_UP_SEC, follow_up_question
 from jarviseo.workflow.messages import REPROMPT
 from jarviseo.workflow.nodes.capture import is_bad_frame
 from jarviseo.workflow.state import JarviseoState
@@ -26,6 +28,8 @@ REPLY_SEC = 5.0
 
 
 def listen(state: JarviseoState, deps: GraphDeps) -> dict:
+    if "follow_up_of" in state:
+        return _listen_follow_up(state, deps)
     stt, frames = deps.stt, deps.frames
     picked: list[Frame] = []
 
@@ -66,6 +70,45 @@ def listen(state: JarviseoState, deps: GraphDeps) -> dict:
         update["latency_ms"] = {"stt": stt.last_latency_ms}
     if frames is not None:
         # 되물었으면 두 번째 질문 때 고른 사진. 그 구간에 사진이 없었으면 버퍼 전체에서 고른다.
+        update["frame"] = picked[-1] if picked else frames.pick_best()
+    return update
+
+
+def _listen_follow_up(state: JarviseoState, deps: GraphDeps) -> dict:
+    """되물은 뒤 호출어 없이 듣는다. 짧은 대답이면 앞 질문을 붙여 묻는다(follow_up_question)."""
+    stt, frames = deps.stt, deps.frames
+    picked: list[Frame] = []
+
+    def pick(started_at: float) -> None:
+        # 다시 보여 준 장면을 말을 시작한 순간에 고른다(첫 질문 듣기와 같다)
+        frame = frames.pick_best(around=started_at) if frames is not None else None
+        if frame is not None:
+            picked.append(frame)
+
+    began = time.monotonic()
+
+    def called_again() -> bool:
+        return deps.called_since is not None and deps.called_since(began)
+
+    if deps.start_chime is not None:
+        deps.start_chime()  # 이제 말하라는 신호. 말이 끝나면 종료음은 stt 가 낸다
+    # 대답은 "네" · "여기"처럼 짧을 수 있다(되묻기 대답과 같다).
+    utterance = stt.listen(
+        on_speech_start=pick, timeout=FOLLOW_UP_SEC, min_letters=1, stop=called_again
+    )
+    if called_again():
+        # 기다리는 동안 "자비서"로 불렀다. 그 말은 새 질문이라 다음 턴이 호출 시각부터 다시 읽는다.
+        return {"interrupted": True}
+    if utterance is None:
+        return {}
+    update: dict = {
+        "utterance": utterance,
+        "stt_raw_text": stt.last_raw_text,
+        "question": follow_up_question(state["follow_up_of"], utterance.text),
+    }
+    if stt.last_latency_ms is not None:
+        update["latency_ms"] = {"stt": stt.last_latency_ms}
+    if frames is not None:
         update["frame"] = picked[-1] if picked else frames.pick_best()
     return update
 

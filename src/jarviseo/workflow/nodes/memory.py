@@ -10,6 +10,7 @@ from dataclasses import replace
 
 from jarviseo.types import AssistantResponse, Intent
 from jarviseo.workflow.deps import GraphDeps
+from jarviseo.workflow.follow_up import asked
 from jarviseo.workflow.messages import CANNED
 from jarviseo.workflow.state import JarviseoState
 
@@ -20,7 +21,7 @@ def recall(state: JarviseoState, deps: GraphDeps) -> dict:
     memory, user_id = deps.memory, state.get("user_id")
     if memory is None or user_id is None:
         return {"memories": []}
-    update: dict = {"memories": memory.search(user_id, state["utterance"].text)}
+    update: dict = {"memories": memory.search(user_id, asked(state))}
     if memory.last_latency_ms is not None:
         update["latency_ms"] = {"recall": memory.last_latency_ms}
     return update
@@ -44,8 +45,9 @@ def log(state: JarviseoState, deps: GraphDeps) -> dict:
         store.log_ingredient(turn_id, state["ingredient"])
     dialog, user_id = deps.dialog, state.get("user_id")
     if dialog is not None and user_id is not None and _worth_remembering(response):
-        # 바로 돌아온다. 임베딩·저장은 뒤에서 한다
-        dialog.remember(user_id, turn_id, state["utterance"].text, response.text)
+        # 바로 돌아온다. 임베딩·저장은 뒤에서 한다. 이어 들은 대답("다시 확인해줘")은 앞 질문을
+        # 붙인 글로 남겨야 나중에 무엇을 물었는지 찾힌다.
+        dialog.remember(user_id, turn_id, asked(state), response.text)
     return {"turn_id": turn_id}
 
 

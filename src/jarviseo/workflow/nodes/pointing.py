@@ -33,6 +33,7 @@ from jarviseo.pointing.hands import pick_pointing_hand
 from jarviseo.pointing.labels import korean_name
 from jarviseo.types import Intent
 from jarviseo.workflow.deps import GraphDeps
+from jarviseo.workflow.follow_up import asked
 from jarviseo.workflow.messages import CLARIFY_GIVE_UP, canned_response
 from jarviseo.workflow.nodes.voice import REPLY_SEC
 from jarviseo.workflow.state import MAX_CLARIFY, JarviseoState
@@ -116,7 +117,7 @@ def resolve(state: JarviseoState, deps: GraphDeps) -> dict:
         candidates=state["detections"],
         hand=state.get("hand"),
         gaze_vector=None,
-        text=state["utterance"].text,
+        text=asked(state),
         frame_size=state["frame"].size,
         # 되묻기 대답("왼쪽 거")은 단서가 아니라 후보를 좁히는 데 쓴다. 질문과 따로 넘긴다.
         replies=state.get("clarify_replies", []),

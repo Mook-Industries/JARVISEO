@@ -14,6 +14,7 @@ from typing import Literal
 from jarviseo.pointing.crop import fit_for_vlm
 from jarviseo.types import AssistantResponse
 from jarviseo.workflow.deps import GraphDeps
+from jarviseo.workflow.follow_up import asked
 from jarviseo.workflow.messages import SORRY, VLM_TOO_SLOW
 from jarviseo.workflow.state import JarviseoState
 
@@ -45,7 +46,7 @@ _VLM_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="vlm")
 
 def generate(state: JarviseoState, deps: GraphDeps) -> dict:
     vlm, collector = deps.vlm, deps.collector
-    question, frame = state["utterance"].text, state.get("frame")
+    question, frame = asked(state), state.get("frame")
     memories = state.get("memories")  # 키가 없으면 None: 기억을 안 찾은 질문
     # 대상을 골랐으면 그 크롭만 보낸다. 사진만 바꾼 Frame 이라 VLMClient 는 그대로 쓴다.
     # 선명도는 원본 사진의 값이라 지운다. numpy 배열은 `if crop:` 으로 쓰면 에러라
@@ -54,7 +55,7 @@ def generate(state: JarviseoState, deps: GraphDeps) -> dict:
     crop = state.get("crop")
     sent = replace(frame, image=fit_for_vlm(crop), sharpness=None) if crop is not None else frame
 
-    # 맥락은 VLM 에만 간다. 대화 기억에는 원래 질문(utterance.text)이 들어간다(nodes/memory.py).
+    # 맥락은 VLM 에만 간다. 대화 기억에는 맥락 없는 질문(asked)이 들어간다(nodes/memory.py).
     prompt = _with_pointing_context(question, state)
 
     too_slow = False
