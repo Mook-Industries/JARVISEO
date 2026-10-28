@@ -27,6 +27,7 @@ from jarviseo.types import AllergenJudgement, AllergenVerdict, ProductInfo
 
 __all__ = [
     "user_labels",
+    "ALL_ALLERGENS",
     "ALL_KEYWORDS",
     "KNOWN_ALLERGENS",
     "expand_allergens",
@@ -66,10 +67,14 @@ KNOWN_ALLERGENS = [
 # 알레르기 목록에 이 낱말을 넣으면 위 목록 전부를 확인한다(2026-10-23 결정: "모두").
 # "전체" · "테스트"는 성분 페이지에서 먼저 쓰던 말이라 같이 받는다.
 ALL_KEYWORDS = frozenset({"모두", "전체", "테스트"})
+# "모두"를 펼칠 때 법정 표시명 대신 사용자가 알아듣는 이름으로 넣는다. 판정은 사전이 같은
+# 표준명으로 맞추므로(계란 → 알류) 그대로이고, 안내 문장 · 화면에만 이 이름으로 나간다.
+SPOKEN_NAMES = {"알류": "계란"}
+ALL_ALLERGENS = [SPOKEN_NAMES.get(a, a) for a in KNOWN_ALLERGENS]
 
 
 def expand_allergens(names: list[str]) -> list[str]:
-    """'모두'가 있으면 표시 대상 알레르기 전부로 바꾼다. 같이 적은 다른 이름은 뒤에 그대로 둔다.
+    """'모두'가 있으면 표시 대상 알레르기 전부(ALL_ALLERGENS)로 바꾼다. 다른 이름은 뒤에 둔다.
 
     판정기(service.IngredientChecker.check)가 부르므로 성분 페이지 · 대시보드 · 음성 질문 어디서
     물어도 같다. 사용자가 환경설정에서 "모두"를 등록하면 늘 전부 확인한다.
@@ -77,7 +82,7 @@ def expand_allergens(names: list[str]) -> list[str]:
     if not any(n.strip() in ALL_KEYWORDS for n in names):
         return names
     rest = [n for n in names if n.strip() not in ALL_KEYWORDS]
-    return list(dict.fromkeys([*KNOWN_ALLERGENS, *rest]))
+    return list(dict.fromkeys([*ALL_ALLERGENS, *rest]))
 
 
 # 사전에서 "알레르겐 이름이 들어 있지만 알레르겐이 아닌 표기"를 적는 키.

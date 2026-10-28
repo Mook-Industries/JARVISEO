@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from jarviseo.api.main import barcode_steps, create_app, evidence, expand_allergens  # noqa: E402
 from jarviseo.memory import MemoryStore  # noqa: E402
-from jarviseo.nutrition.allergen import KNOWN_ALLERGENS  # noqa: E402
+from jarviseo.nutrition.allergen import ALL_ALLERGENS  # noqa: E402
 from jarviseo.nutrition.barcode import BarcodeLookup  # noqa: E402
 from jarviseo.nutrition.service import IngredientCheck  # noqa: E402
 from jarviseo.types import (  # noqa: E402
@@ -155,7 +155,7 @@ def test_ocr_status_probes_remote_server(client_and_checker, monkeypatch, health
 @pytest.mark.parametrize("word", ["모두", "테스트"])
 def test_all_keyword_expands_to_every_known_allergen(word):
     names = expand_allergens([word, "키위"])
-    assert names[: len(KNOWN_ALLERGENS)] == KNOWN_ALLERGENS and names[-1] == "키위"
+    assert names[: len(ALL_ALLERGENS)] == ALL_ALLERGENS and names[-1] == "키위"
 
 
 def test_without_keyword_names_stay():
@@ -165,7 +165,7 @@ def test_without_keyword_names_stay():
 def test_ingredient_with_all_keyword_checks_every_allergen(client_and_checker):
     client, checker = client_and_checker
     client.post("/api/ingredient?allergens=모두", content=jpeg())
-    assert checker.calls[-1] == KNOWN_ALLERGENS
+    assert checker.calls[-1] == ALL_ALLERGENS
 
 
 def ocr_result(ingredients="", notice="", cross="") -> IngredientCheck:
@@ -249,3 +249,15 @@ def test_ocr_status_reports_google_vision(client_and_checker, monkeypatch):
     client, _ = client_and_checker
     body = client.get("/api/ocr-status").json()
     assert body["up"] is True and body["device"] == "google-vision"
+
+
+def test_barcode_steps_when_digits_were_read():
+    """줄무늬는 못 읽고 바코드 아래 숫자로 찾았으면 그렇게 보여 준다."""
+    r = ocr_result()
+    r.ocr_text = ""
+    info = ProductInfo(barcode="8801234567893", product_name="", raw_ingredients="소맥분",
+                       source=IngredientSource.CACHE)  # fmt: skip
+    r.barcode = BarcodeLookup(BarcodeRead("8801234567893", "DIGITS"), info)
+    assert barcode_steps(r) == [
+        "바코드 줄무늬를 못 읽음", "바코드 숫자 8801234567893 읽음", "저장된 정보에서 제품을 찾음",
+    ]  # fmt: skip

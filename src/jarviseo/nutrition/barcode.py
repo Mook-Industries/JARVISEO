@@ -38,6 +38,7 @@ __all__ = [
     "lookup_code",
     "lookup_product",
     "make_food_qr_client",
+    "read_barcode_digits",
     "read_barcodes",
 ]
 
@@ -49,8 +50,10 @@ _RETAIL_TYPES = {"EAN_13", "EAN_8", "UPC_A", "UPC_E"}
 # 그래서 긴 변을 아래 크기들로 맞춰 가며 시도한다(None = 원본 크기).
 #   - 크롭이 바코드에 딱 맞게 잘린 경우 → 320 에서 거의 다 읽힌다
 #   - 큰 크롭 속 작은 바코드 → 800 이상에서 읽힌다
-# 한 번에 10ms 안팎이라 최악(7번)에도 0.1초 수준이다.
-_TARGET_LONG_SIDES: tuple[int | None, ...] = (None, 320, 480, 640, 800, 960, 1280)
+#   - 손에 든 컵라면처럼 바코드 폭이 150px(막대 1.5px)뿐이면 1440 이상에서야 읽힌다
+#     (2026-10-28 웹캠 실측 turn199: 1280 실패, 1440 · 1600 · 1920 성공, 한 번에 25ms 안팎)
+# 한 번에 10~30ms 라 최악(9번)에도 0.2초 수준이다. 앞 크기에서 읽히면 거기서 멈춘다.
+_TARGET_LONG_SIDES: tuple[int | None, ...] = (None, 320, 480, 640, 800, 960, 1280, 1600, 1920)
 
 _detector: cv2.barcode.BarcodeDetector | None = None
 
@@ -364,6 +367,58 @@ def find_gtin(text: str) -> str | None:
     codes = [c for c in codes if is_valid_gtin(c)]
     codes.sort(key=lambda c: not c.startswith(_KOREA_PREFIX))
     return codes[0] if codes else None
+
+
+# 줄무늬를 못 읽어도 바코드 위치는 잡히는 일이 많다(turn199: 위치 11ms, 번호는 실패).
+# 박스를 넓혀 그 아래 찍힌 숫자까지 넣고 그 부분만 OCR 한다. 성분표 전체 OCR(11~22초)보다
+# 훨씬 빠르다(Google Vision 239ms, 202×103). 키우면 업로드가 커져 오히려 느렸다(3배 1.5초).
+DIGITS = "DIGITS"  # 숫자를 읽어 찾은 바코드의 symbology
+DIGITS_SIDE = 0.1  # 좌우 · 위 여백(바코드 폭 · 높이 기준)
+DIGITS_BELOW = 0.6  # 아래 여백. 숫자 줄이 줄무늬 바로 밑에 높이의 30~40% 로 찍힌다
+_LOCATE_LONG_SIDES: tuple[int | None, ...] = (None, 640, 960, 1280)
+
+
+def locate_barcodes(image: np.ndarray) -> list[BBox]:
+    """번호는 못 읽어도 바코드가 있는 곳(입력 이미지 좌표). 못 찾으면 빈 목록."""
+    if image is None or image.size == 0:
+        return []
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    for long_side in _LOCATE_LONG_SIDES:
+        img, scale, pad = _prepare(gray, long_side)
+        ok, points = _get_detector().detect(img)
+        if ok and points is not None and len(points):
+            return [_points_to_bbox(p, scale, pad) for p in points]
+    return []
+
+
+def digits_region(box: BBox, frame_size: tuple[int, int]) -> BBox | None:
+    """바코드 박스를 넓혀 아래 숫자까지 넣은 사각형(정수 좌표). 사진 안에 남지 않으면 None."""
+    width, height = frame_size
+    dx, dy = box.width * DIGITS_SIDE, box.height * DIGITS_SIDE
+    x1, y1 = max(0, int(box.x1 - dx)), max(0, int(box.y1 - dy))
+    x2 = min(width, int(box.x2 + dx) + 1)
+    y2 = min(height, int(box.y2 + box.height * DIGITS_BELOW) + 1)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return BBox(x1, y1, x2, y2)
+
+
+def read_barcode_digits(image: np.ndarray, reader) -> str | None:
+    """줄무늬를 못 읽은 바코드의 숫자 줄을 OCR 로 읽는다. 체크섬이 맞는 번호만, 없으면 None.
+
+    reader 는 ocr.OcrReader(readtext). 바코드 위치를 못 찾으면 OCR 을 부르지 않는다.
+    """
+    h, w = image.shape[:2]
+    for box in locate_barcodes(image):
+        region = digits_region(box, (w, h))
+        if region is None:
+            continue
+        roi = image[int(region.y1) : int(region.y2), int(region.x1) : int(region.x2)]
+        results = reader.readtext(roi, detail=1, paragraph=False)
+        code = find_gtin(" ".join(str(r[1]) for r in results))
+        if code is not None:
+            return code
+    return None
 
 
 def lookup_code(
