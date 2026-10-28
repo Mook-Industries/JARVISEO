@@ -26,6 +26,9 @@ __all__ = [
     "MAX_WARNING_CHARS",
     "RETAKE_OTHER_SIDE",
     "RETAKE_AGAIN",
+    "RETAKE_GAVE_UP",
+    "RETAKE_SHOW_PANEL",
+    "RETAKE_SHOW_PANEL_AGAIN",
     "RETAKE_SHOW_INGREDIENTS",
     "RETAKE_WHOLE",
     "SMALL_TEXT_NOTE",
@@ -46,6 +49,11 @@ RETAKE_OTHER_SIDE = "원재료명이 안 보여요. 원재료명이 적힌 면�
 RETAKE_SHOW_INGREDIENTS = "원재료명 부분을 보여 주세요."
 # 보여 달라고 했는데 또 못 읽었을 때. 같은 안내를 되풀이하지 않고 처음부터 다시 찍게 한다.
 RETAKE_AGAIN = "아직 성분표를 읽지 못했어요. 원재료명이 화면 가운데에 크게 나오게 다시 찍어 주세요."
+# 음성 모드에서 한 턴 안에 이어 묻는 차례(api/ingredient_turn.py).
+# 말하고 나면 시작음 뒤 대답을 듣는다.
+RETAKE_SHOW_PANEL = "성분표를 보여 주세요."
+RETAKE_SHOW_PANEL_AGAIN = "성분표를 다시 보여 주세요."
+RETAKE_GAVE_UP = "성분표를 읽지 못했습니다."
 # 성분표 일부가 가려졌거나 잘렸을 때 (nutrition/occlusion.py).
 # 찾은 경고가 있으면 경고 뒤에 OCCLUDED_NOTE 를 붙이고,
 # 없으면 RETAKE_UNCOVER 로 다시 보여 달라고 한다.

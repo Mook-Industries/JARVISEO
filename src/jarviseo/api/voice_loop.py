@@ -65,10 +65,7 @@ class VoiceLoop:
         # 대시보드 환경설정(목소리 · 속도 · 소리 크기). 켜기 전에 받으면 켤 때 쓴다
         self.voice_settings: dict = {}
         self._failed: str | None = None  # 못 켠 이유(다시 시도하지 않는다)
-        # 성분표를 잇달아 못 읽으면 다시 찍어 달라고 한다(입력창과 같은 횟수를 쓴다)
-        from jarviseo.api.assistant_web import RetakeLadder
-
-        self._ladder = RetakeLadder()
+        self._typed = False  # 입력창 질문을 돌리는 중(성분표를 보여 달라고 한 뒤 듣지 않는다)
 
     # ---- 화면에 알리기 ----
 
@@ -109,7 +106,11 @@ class VoiceLoop:
         info = {"session_id": self.session_id, "user_id": self.user_id, "trigger_type": "WAKEWORD"}
         t0 = time.perf_counter()
         with self.lock:
-            state = build_graph(deps).invoke(info)
+            self._typed = True
+            try:
+                state = build_graph(deps).invoke(info)
+            finally:
+                self._typed = False
         save_photos(state, PHOTO_DIR)
         return self.to_result(state, t0, self)
 
@@ -149,6 +150,7 @@ class VoiceLoop:
     def _start(self) -> None:
         if not config.OPENAI_API_KEY:
             raise RuntimeError("OPENAI_API_KEY 가 없어 받아쓰기 · 읽기 · VLM 을 못 쓴다")
+        from jarviseo.api.ingredient_turn import IngredientFollowUp
         from jarviseo.capture import FrameBuffer
         from jarviseo.memory import DialogMemory, VectorMemory
         from jarviseo.pointing import resolve_target
@@ -201,8 +203,9 @@ class VoiceLoop:
             chime.end()  # 질문 말이 끝나면 종료음(assistant.py 와 같다)
             self.emit("thinking")
 
+        stt = SpeechToText(mic=mic, on_speech_end=speech_end)
         deps = GraphDeps(
-            stt=SpeechToText(mic=mic, on_speech_end=speech_end),
+            stt=stt,
             tts=p["tts"],
             vlm=p["vlm"],
             frames=frames,
@@ -215,7 +218,18 @@ class VoiceLoop:
             detector=detector,
             hands=hands,
             resolve=resolve_target,
-            checker=self._ladder.wrap(self.checker),
+            # 성분표를 못 읽으면 같은 턴 안에서 보여 달라고 하고 다시 읽는다(api/ingredient_turn.py)
+            checker=IngredientFollowUp(
+                self.checker,
+                p["tts"],
+                stt,
+                frames,
+                start_chime=chime.start,
+                on_listen=lambda: self.emit("wake", score=1.0, barge_in=False, followup=True),
+                active=lambda: not self._typed,
+            )
+            if self.checker is not None
+            else None,
         )
         graph = build_graph(deps)
         self._deps = deps
