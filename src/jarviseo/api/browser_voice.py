@@ -248,7 +248,9 @@ class BrowserVoice:
             chime.end()  # 질문 말이 끝나면 종료음(assistant.py 와 같다)
             self.send({"type": "thinking"})
 
-        stt = SpeechToText(mic=mic, on_speech_end=speech_end, gate=gate, client=self.client)
+        p["stt"] = stt = SpeechToText(
+            mic=mic, on_speech_end=speech_end, gate=gate, client=self.client
+        )
         check = None
         if config.WAKE_CHECK:
             p["check"] = check = _WakeCheck(WakeCheck(mic, client=self.client))
@@ -344,8 +346,11 @@ class BrowserVoice:
             t = p["remote"].time_of(float(msg.get("pos", 0)))
             with self._wake_lock:
                 self._wake_id = max(self._wake_id, int(msg.get("id", 0)))
-                if msg.get("button") and "check" in p:
-                    p["check"].buttons.add(t)
+                if msg.get("button"):
+                    # 화면 호출 버튼: 누른 순간부터 질문을 기다리고(#262), 2단계 확인은 하지 않는다
+                    p["stt"].mark_button(t)
+                    if "check" in p:
+                        p["check"].buttons.add(t)
                 self._camera[t] = bool(msg.get("camera", True))
                 # 지난 턴 장면이 이번 질문에 뽑히지 않게. 새 장면은 이 뒤에 온다
                 p["frames"].clear()

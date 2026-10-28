@@ -169,6 +169,26 @@ def test_button_call_skips_wake_check(ws_app):
     assert "wake.wav" not in fake.heard
 
 
+def test_button_call_hears_question_said_after_a_pause(ws_app):
+    """호출 버튼을 누르고 1.6초 뒤에 말해도 "네, 말씀하세요" 없이 바로 질문을 듣는다(#262)."""
+    make, store, fake = ws_app
+    fake.question = "이거 뭐야?"
+    audio = recording()
+    question = audio[19200:]  # "자비서"를 뺀 질문 부분
+    silence = np.zeros(48000, np.int16)  # 3초
+    sounds: list = []
+    with make() as c, c.websocket_connect("/api/voice/ws") as ws:
+        until(ws, "ready", sounds)
+        ws.send_bytes(HEADER.pack(AUDIO, 0) + np.concatenate([silence, question]).tobytes())
+        # 1.4초에 누르고 1.6초 뒤(3초)에 말한다
+        wake = {"type": "wake", "id": 1, "pos": 22400, "score": 1.0, "button": True}
+        ws.send_json(wake | {"camera": False})
+        seen = until(ws, "idle", sounds)
+    result = next(m for m in seen if m["type"] == "result")["data"]
+    assert result["question"] == "이거 뭐야?"
+    assert "네, 말씀하세요." not in fake.spoken
+
+
 def test_typed_question_is_read_by_server_voice(ws_app):
     """입력칸 질문도 서버 목소리로 읽는다(브라우저 목소리를 쓰지 않는다)."""
     make, store, fake = ws_app

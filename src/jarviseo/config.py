@@ -229,6 +229,11 @@ WAKE_LOOKBACK_SEC = _get_float("JARVISEO_WAKE_LOOKBACK_SEC", 1.5)
 WAKE_CHECK = _get_bool("JARVISEO_WAKE_CHECK", True)
 # 녹음 평가에서 1.3초와 1.6초가 같았고, 붙여 말해 감지가 늦어도 호출어가 들어가게 1.6초를 쓴다.
 WAKE_CHECK_SEC = _get_float("JARVISEO_WAKE_CHECK_SEC", 1.6)
+# 화면 호출 버튼(스페이스바)으로 불렀을 때 질문이 시작되기를 기다리는 시간(초, #262).
+# 버튼은 "자비서"를 말한 게 아니라 호출 앞을 거슬러 읽지 않고 누른 순간부터 센다.
+# 예전에는 "자비서" 호출과 똑같이 1.5초 앞부터 첫 듣기 2초를 세서, 누른 뒤 약 0.5초 안에
+# 말을 시작해야 했다(누르고 1.2초 뒤에 말하면 3번 모두 놓침).
+BUTTON_LISTEN_SEC = _get_float("JARVISEO_BUTTON_LISTEN_SEC", 5.0)
 # 시작음("자비서"를 알아들음)·종료음(질문을 다 들음) 크기. 0~1 로 파일 소리에 곱한다. 0 이면 끔.
 CHIME_VOLUME = _get_float("JARVISEO_CHIME_VOLUME", 1.0)
 # VLM 답이 이 시간(초) 안에 안 오면 "잠깐만요"를 먼저 읽는다. 안경에는 화면이 없어서
