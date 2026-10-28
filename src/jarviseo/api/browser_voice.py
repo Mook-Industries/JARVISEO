@@ -41,7 +41,8 @@ import cv2
 import numpy as np
 
 from jarviseo import config
-from jarviseo.api.assistant_web import WHOLE_LABEL, RetakeLadder, _RetryWholeFrame, save_photos
+from jarviseo.api.assistant_web import WHOLE_LABEL, _RetryWholeFrame, save_photos
+from jarviseo.api.ingredient_turn import IngredientFollowUp
 from jarviseo.capture import FrameBuffer
 from jarviseo.types import BBox, Detection, Frame, Intent
 
@@ -201,11 +202,10 @@ class BrowserVoice:
         self.retried_whole = False  # 지난 턴에 크롭을 못 읽어 장면 전체로 다시 읽었나
         self.judged_image: np.ndarray | None = None  # 지난 턴 성분 판정에 쓴 사진
         self.turn = _Turn()
-        # 성분표를 잇달아 못 읽으면 다시 찍어 달라고 한다(웹 질문 · 팀 음성 모드와 같다)
-        self.ladder = RetakeLadder()
         self.session_id: int | None = None
         self._asks: queue.SimpleQueue[tuple[str, np.ndarray | None]] = queue.SimpleQueue()
         self._stop = threading.Event()
+        self._typed = False  # 입력창 질문을 돌리는 중(성분표를 보여 달라고 한 뒤 듣지 않는다)
         self._wake_lock = threading.Lock()
         self._wake_id = 0  # 받은 호출 번호 중 가장 큰 것. idle 에 실어 보낸다
         self._camera: dict[float, bool] = {}  # 호출 시각 → 그 호출에 장면을 보내는지
@@ -256,17 +256,32 @@ class BrowserVoice:
         dialog = shared["dialog"]
         hands = shared["hands"]
         self.pointing = "v2" if hands is not None else "v1"
+        # "여기" 장면 크롭(IngredientFollowUp)에는 장면 전체 박스를 만들지 않는 원래 탐지기를 준다
+        raw_detector = _Locked(shared["detector"], self.lock)
+        locked_hands = _Locked(hands, self.lock) if hands is not None else None
         self.deps = GraphDeps(
             stt=_HeardSTT(stt, self.turn),
             tts=tts,
             vlm=shared["vlm"],
             frames=frames,
             detector=_TurnDetector(shared["detector"], self.lock, self.turn),
-            hands=_Locked(hands, self.lock) if hands is not None else None,
+            hands=locked_hands,
             resolve=shared["resolve"],
-            checker=self.ladder.wrap(
-                _TurnChecker(self.checker, self.lock, self.turn) if self.checker else None
-            ),
+            # 성분표를 못 읽으면 같은 턴 안에서 보여 달라고 하고 다시 읽는다(api/ingredient_turn.py)
+            checker=IngredientFollowUp(
+                _TurnChecker(self.checker, self.lock, self.turn),
+                tts,
+                stt,
+                frames,
+                start_chime=chime.start,
+                on_listen=lambda: self.send({"type": "wake", "barge_in": False, "followup": True}),
+                active=lambda: not self._typed,
+                detector=raw_detector,
+                hands=locked_hands,
+                resolve=shared["resolve"],
+            )
+            if self.checker
+            else None,
             store=self.store,
             memory=dialog.memory if dialog is not None else None,
             dialog=dialog,
@@ -438,7 +453,11 @@ class BrowserVoice:
         stt = _HeardSTT(FakeSpeechToText([question], starts=[now]), self.turn)
         self.send({"type": "thinking"})
         info = {"session_id": self.session_id, "user_id": self.user_id, "trigger_type": "WAKEWORD"}
-        return self._invoke(build_graph(replace(self.deps, stt=stt, frames=frames)), info)
+        self._typed = True
+        try:
+            return self._invoke(build_graph(replace(self.deps, stt=stt, frames=frames)), info)
+        finally:
+            self._typed = False
 
     def _invoke(self, graph, info: dict) -> dict | None:
         """그래프 한 턴. 결과를 브라우저에 알린다."""
