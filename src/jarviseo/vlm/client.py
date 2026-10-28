@@ -4,6 +4,8 @@
 ---------------------------------------------
 이미지가 네트워크로 나가는 곳은 여기뿐이다. 그리고 나가는 것은
 **질문한 시점의 1프레임**뿐이다. 영상 스트림이 아니다.
+기억 질문이면 1등 기록의 그때 사진 1장이 더 나간다(#260). 그 턴에 이미 한 번 보낸 사진이고
+(크롭이 있으면 크롭), ``config.RECALL_PHOTO`` 로 끌 수 있다.
 웨이크워드·객체검출처럼 상시 동작하는 것은 전부 로컬에서 돈다.
 이 원칙을 깨면 프로젝트의 프라이버시 근거가 통째로 사라진다.
 
@@ -20,6 +22,7 @@ import logging
 import time
 from collections.abc import Iterable
 from datetime import datetime
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -50,6 +53,11 @@ MEMORY_RULE = """\
 네가 그때 사진을 보고 한 대답이다. 기억을 묻는 질문이면 이 기록만 근거로 답한다.
 기록에 없는 내용은 지어내지 말고 기억에 없다고 말한다."""
 
+RECALL_PHOTO_RULE = """\
+기록 가운데 [사진] 표시가 있는 대화는 그때 찍은 사진을 '기록 사진'으로 맨 끝에 붙였다.
+가리킨 물건만 잘라낸 사진일 수 있다. 기록 글에 없는 겉모습(색, 모양, 적힌 글자)은 이 사진을 보고
+답해도 된다. '지금 장면' 사진은 지금 보이는 것이니 기록 사진과 섞지 않는다."""
+
 RECENT_RULE = """\
 기록은 오래된 것부터 시간 순서이고 맨 아래가 지금 질문 바로 전의 대화다.
 '방금' · '마지막' · '아까'처럼 직전 대화를 물으면 맨 아래 기록부터 본다."""
@@ -59,14 +67,20 @@ class VLMClient:
     """사진 한 장과 질문을 보내고 답 문장을 받는다."""
 
     def __init__(
-        self, model: str = config.VLM_MODEL, max_tokens: int = 300, client: OpenAI | None = None
+        self,
+        model: str = config.VLM_MODEL,
+        max_tokens: int = 300,
+        client: OpenAI | None = None,
+        recall_photo: bool = config.RECALL_PHOTO,
     ) -> None:
         """max_tokens 는 답 길이 상한이다. 한두 문장이면 100 토큰 안팎이다.
 
         client 는 테스트에서 가짜 API 를 끼울 때만 넘긴다.
+        recall_photo 가 참이면 기억 질문에 1등 기록의 그때 사진을 같이 보낸다(memory_photo).
         """
         self.model = model
         self.max_tokens = max_tokens
+        self.recall_photo = recall_photo
         self.client = client or OpenAI(
             api_key=config.OPENAI_API_KEY or None, timeout=TIMEOUT_SEC, max_retries=RETRIES
         )
@@ -84,18 +98,36 @@ class VLMClient:
         빈 목록일 때도 "찾은 기록 없음"을 알려야 모델이 사진을 보고 지어내지 않는다.
         """
         self.last_latency_ms = None
-        answer, ms = self._send(INSTRUCTIONS, _prompt(question, memories), frame)
+        photo = memory_photo(memories) if self.recall_photo else None
+        text = _prompt(question, memories, photo[0] if photo else None)
+        answer, ms = self._send(INSTRUCTIONS, text, frame, photo)
         self.last_latency_ms = ms
         return answer
 
     def _send(
-        self, instructions: str, text: str, frame: Frame | None
+        self,
+        instructions: str,
+        text: str,
+        frame: Frame | None,
+        photo: tuple[MemoryHit, np.ndarray] | None = None,
     ) -> tuple[str | None, float | None]:
-        """요청 한 번을 보내고 (답, 왕복 ms) 를 돌려준다. 실패하거나 답이 비었으면 답은 None."""
+        """요청 한 번을 보내고 (답, 왕복 ms) 를 돌려준다. 실패하거나 답이 비었으면 답은 None.
+
+        photo(기록, 그때 사진)가 있으면 두 사진 앞에 "지금 장면" · "기록 사진" 이름표를 단다.
+        """
         content: list[dict] = [{"type": "input_text", "text": text}]
         if frame is not None:
+            if photo is not None:
+                content.append({"type": "input_text", "text": "지금 장면:"})
             content.append(
                 {"type": "input_image", "image_url": encode_image(frame.image), "detail": "auto"}
+            )
+        if photo is not None:
+            hit, image = photo
+            when = _when(hit.observed_at).strip() or "시각 모름"
+            content.append({"type": "input_text", "text": f"기록 사진({when} 대화 때 찍음):"})
+            content.append(
+                {"type": "input_image", "image_url": encode_image(image), "detail": "auto"}
             )
         # monotonic 은 윈도우에서 15.6ms 단위로만 움직여서, 왕복은 perf_counter 로 잰다.
         asked_at = time.perf_counter()
@@ -159,17 +191,51 @@ def encode_image(image: np.ndarray, max_side: int = MAX_SIDE) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(jpeg.tobytes()).decode("ascii")
 
 
-def _prompt(question: str, memories: list[MemoryHit] | None) -> str:
+def memory_photo(memories: list[MemoryHit] | None) -> tuple[MemoryHit, np.ndarray] | None:
+    """기억 질문에 같이 보낼 그때 사진. 점수가 가장 높고 사진 파일이 있는 기록 하나다.
+
+    session_turn.image_path 는 원본 경로이고, 같은 폴더의 ``<이름>_crop.jpg`` 가 그 턴에 VLM 이
+    받은 크롭이다(scripts/assistant.py · api/assistant_web.save_photos). 크롭이 있으면 크롭을 쓴다.
+    파일이 없으면(클라우드로 올라간 노트북 턴은 사진을 안 보낸다) 다음 기록을 본다.
+    """
+    ranked = sorted(memories or [], key=lambda h: (h.score, h.observed_at or 0.0), reverse=True)
+    for hit in ranked:
+        if hit.image_path is None:
+            continue
+        original = Path(hit.image_path)
+        for path in (original.with_name(f"{original.stem}_crop{original.suffix}"), original):
+            image = _read_photo(path)
+            if image is not None:
+                return hit, image
+    return None
+
+
+def _read_photo(path: Path) -> np.ndarray | None:
+    # cv2.imread 는 윈도우 한글 경로를 못 읽는다. 바이트로 읽어 푼다.
+    if not path.is_file():
+        return None
+    return cv2.imdecode(np.fromfile(path, np.uint8), cv2.IMREAD_COLOR)
+
+
+def _prompt(
+    question: str, memories: list[MemoryHit] | None, pictured: MemoryHit | None = None
+) -> str:
     """질문 글자를 만든다. 기억 검색을 했으면 기록과 지금 시각을 앞에 붙인다.
 
     기록("질문: …" / "대답: …" 두 줄)은 한 줄로 펴서 적는다. 줄이 나뉘면 어디까지가 한 기록이고
     어느 것이 지금 질문인지 모델이 헷갈린다. 같은 까닭으로 지금 질문에는 "지금"을 붙인다.
+    pictured 는 그때 사진을 같이 보내는 기록이다. 그 줄 앞에 [사진] 을 단다.
     """
     if memories is None:
         return question
-    lines = [f"- {_when(hit.observed_at)}{_one_line(hit.text)}" for hit in memories]
+    lines = [
+        f"- {'[사진] ' if hit is pictured else ''}{_when(hit.observed_at)}{_one_line(hit.text)}"
+        for hit in memories
+    ]
     records = "\n".join(lines) or "- (찾은 기록 없음)"
     rule = MEMORY_RULE
+    if pictured is not None:
+        rule += "\n" + RECALL_PHOTO_RULE
     if any(hit.kind == "turn" for hit in memories):
         # 지난 대화를 물어 최근 턴을 붙였으면 시간순이다(memory/vector.py). 시각은 분까지라
         # 1분 안에 두 번 물으면 시각만으로는 순서를 모른다

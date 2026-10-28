@@ -114,6 +114,10 @@ EMBED_MODEL = _get("JARVISEO_EMBED_MODEL", "text-embedding-3-small")
 # 기록에 없는 것은 VLM 이 기록만 근거로 "기억에 없다"고 답하는 것(vlm/client.py 의 MEMORY_RULE)
 # 으로 막는다.
 MEMORY_MIN_SCORE = _get_float("JARVISEO_MEMORY_MIN_SCORE", 0.15)
+# 기억 질문이면 1등 기록의 그때 사진(크롭, 없으면 원본) 1장을 VLM 에 같이 보낸다(#260).
+# 대답 글자에 없던 겉모습("아까 본 컵 무슨 색이었지?")도 답한다.
+# 사진이 한 장 더 나가므로 끌 수 있게 둔다.
+RECALL_PHOTO = _get_bool("JARVISEO_RECALL_PHOTO", True)
 
 # --- 식품 성분 판정 ------------------------------------------
 # 푸드QR 알레르기정보 (식약처). 바코드로 포장에 표시된 알레르기 유발물질 목록을 그대로 준다.

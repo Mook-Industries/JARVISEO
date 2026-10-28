@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import cv2
 import numpy as np
+import pytest
 from openai import OpenAIError
 
 from jarviseo import config
@@ -157,3 +158,75 @@ def test_fake_returns_answers_in_order_and_records_questions():
     assert vlm.ask(None, "셋") == "책이에요."
     assert vlm.ask(None, "넷") == "책이에요."  # 마지막 답을 계속 준다
     assert [question for _, question, _ in vlm.asked] == ["하나", "둘", "셋", "넷"]
+
+
+def write_photo(path, value):
+    """한 색으로 칠한 jpg. 어느 사진이 갔는지 색으로 가린다."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(cv2.imencode(".jpg", np.full((40, 60, 3), value, np.uint8))[1].tobytes())
+    return path
+
+
+def shade(image_part):
+    """보낸 사진(data URL)의 가운데 밝기."""
+    jpeg = base64.b64decode(image_part["image_url"].split(",", 1)[1])
+    image = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    return int(image[image.shape[0] // 2, image.shape[1] // 2, 0])
+
+
+def photo_hit(text, score, image_path=None):
+    return MemoryHit(
+        memory_id=text, kind="observation", text=text, score=score, image_path=image_path
+    )
+
+
+def test_recall_sends_top_record_crop_as_labeled_second_photo(tmp_path):
+    """기억 질문이면 점수가 가장 높은 기록의 크롭을 '기록 사진'으로 지금 장면 뒤에 붙인다."""
+    original = write_photo(tmp_path / "turn7.jpg", 40)
+    write_photo(tmp_path / "turn7_crop.jpg", 200)
+    other = write_photo(tmp_path / "turn3.jpg", 120)
+    client = FakeClient()
+    top = photo_hit("질문: 이거 뭐야?\n대답: 머그컵이에요.", 0.6, original)
+    memories = [photo_hit("질문: 저건 뭐야?\n대답: 책이에요.", 0.3, other), top]
+
+    VLMClient(client=client).ask(frame(), "아까 본 컵 무슨 색이었지?", memories=memories)
+
+    (message,) = client.requests[-1]["input"]
+    kinds = [c["type"] for c in message["content"]]
+    assert kinds == ["input_text", "input_text", "input_image", "input_text", "input_image"]
+    labels = [c["text"] for c in message["content"] if c["type"] == "input_text"][1:]
+    assert labels[0] == "지금 장면:" and labels[1].startswith("기록 사진(")
+    text, images = sent(client)
+    assert shade(images[1]) > 180  # 원본(40)이 아니라 그 턴의 크롭(200)
+    assert "- [사진] 질문: 이거 뭐야? / 대답: 머그컵이에요." in text
+    assert "- 질문: 저건 뭐야?" in text  # 사진을 안 보낸 기록에는 표시가 없다
+    assert "기록 글에 없는 겉모습" in text
+
+
+def test_recall_photo_uses_next_record_or_original_when_files_are_missing(tmp_path):
+    """1등 기록 사진 파일이 없으면 다음 기록을 보고, 크롭이 없으면 원본을 보낸다."""
+    original = write_photo(tmp_path / "02_turn9.jpg", 90)
+    memories = [
+        photo_hit("질문: 이거 뭐야?\n대답: 지갑이에요.", 0.7, tmp_path / "gone.jpg"),
+        photo_hit("질문: 이거 뭐야?\n대답: 열쇠예요.", 0.4, original),
+    ]
+    client = FakeClient()
+
+    VLMClient(client=client).ask(None, "아까 본 열쇠 무슨 색이었지?", memories=memories)
+
+    text, images = sent(client)
+    assert len(images) == 1 and abs(shade(images[0]) - 90) < 10  # 지금 장면 없이 기록 사진만
+    assert "[사진] 질문: 이거 뭐야? / 대답: 열쇠예요." in text
+
+
+@pytest.mark.parametrize("recall_photo", [True, False])
+def test_no_record_photo_without_files_or_when_turned_off(tmp_path, recall_photo):
+    """사진 파일이 없거나 끄면(JARVISEO_RECALL_PHOTO=false) 예전처럼 지금 장면 한 장만 보낸다."""
+    path = write_photo(tmp_path / "turn1.jpg", 90) if not recall_photo else None
+    client = FakeClient()
+    memories = [photo_hit("질문: 이거 뭐야?\n대답: 컵이에요.", 0.5, path)]
+
+    VLMClient(client=client, recall_photo=recall_photo).ask(frame(), "아까 본 컵?", memories)
+
+    text, images = sent(client)
+    assert len(images) == 1 and "[사진]" not in text and "기록 사진" not in text
