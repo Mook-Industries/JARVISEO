@@ -12,6 +12,7 @@ v2+C 는 단서가 아니라 대비책(손 우선 크롭, #205)을 v2 위에 얹
 v2+lang · v2+lang+ctx 는 시선(v3) 없이 말 단서 · 이어 묻기 단서를 v2 위에 쌓은 임시 버전이다(#166).
 v3 이 생긴 뒤(#245)에도 남긴다. 실제 비서의 기본값(시선 · 이어 묻기는 꺼 둠)이 v2+lang 이다.
 고르는 말 · 직전 대상이 든 발화는 말 · 맥락 세션(s04)에 있어서 --sessions 4 로 따로 잰다.
+v2+lang+C 는 실제 비서와 같은 설정이다(말 단서 + 손 우선 크롭, 이어 묻기는 꺼 둔 채, #266).
 검출은 가중치마다 사진마다 한 번만 해서, 버전 차이가 단서에서만 나오게 한다.
 STT · VLM 없이 촬영 때 적은 발화로 채점해서, 가리킴 모델 실력만 따로 잰다.
 
@@ -28,6 +29,8 @@ STT · VLM 없이 촬영 때 적은 발화로 채점해서, 가리킴 모델 실
         --weights yolov8n.pt data/models/detector_r2.pt --note "말 · 맥락 세션"
     python scripts/run_ablation.py --variants v2 v3 v4 v5 \
         --weights yolov8n.pt data/models/detector_r2.pt --note "시선 단서"
+    python scripts/run_ablation.py --variants v2 v2+lang+C --note "실제 설정" \
+        --weights yolov8n.pt data/models/detector_r2.pt data/models/detector_r3.pt
     python scripts/run_ablation.py --split test --note "최종"     # 10/24 최종 측정 때만
 """
 
@@ -69,9 +72,12 @@ VARIANTS: dict[str, frozenset[CueKind]] = {
     # v3 이 생긴 뒤(#245)에도 남긴다 — 시선을 꺼 둔 실제 비서의 기본값이 v2+lang 이라 비교 기준이다.
     "v2+lang": frozenset({CueKind.CENTER, CueKind.POINT, CueKind.LANG}),
     "v2+lang+ctx": frozenset({CueKind.CENTER, CueKind.POINT, CueKind.LANG, CueKind.CTX}),
+    # 임시 버전: 실제 비서 설정(가운데 + 손 + 말 + 손 우선 크롭). 공식 표에 서버 · 발표 설정 줄이
+    # 없었다(#266). 이어 묻기 단서는 실제 비서에서 꺼져 있어(ENABLE_CONTEXT_CUE) 넣지 않는다.
+    "v2+lang+C": frozenset({CueKind.CENTER, CueKind.POINT, CueKind.LANG}),
 }
 # 손 우선 크롭을 켜는 버전. 단서가 아니라 대비책이라 단서 표(VARIANTS)와 따로 적는다.
-HAND_CROP_VARIANTS = frozenset({"v2+C"})
+HAND_CROP_VARIANTS = frozenset({"v2+C", "v2+lang+C"})
 # 검출 평가의 표준 기준. 고른 박스와 정답 박스가 절반 넘게 겹치면 맞음.
 IOU_MATCH = 0.5
 # 틀렸는데 margin 이 이 이상이면 "높은 확신으로 틀림". 되묻지 않고 단정한 오답이다.

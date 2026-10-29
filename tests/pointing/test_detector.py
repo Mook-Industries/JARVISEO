@@ -1,5 +1,5 @@
 """물체 후보 검출 — 사람 · 작은 박스 · 사진 절반 넘는 박스를 빼고, YOLO 결과를 Detection 으로
-바꾸는지, 가중치를 설정에서 고르는지.
+바꾸는지, 이름이 달라도 겹친 박스를 하나로 줄이게 하는지, 가중치를 설정에서 고르는지.
 
 CI 에는 ultralytics 가 없어서 실제 모델 대신 결과 모양만 같은 가짜를 끼운다.
 """
@@ -139,7 +139,21 @@ def test_detect_passes_conf_threshold():
     detector = _detector(_Result(_Boxes([], [], [])), conf_threshold=0.4)
 
     assert detector.detect(np.zeros((1080, 1920, 3), np.uint8)) == []
-    assert detector.model.calls == [{"conf": 0.4, "verbose": False}]
+    assert detector.model.calls == [{"conf": 0.4, "agnostic_nms": True, "verbose": False}]
+
+
+def test_detect_merges_overlapping_boxes_across_labels():
+    """이름이 달라도 겹친 박스는 하나만 남기라고(agnostic_nms) 모델에 넘긴다(#266).
+
+    기본 NMS 는 같은 이름끼리만 지워서, 컵 하나에 bottle · product 박스가 둘 다 남았다.
+    같은 자리라 점수 차가 0 이 돼 "식품이요, 병이요?"로 같은 물건을 되물었다(웹 턴 66).
+    실제로 합치는 일은 ultralytics 안에서 일어나서 CI(ultralytics 없음)에서는 넘기는지만 본다.
+    """
+    detector = _detector(_Result(_Boxes([], [], [])))
+
+    detector.detect(np.zeros((1080, 1920, 3), np.uint8))
+
+    assert detector.model.calls[0]["agnostic_nms"] is True
 
 
 def test_detect_uses_image_size_for_tiny_filter():

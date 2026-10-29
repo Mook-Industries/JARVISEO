@@ -100,7 +100,14 @@ class ObjectDetector:
 
         ultralytics 는 numpy 배열을 OpenCV(BGR) 이미지로 읽으므로 RGB 로 바꾸지 않는다.
         """
-        result = self.model.predict(image, conf=self.conf_threshold, verbose=False)[0]
+        # agnostic_nms: 기본 NMS 는 이름이 같은 박스끼리만 지운다. 그래서 컵 하나에
+        # bottle · product 가 같이 남고, 같은 자리라 점수 차가 0 이 돼 같은 물건을 둘로
+        # 되물었다(웹 턴 58 · 63 · 66). 이름과 상관없이 IoU 0.7(기본값) 넘게 겹치면 확신 높은
+        # 하나만 남긴다. 노트북 위 휴대폰처럼 큰 박스 안의 작은 물건은 IoU 가 낮아 남는다(#266).
+        # tools/auto_label.py 의 초안 라벨도 같은 옵션을 쓴다.
+        result = self.model.predict(
+            image, conf=self.conf_threshold, agnostic_nms=True, verbose=False
+        )[0]
         boxes = result.boxes
         # 텐서를 그대로 BBox 에 넣으면 DB 에 저장할 때 터진다. tolist() 로 float 로 바꾼다.
         detections = [
