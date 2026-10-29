@@ -713,6 +713,7 @@
 
   // 호출 버튼 · 스페이스바 = "자비서"라고 부른 것(읽는 중이면 끼어들기)
   async function listen() {
+    camWake(); // 부른 순간 바로 고해상도로(카메라가 바뀌는 데 잠깐 걸린다)
     if (voiceMode) {
       fetch("/api/voice/call", { method: "POST" }); // 듣기 · 읽기는 서버가 PC 마이크로 한다
       return;
@@ -742,18 +743,25 @@
     listen();
   });
 
-  askForm.addEventListener("submit", (e) => {
+  askForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const q = askInput.value.trim();
     if (!q || busy) return;
     askInput.value = "";
     stopDemo();
+    // 대기(저해상도) 중이면 호출 설정으로 바꾸고 새 장면이 들어온 뒤에 찍는다.
+    // 저해상도 장면으로는 성분표 글자 · 바코드를 못 읽는다
+    if (camMode !== "active" && feed.dataset.cam === "on") {
+      await setCamMode("active");
+      await new Promise((ok) => setTimeout(ok, CAM_SETTLE_MS));
+    }
     if (link?.ask(q, grabFrame())) {
       setState("processing", { stages: ["done", "run", "off", "off", "off"] });
       setText("#reason-q", `“${q}”`);
-      return;
+      return; // 대기로 돌아가는 것은 서버 알림(result)이 한다
     }
-    ask(q, grabFrame(), 0);
+    await ask(q, grabFrame(), 0);
+    camRest();
   });
 
   /* ------------------------------------------------------------------------
@@ -768,6 +776,79 @@
   const camRetry = $("#cam-retry");
   const camToggle = $("#cam-toggle");
   let camStream = null;
+
+  /* 카메라 모드 — "자비서"를 부르기 전에는 낮은 해상도 · 낮은 Hz 로 아껴 두었다가(대기),
+     부르면 높은 해상도 · 15Hz 로 바꾼다(호출). 대답이 끝나고 CAM_IDLE_HOLD_MS 뒤 대기로 돌아간다.
+     이어 묻기 · 되묻기는 그 사이에 다시 wake 가 와서 호출 그대로다.
+     카메라 · 해상도 · Hz 는 환경설정 '카메라'에서 고르고 이 브라우저에 저장한다.
+     Hz 는 카메라가 내는 초당 장면 수이자 팀 음성 모드에서 서버로 보내는 간격이다(feedFrames).
+     카메라가 그 값을 못 내면 브라우저가 가장 가까운 값으로 연다(ideal). */
+  const CAM_DEFAULT = {
+    deviceId: "",
+    saver: true,
+    idle: { res: "640x360", hz: 5 },
+    active: { res: "1920x1080", hz: 15 },
+  };
+  const savedCam = store.get("jarviseo.camera", {});
+  const camCfg = {
+    ...CAM_DEFAULT,
+    ...savedCam,
+    idle: { ...CAM_DEFAULT.idle, ...(savedCam.idle || {}) },
+    active: { ...CAM_DEFAULT.active, ...(savedCam.active || {}) },
+  };
+  const CAM_IDLE_HOLD_MS = 4000;
+  // 해상도를 바꾼 뒤 새 크기의 장면이 들어오기까지 기다리는 시간(입력창 질문에서 찍기 전)
+  const CAM_SETTLE_MS = 400;
+  let camMode = "idle";
+  let camIdleTimer = null;
+
+  // 절전을 끄면 늘 호출 설정으로 연다
+  const camProfile = (mode = camMode) => (camCfg.saver ? camCfg[mode] : camCfg.active);
+  const camSize = (res, caps = {}) => {
+    if (res === "max") return [Math.min(caps.width?.max || 1920, 3840), Math.min(caps.height?.max || 1080, 2160)];
+    return res.split("x").map(Number);
+  };
+  const camConstraints = (p, caps) => {
+    const [w, h] = camSize(p.res, caps);
+    // crop-and-scale: 카메라가 30Hz 로만 내도 브라우저가 장면을 덜어 낮은 Hz 로 맞춘다
+    return { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: p.hz, max: p.hz }, resizeMode: "crop-and-scale" };
+  };
+  // 팀 음성 모드에서 장면을 서버로 보내는 간격(ms)
+  const frameGapMs = () => Math.round(1000 / Math.max(1, camProfile().hz));
+
+  const showCamSpec = (track) => {
+    const s = track.getSettings();
+    const label = camCfg.saver ? (camMode === "active" ? "호출" : "대기") : "고정";
+    $("#feed-spec").innerHTML =
+      `<span>${s.width || "—"} × ${s.height || "—"}</span><span>${s.frameRate ? Math.round(s.frameRate) : "—"} FPS · ${label}</span>`;
+  };
+
+  async function setCamMode(mode) {
+    clearTimeout(camIdleTimer);
+    camIdleTimer = null;
+    camMode = mode;
+    const track = camStream?.getVideoTracks()[0];
+    if (!track) return;
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    try {
+      await track.applyConstraints(camConstraints(camProfile(mode), caps));
+    } catch (err) {
+      console.warn("[camera] 해상도 · Hz 를 바꾸지 못함", mode, err);
+    }
+    console.info("[camera]", mode, track.getSettings());
+    showCamSpec(track);
+  }
+  // "자비서"를 들었다(호출어 · 버튼 · 서버 알림). 이미 호출이면 대기로 돌아가는 것만 멈춘다
+  const camWake = () => {
+    if (camMode !== "active") setCamMode("active");
+    else clearTimeout(camIdleTimer);
+  };
+  // 턴이 끝났다. 잠시 뒤 대기로(바로 이어 묻거나 되물으면 그대로 호출)
+  const camRest = () => {
+    if (!camCfg.saver || camMode === "idle") return;
+    clearTimeout(camIdleTimer);
+    camIdleTimer = setTimeout(() => setCamMode("idle"), CAM_IDLE_HOLD_MS);
+  };
 
   // 헤더 버튼: 켜져 있으면 '끄기', 꺼져 있으면 '켜기'
   const syncCamToggle = () => {
@@ -805,20 +886,30 @@
     setText("#feed-tag", "CONNECTING");
     syncCamToggle();
 
-    // 휴대폰은 뒤 카메라(가리키는 물건 쪽). 노트북 웹캠은 하나라 facingMode 를 무시한다
-    const video1080 = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+    // 휴대폰은 뒤 카메라(가리키는 물건 쪽). 노트북 웹캠은 하나라 facingMode 를 무시한다.
+    // 환경설정에서 카메라를 골랐으면 그 카메라로 연다. 해상도 · Hz 는 지금 모드(대기 · 호출) 값이다
+    camMode = camCfg.saver ? "idle" : "active";
+    const size = camConstraints(camProfile());
     try {
       try {
-        // ideal 로만 주면 해상도 조건과 겨뤄 휴대폰이 앞 카메라를 고르기도 했다(10/26). 휴대폰은 꼭 뒤로
-        if (!isPhone) throw new Error("not phone");
-        camStream = await navigator.mediaDevices.getUserMedia({
-          video: { ...video1080, facingMode: { exact: "environment" } },
-          audio: false,
-        });
+        if (camCfg.deviceId) {
+          camStream = await navigator.mediaDevices.getUserMedia({
+            video: { ...size, deviceId: { exact: camCfg.deviceId } },
+            audio: false,
+          });
+        } else {
+          // ideal 로만 주면 해상도 조건과 겨뤄 휴대폰이 앞 카메라를 고르기도 했다(10/26). 휴대폰은 꼭 뒤로
+          if (!isPhone) throw new Error("not phone");
+          camStream = await navigator.mediaDevices.getUserMedia({
+            video: { ...size, facingMode: { exact: "environment" } },
+            audio: false,
+          });
+        }
       } catch (err) {
         if (err.name === "NotAllowedError") throw err;
+        // 고른 카메라가 빠졌거나 휴대폰이 아니면 기본 카메라로
         camStream = await navigator.mediaDevices.getUserMedia({
-          video: { ...video1080, facingMode: { ideal: "environment" } },
+          video: { ...size, facingMode: { ideal: "environment" } },
           audio: false,
         });
       }
@@ -839,24 +930,12 @@
     video.srcObject = camStream;
     feed.dataset.cam = "on";
 
+    // 열고 나서 카메라가 낼 수 있는 범위(최대 해상도 등)를 알게 되면 지금 모드 값으로 다시 맞춘다.
     // 'ideal 1920×1080' 만 주면 1080p 를 지원하는 웹캠도 720p 로 열리는 일이 있다.
-    // 카메라가 낼 수 있는 최대 해상도를 읽어 다시 요청한다(성분표 글자가 그만큼 커진다). 4K 까지만.
+    await setCamMode(camMode);
     const caps = track.getCapabilities ? track.getCapabilities() : {};
-    const maxW = Math.min(caps.width?.max || 0, 3840);
-    const maxH = Math.min(caps.height?.max || 0, 2160);
-    if (maxW && maxH && maxW * maxH > (track.getSettings().width || 0) * (track.getSettings().height || 0)) {
-      try {
-        await track.applyConstraints({ width: { ideal: maxW }, height: { ideal: maxH } });
-      } catch (err) {
-        console.warn("최대 해상도로 바꾸지 못함", err);
-      }
-    }
-
-    const s = track.getSettings();
-    const maxNote = maxW && maxH && maxW * maxH > s.width * s.height ? ` <small>(최대 ${maxW} × ${maxH})</small>` : "";
-    $("#feed-spec").innerHTML =
-      `<span>${s.width || "—"} × ${s.height || "—"}${maxNote}</span><span>${s.frameRate ? Math.round(s.frameRate) : "—"} FPS</span>`;
-    console.info("카메라", track.label, "설정", s, "최대", caps.width, caps.height);
+    console.info("카메라", track.label, "설정", track.getSettings(), "최대", caps.width, caps.height);
+    listCameras();
     setText("#feed-tag", "LIVE");
     setText("#cam-state", "켜짐");
     setText("#cam-name", track.label || "CAMERA");
@@ -899,6 +978,59 @@
   });
   window.addEventListener("pagehide", stopCamera);
 
+  /* 환경설정 '카메라' — 카메라 고르기 · 호출 전 절전 · 대기/호출 해상도와 Hz */
+  const camDevice = $("#cam-device");
+  const camSaver = $("#cam-saver");
+  const camPick = {
+    idle: { res: $("#cam-idle-res"), hz: $("#cam-idle-hz") },
+    active: { res: $("#cam-active-res"), hz: $("#cam-active-hz") },
+  };
+  // 카메라 이름은 권한을 받은 뒤에야 보인다. 카메라를 켠 뒤 · 장치가 바뀔 때 다시 읽는다
+  async function listCameras() {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+    const keep = camCfg.deviceId;
+    camDevice.replaceChildren(new Option("기본 카메라", ""));
+    cams.forEach((d, i) => camDevice.append(new Option(d.label || `카메라 ${i + 1}`, d.deviceId)));
+    camDevice.value = cams.some((d) => d.deviceId === keep) ? keep : "";
+  }
+  navigator.mediaDevices?.addEventListener?.("devicechange", listCameras);
+
+  const syncCamPrefs = () => {
+    camSaver.checked = camCfg.saver;
+    $("#cam-saver-state").textContent = camCfg.saver ? "켜짐" : "꺼짐";
+    $("#cam-idle-field").hidden = !camCfg.saver;
+    for (const mode of ["idle", "active"]) {
+      camPick[mode].res.value = camCfg[mode].res;
+      camPick[mode].hz.value = String(camCfg[mode].hz);
+    }
+  };
+  const saveCamPrefs = () => {
+    store.set("jarviseo.camera", camCfg);
+    syncCamPrefs();
+  };
+  camDevice.addEventListener("change", () => {
+    camCfg.deviceId = camDevice.value;
+    saveCamPrefs();
+    if (feed.dataset.cam === "on") startCamera(); // 다른 카메라는 다시 열어야 한다
+  });
+  camSaver.addEventListener("change", () => {
+    camCfg.saver = camSaver.checked;
+    saveCamPrefs();
+    setCamMode(camCfg.saver ? "idle" : "active");
+  });
+  for (const mode of ["idle", "active"]) {
+    const apply = () => {
+      camCfg[mode] = { res: camPick[mode].res.value, hz: Number(camPick[mode].hz.value) };
+      saveCamPrefs();
+      if (camMode === mode || !camCfg.saver) setCamMode(camMode); // 지금 쓰는 설정이면 바로 바꾼다
+    };
+    camPick[mode].res.addEventListener("change", apply);
+    camPick[mode].hz.addEventListener("change", apply);
+  }
+  syncCamPrefs();
+  listCameras();
+
   const browserCamera = () => {
     if (camSupported) {
       camToggle.hidden = false;
@@ -913,7 +1045,7 @@
      호출어 모델 · 시작음 · OpenAI 받아쓰기 · "잠깐만요" · OpenAI 목소리 · 끼어들기 · 되묻기 · 기억.
      서버가 이 PC 의 마이크 · 스피커 · 웹캠을 열고, 페이지는 결과(/api/voice/events)와
      카메라 미리 보기(/video)만 보여 준다. 못 켜면(키 · 장치 · 모델 없음) 브라우저 방식으로 돈다. */
-  // 카메라 장면을 서버의 프레임 버퍼로 보낸다(초당 약 6장, 앞의 것이 가야 다음 것을 보낸다).
+  // 카메라 장면을 서버의 프레임 버퍼로 보낸다(지금 카메라 모드의 Hz, 앞의 것이 가야 다음 것을 보낸다).
   // 서버는 "자비서" 뒤 말을 시작한 순간 근처에서 가장 선명한 장면을 고른다(안경과 같다).
   const FRAME_WIDTH = 1920;
   async function feedFrames() {
@@ -928,11 +1060,13 @@
         const blob = await new Promise((ok) => c.toBlob(ok, "image/jpeg", 0.85));
         if (blob) await fetch("/api/voice/frame", { method: "POST", body: blob }).catch(() => {});
       }
-      await new Promise((ok) => setTimeout(ok, Math.max(0, 160 - (performance.now() - started))));
+      await new Promise((ok) => setTimeout(ok, Math.max(0, frameGapMs() - (performance.now() - started))));
     }
   }
 
   const onVoiceEvent = (e) => {
+    if (e.type === "wake") camWake();
+    else if (["result", "no_question", "error"].includes(e.type)) camRest();
     if (e.type === "wake" && e.follow_up) {
       // 자비서가 되물었다(성분표 다시 보여 주기 등). 호출어 없이 이어 듣는다. 되물은 말은 그대로 둔다
       const asked = $("#core-title").textContent;
@@ -1065,6 +1199,7 @@
         onAudio: (frame, pos) => link?.feed(frame, pos),
         onDetect: (score, clip, pos) => {
           console.info("[wake] 자비서", score.toFixed(3));
+          camWake(); // 서버 알림을 기다리지 않고 바로 고해상도로
           link?.wake({ pos, score }); // 읽는 중 · 생각 중이어도 보낸다. 끼어들기는 서버가 정한다
         },
       });
@@ -1078,6 +1213,7 @@
   // 서버 알림(api/browser_voice.py). 팀 음성 모드 알림과 같은 모양이라 같은 함수로 그린다
   const onLinkEvent = (e) => {
     if (e.type === "rejected") {
+      camRest();
       stopMeter(); // "자비서"가 아니었다(TV 소리 등). 아무 말 없이 다시 기다린다
       setState("idle");
     } else if (e.type === "closed") {
