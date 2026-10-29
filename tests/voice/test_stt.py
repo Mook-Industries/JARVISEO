@@ -242,6 +242,47 @@ def test_listen_after_pause_skips_chime_between_wake_word_and_question(monkeypat
         assert utterance.started_at == detected - stt.WAKE_LAG_SEC  # 호출어 끝으로 잡혔다
 
 
+def silence_then_question(gap: float):
+    """조용함 gap 초 뒤 질문("자비서"를 뺀 부분) · 1초 조용함. (소리, 질문 시작 시각)."""
+    with wave.open(str(DATA / "jarviseo_question.wav"), "rb") as f:
+        voice = np.frombuffer(f.readframes(f.getnframes()), dtype="<i2")
+    rng = np.random.default_rng(0)
+
+    def quiet(sec: float) -> np.ndarray:
+        return rng.normal(0, 20, round(sec * SAMPLE_RATE)).astype(np.int16)
+
+    # "자비서"(0~0.6초) · 쉼 뒤 질문은 1.2초(19200샘플)부터다
+    return np.concatenate([quiet(gap), voice[19200:], quiet(1.0)]), gap
+
+
+@pytest.mark.parametrize("button", [False, True])
+def test_button_call_waits_for_question_from_press(monkeypatch, button):
+    """호출 버튼이면 누른 순간부터 BUTTON_LISTEN_SEC 동안 질문을 기다린다(#262).
+
+    누르고 1.6초 뒤에 말하면, "자비서" 호출처럼 1.5초 앞부터 첫 듣기 2초를 세는 예전 방식은
+    누른 뒤 0.5초에 듣기가 끝나 질문을 놓친다.
+    """
+    audio, question_at = silence_then_question(gap=3.0)
+    pressed = question_at - 1.6
+    monkeypatch.setattr(stt, "MIC_GATE", MicGate())
+    blocks = [(audio[i : i + BLOCK], i / SAMPLE_RATE) for i in range(0, len(audio) - BLOCK, BLOCK)]
+    client = FakeClient("이거 뭐야?")
+
+    with MicStream(source=blocks, history_sec=len(audio) / SAMPLE_RATE + 1) as mic:
+        s = stt.SpeechToText(mic=mic, client=client)
+        if button:
+            s.mark_button(pressed)
+        utterance = s.listen(timeout=2.0, since=pressed)
+
+    if button:
+        assert utterance.text == "이거 뭐야?"
+        assert utterance.started_at == pytest.approx(question_at, abs=0.2)
+        assert s._buttons == set()  # 한 번 쓰면 지운다
+    else:
+        assert utterance is None
+        assert client.requests == []
+
+
 @pytest.mark.parametrize(
     ("raw", "want"),
     [

@@ -262,6 +262,8 @@
   // 쓰게 해서, 한 번 더 열면 다른 쪽이 소리를 못 받는다(10/26).
   const VOICE_FLOOR = 0.02; // RMS 문턱. 방 소음은 이 아래, 말소리는 0.05~0.3
   const isPhone = window.matchMedia("(pointer: coarse)").matches;
+  // 휴대폰에서도 "자비서"를 들을지(#262). 환경설정에서 끄면 예전처럼 호출 버튼으로만 부른다
+  const phoneWakeOn = () => store.get("jarviseo.phoneWake", true);
   const meter = { ctx: null, stream: null, raf: 0 };
   const flatWave = () => waveBars.forEach((b) => (b.style.height = "2px"));
   const drawLevel = (rms) => {
@@ -1014,7 +1016,8 @@
      - 호출되면 직전 4초와 그 턴 동안의 소리 · 장면만 서버로 간다(voicelink.js). 서버가 노트북과
        같은 부품으로 2단계 확인 · 받아쓰기(OpenAI) · "잠깐만요" · 읽기(OpenAI 목소리) · 되묻기 ·
        끼어들기를 하고, 소리를 이 브라우저로 보낸다(api/browser_voice.py)
-     - 휴대폰은 호출어를 켜지 않고(배터리 · 상시 마이크) 호출 버튼을 누를 때 마이크를 연다
+     - 휴대폰도 "자비서"를 듣는다(#262). 휴대폰 브라우저는 화면을 누르기 전에는 마이크 · 소리를
+       못 열어서 처음 누를 때 연다. 환경설정에서 끄면(배터리 · 상시 마이크) 호출 버튼을 누를 때만 연다
      ------------------------------------------------------------------------ */
 
   const ORT_URL = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.wasm.min.mjs";
@@ -1041,7 +1044,7 @@
     return photo ? (await fetch(photo)).blob() : null;
   }
 
-  // 브라우저 마이크를 연다(한 번만). 데스크톱은 "자비서"도 듣고, 휴대폰 · 모델 없는 서버는 소리만 받는다
+  // 브라우저 마이크를 연다(한 번만). "자비서"도 듣는다. 모델 없는 서버 · 휴대폰에서 끈 경우는 소리만 받는다
   let micOpening = null;
   function ensureMic() {
     if (mic) return Promise.resolve(mic);
@@ -1050,7 +1053,7 @@
         fetch("/api/wakeword").then((r) => r.json()),
         import("/wakeword.js"),
       ]);
-      const detect = info.available && !isPhone;
+      const detect = info.available && (!isPhone || phoneWakeOn());
       const ort = detect ? await import(ORT_URL) : null;
       if (ort) ort.env.wasm.numThreads = 1;
       mic = await listenForWakeWord({
@@ -1104,7 +1107,7 @@
       l?.close();
       return off(err.message || err.name);
     }
-    if (isPhone) return idleSub("호출 버튼을 누르면 대화를 시작합니다.");
+    if (isPhone) return startPhoneMic();
     try {
       await ensureMic();
     } catch (err) {
@@ -1117,6 +1120,29 @@
     idleSub("화면을 한 번 누르면 “자비서”를 듣기 시작해요.");
     const resume = () => mic.resume().then(ready);
     ["pointerdown", "keydown"].forEach((ev) => document.addEventListener(ev, resume, { once: true }));
+  }
+
+  // 휴대폰(#262). 안드로이드 · 아이폰 브라우저는 화면을 누르기 전에는 마이크 · 소리를 못 연다.
+  // 그래서 처음 누를 때 마이크를 열고 "자비서"를 듣기 시작한다. 그 첫 터치가 호출 버튼이면
+  // 같은 마이크(ensureMic)로 바로 부른다. 환경설정에서 끄면 예전처럼 호출 버튼으로만 부른다.
+  function startPhoneMic() {
+    const buttonOnly = () => idleSub("호출 버튼을 누르면 대화를 시작합니다.");
+    if (!phoneWakeOn()) return buttonOnly();
+    const ready = () => (mic?.detect ? idleSub("“자비서”라고 부르면 대화를 시작합니다.") : buttonOnly());
+    const open = async () => {
+      try {
+        await ensureMic();
+      } catch (err) {
+        console.info("[wake] 마이크 못 엶:", err.message || err.name);
+        return buttonOnly();
+      }
+      if (!mic.suspended) return ready();
+      // 소리 장치를 연 순간이 터치 처리 밖이었으면(아이폰) 한 번 더 눌러야 소리가 흐른다
+      idleSub("화면을 한 번 더 누르면 “자비서”를 듣기 시작해요.");
+      document.addEventListener("pointerdown", () => mic.resume().then(ready), { once: true });
+    };
+    idleSub("화면을 한 번 누르면 “자비서”를 듣기 시작해요.");
+    document.addEventListener("pointerdown", open, { once: true });
   }
 
   /* ------------------------------------------------------------------------
@@ -1336,6 +1362,12 @@
     store.set("jarviseo.overlay", prefOverlay.checked);
     applyPrefs();
   });
+
+  // 휴대폰에서 "자비서" 듣기(#262). 휴대폰에서만 보이고, 다음에 페이지를 열 때부터 적용한다
+  const prefPhoneWake = $("#pref-phone-wake");
+  $("#phone-wake-row").style.display = isPhone ? "" : "none";
+  prefPhoneWake.checked = phoneWakeOn();
+  prefPhoneWake.addEventListener("change", () => store.set("jarviseo.phoneWake", prefPhoneWake.checked));
   applyPrefs();
 
   /* ------------------------------------------------------------------------

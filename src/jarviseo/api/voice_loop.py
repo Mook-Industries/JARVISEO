@@ -122,10 +122,16 @@ class VoiceLoop:
             collector.refresh_filler()
 
     def call(self) -> None:
-        """화면의 호출 버튼. "자비서"라고 부른 것과 같다(읽는 중이면 끼어들기)."""
-        barge = self._parts.get("barge")
+        """화면의 호출 버튼. "자비서"라고 부른 것과 같다(읽는 중이면 끼어들기).
+
+        다만 질문은 누른 순간부터 기다린다(stt.mark_button, #262).
+        """
+        barge, stt = self._parts.get("barge"), self._parts.get("stt")
         if barge is not None:
-            barge.on_detect(time.monotonic(), 1.0)
+            t = time.monotonic()
+            if stt is not None:
+                stt.mark_button(t)
+            barge.on_detect(t, 1.0)
 
     # ---- 켜고 끄기 ----
 
@@ -203,7 +209,7 @@ class VoiceLoop:
             chime.end()  # 질문 말이 끝나면 종료음(assistant.py 와 같다)
             self.emit("thinking")
 
-        stt = SpeechToText(mic=mic, on_speech_end=speech_end)
+        stt = p["stt"] = SpeechToText(mic=mic, on_speech_end=speech_end)
         deps = GraphDeps(
             stt=stt,
             tts=p["tts"],
