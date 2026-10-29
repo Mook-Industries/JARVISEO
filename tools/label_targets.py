@@ -9,6 +9,7 @@ scripts/run_ablation.py 가 이 파일로 v1~v5 를 채점한다. 정답은 이�
 실행 (레포 맨 위 폴더에서):
     python tools/label_targets.py --session 1               # valid 세션
     python tools/label_targets.py --session 3 --split test  # test 세션 (최종 측정 때만 채점)
+    python tools/label_targets.py --session 5 --split train # 학습용 세션 (v3 시선 분포, 채점 안 함)
 
 키 (발화·라벨을 터미널에 입력한 뒤에는 그림 창을 한 번 클릭해야 키가 다시 먹는다):
     1~9  그 번호 후보가 정답 → 터미널에서 정답 이름 확인(Enter = YOLO 이름)
@@ -46,6 +47,7 @@ LABEL_COLUMNS = [
     "prev_label",
     "excluded",
 ]
+SPLITS = ("valid", "test", "train")
 # 1080p 를 그대로 띄우면 맥북 화면을 넘친다. 보여 주기만 줄이고 좌표는 원본으로 저장한다.
 PREVIEW_WIDTH = 960
 WINDOW_NAME = "label_targets"
@@ -178,7 +180,9 @@ def draw(image: np.ndarray, candidates: list[Detection], status: str) -> tuple[n
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="가리킴 평가셋 정답 표시")
     parser.add_argument("--session", type=int, required=True, help="세션 번호, 예: 1")
-    parser.add_argument("--split", choices=("valid", "test"), default="valid")
+    # train 은 단서를 맞추는 데만 쓴다(v3 시선 분포, tools/fit_gaze.py). run_ablation 은
+    # valid · test 줄만 읽어서 train 줄은 채점 숫자에 섞이지 않는다.
+    parser.add_argument("--split", choices=SPLITS, default="valid")
     parser.add_argument("--raw", type=Path, default=RAW_DIR, help="촬영 사진 최상위 폴더")
     parser.add_argument("--labels", type=Path, default=LABELS_PATH, help="정답을 남길 CSV")
     return parser.parse_args()

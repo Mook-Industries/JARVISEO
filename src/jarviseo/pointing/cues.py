@@ -3,8 +3,9 @@
 후보 물체 하나하나에 "이게 사용자가 가리킨 것일 가능성"을 단서별로 0.0~1.0 점수로 매긴다.
 여기서 나온 점수를 resolver.py 가 가중치로 합친다. ablation 의 축이 이 파일이다.
 
-v1 center(화면 가운데 · 크기) · v2 point(검지 방향) · v4 lang(질문 속 색 · 종류 · 위치 · 크기)
-· v5 ctx(이어 묻기 — 직전 대상과 같은 종류)가 있다. 단서를 추가할 때는 types.CueKind 에 있는
+v1 center(화면 가운데 · 크기) · v2 point(검지 방향) · v3 gaze(가리킨 물건이 화면에 잘 오는 자리)
+· v4 lang(질문 속 색 · 종류 · 위치 · 크기) · v5 ctx(이어 묻기 — 직전 대상과 같은 종류)가 있다.
+단서를 추가할 때는 types.CueKind 에 있는
 이름으로 score_* 함수를 만들고, resolver 의 IMPLEMENTED_CUES 와 단서 → 함수 표에 등록한다.
 
 이 파일의 함수는 딥러닝이 아니다. 좌표 · 낱말표 · 색 범위로 하는 계산이고, 신경망은 detector.py ·
@@ -28,6 +29,8 @@ from jarviseo.types import BBox, CueKind, CueScore, Detection
 __all__ = [
     "CENTER_WEIGHT",
     "COLOR_RANGES",
+    "GAZE_COV",
+    "GAZE_MEAN",
     "POINT_SIGMA_DEG",
     "LangQuery",
     "lang_role",
@@ -35,6 +38,7 @@ __all__ = [
     "refers_back",
     "score_center",
     "score_ctx",
+    "score_gaze",
     "score_lang",
     "score_point",
 ]
@@ -44,6 +48,12 @@ CENTER_WEIGHT = 0.7
 # 손 방향 점수가 얼마나 빨리 떨어지는지. 15° 면 0.61, 30° 면 0.14.
 # valid 에서 σ 10 · 15 · 20 이 같은 결과(13/62)라 가운데 값을 골랐다.
 POINT_SIGMA_DEG = 15.0
+# 시선 단서(v3)의 분포. 학습용 세션 s05(계단 15 · 내 방 15장)에서 가리킨 물건의 박스 중심을
+# 사진 너비 · 높이로 나눈 0~1 좌표의 평균 · 공분산이다. tools/fit_gaze.py 가 찍은 값을
+# 그대로 붙였다. 바꿀 때는 손으로 고치지 말고 그 도구로 다시 뽑는다.
+# valid · test 로는 맞추지 않는다.
+GAZE_MEAN = (0.5324, 0.4820)
+GAZE_COV = ((0.0114, -0.0018), (-0.0018, 0.0157))
 
 # --- 말 단서(v4)의 낱말표 ------------------------------------------------------------
 # 색 이름 → 영어. 관형형("노란") · 명사형("노랑") · "…색"을 다 적는다.
@@ -146,6 +156,35 @@ def score_point(candidates: list[Detection], ray: Ray) -> list[CueScore]:
         angle = angle_to(ray, d.bbox.center)
         score = 1.0 if angle is None else math.exp(-0.5 * (angle / POINT_SIGMA_DEG) ** 2)
         scores.append(CueScore(kind=CueKind.POINT, score=score, detail={"angle": angle}))
+    return scores
+
+
+def score_gaze(candidates: list[Detection], frame_size: tuple[int, int]) -> list[CueScore]:
+    """가리킨 물건이 화면에 잘 오는 자리(GAZE_MEAN 둘레)에 가까울수록 높은 점수. 후보와 같은 순서.
+
+    안경에 눈 추적 장치가 없어서, 머리 방향을 따라가는 카메라 화면의 자리로 시선을 대신한다.
+    가운데 단서(v1)는 사진 정가운데에서 곧게 떨어지는 정해 둔 규칙이고, 이것은 학습용 세션에서 잰
+    분포다. 평균이 가운데에서 비켜 있을 수 있고 가로 · 세로 퍼짐이 다르다.
+    점수는 마할라노비스 거리 d(퍼짐을 감안한 거리)의 가우시안 exp(-d²/2) 라 평균 자리면 1 이다.
+    손 단서와 달리 기권하지 않는다. 사진만 있으면 늘 매길 수 있다.
+    """
+    width, height = frame_size
+    (sxx, sxy), (syx, syy) = GAZE_COV
+    det = sxx * syy - sxy * syx
+    scores = []
+    for d in candidates:
+        cx, cy = d.bbox.center
+        dx, dy = cx / width - GAZE_MEAN[0], cy / height - GAZE_MEAN[1]
+        # 2×2 공분산의 역행렬로 잰 거리의 제곱. 세로로 더 퍼져 있으면
+        # 세로로 같은 만큼 벗어나도 덜 깎인다.
+        distance_sq = (syy * dx * dx - (sxy + syx) * dx * dy + sxx * dy * dy) / det
+        scores.append(
+            CueScore(
+                kind=CueKind.GAZE,
+                score=math.exp(-0.5 * distance_sq),
+                detail={"distance": math.sqrt(distance_sq)},
+            )
+        )
     return scores
 
 

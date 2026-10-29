@@ -95,6 +95,17 @@ class SpeechToText:
         # 마지막 받아쓰기 원문. listen() 은 정리한 질문을 돌려주고, 원문은 여기 남긴다
         # (turn_voice.stt_raw_text 용).
         self.last_raw_text: str | None = None
+        # 화면 호출 버튼으로 부른 시각들(mark_button). 그 호출의 listen(since=…)은 따로 듣는다.
+        self._buttons: set[float] = set()
+
+    def mark_button(self, t: float) -> None:
+        """t(호출 시각)는 "자비서"가 아니라 화면 호출 버튼으로 부른 것이다(#262).
+
+        그 호출의 ``listen(since=t)`` 은 호출 앞을 거슬러 읽지 않고 누른 순간부터 읽으며,
+        질문이 시작되기를 ``config.BUTTON_LISTEN_SEC`` 초까지 기다린다. 호출을 넘기기(on_detect)
+        전에 부른다.
+        """
+        self._buttons.add(t)
 
     def listen(
         self,
@@ -156,6 +167,14 @@ class SpeechToText:
         if since is None:
             blocks = gate.mute(self.mic.blocks())
             speech = record_speech(blocks, on_speech_start, timeout=timeout, ignore=ours, stop=stop)
+            return question(speech)
+        if since in self._buttons:
+            # 화면 호출 버튼(#262). "자비서"를 말하지 않았으니 앞을 거슬러 읽지 않고, 누른 순간부터
+            # 질문이 시작되기를 기다린다. 호출어 뒤처리(감지 직후 끝난 녹음 · 호출어만)도 없다.
+            self._buttons.discard(since)
+            blocks = gate.mute(self.mic.blocks(since=since))
+            wait = max(timeout, config.BUTTON_LISTEN_SEC)
+            speech = record_speech(blocks, on_speech_start, timeout=wait, ignore=ours, stop=stop)
             return question(speech)
 
         floor = since - WAKE_LAG_SEC

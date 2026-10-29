@@ -48,6 +48,9 @@ class FakeSpeechToText:
         self.last_latency_ms: float | None = None
         self.last_raw_text: str | None = None
 
+    def mark_button(self, t: float) -> None:
+        """실제는 호출 버튼을 누른 순간부터 듣는다(#262). 가짜는 할 일이 없다."""
+
     def listen(
         self,
         on_speech_start: Callable[[float], None] | None = None,

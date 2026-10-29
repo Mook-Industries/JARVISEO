@@ -547,6 +547,52 @@
                 </div>
                 <p class="fine">알러지 입력 내용은 전송하거나 저장하지 않으며, 페이지를 새로고침하면 초기화됩니다.</p>
               </section>
+
+              <section class="pref-card">
+                <div class="pref-card-head">
+                  <span class="no">03</span>
+                  <h2>카메라</h2>
+                  <p>연결할 카메라와 해상도 · 초당 장면 수(Hz)를 고르세요.</p>
+                </div>
+
+                <div class="field">
+                  <div class="field-head"><label for="cam-device">카메라</label></div>
+                  <span class="select is-wide">
+                    <select id="cam-device"><option value="">기본 카메라</option></select>
+                  </span>
+                </div>
+
+                <div class="divider"></div>
+
+                <div class="field">
+                  <div class="field-head"><span class="label" id="cam-saver-label">호출 전 절전 모드</span></div>
+                  <p class="field-desc">“자비서”를 부르기 전에는 낮은 해상도 · 낮은 Hz 로 기다리다가, 부르면 호출 설정으로 바꿔요.</p>
+                  <div class="switch-row">
+                    <span id="cam-saver-state">켜짐</span>
+                    <span class="switch">
+                      <input type="checkbox" id="cam-saver" role="switch" aria-labelledby="cam-saver-label" checked>
+                      <span></span>
+                    </span>
+                  </div>
+                </div>
+
+                <div class="field" id="cam-idle-field">
+                  <div class="field-head"><label for="cam-idle-res">대기 (호출 전)</label></div>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap">
+                    <span class="select"><select id="cam-idle-res" aria-label="대기 해상도"><option value="640x360">640 × 360</option><option value="1280x720">1280 × 720 (HD)</option><option value="1920x1080">1920 × 1080 (FHD)</option><option value="max">카메라 최대</option></select></span>
+                    <span class="select"><select id="cam-idle-hz" aria-label="대기 Hz"><option value="1">1Hz</option><option value="2">2Hz</option><option value="5">5Hz</option><option value="10">10Hz</option></select></span>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <div class="field-head"><label for="cam-active-res">호출 (“자비서” 뒤)</label></div>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap">
+                    <span class="select"><select id="cam-active-res" aria-label="호출 해상도"><option value="640x360">640 × 360</option><option value="1280x720">1280 × 720 (HD)</option><option value="1920x1080">1920 × 1080 (FHD)</option><option value="max">카메라 최대</option></select></span>
+                    <span class="select"><select id="cam-active-hz" aria-label="호출 Hz"><option value="10">10Hz</option><option value="15">15Hz</option><option value="24">24Hz</option><option value="30">30Hz</option></select></span>
+                  </div>
+                </div>
+                <p class="fine">이 브라우저에 저장되고 바로 적용돼요. 카메라가 못 내는 값은 가장 가까운 값으로 열려요.</p>
+              </section>
             </div>
 
             <div class="pref-rows">
@@ -570,7 +616,17 @@
                   <span></span>
                 </span>
               </div>
-              <p class="fine">HUD 애니메이션과 대상 검출 표시만 이 브라우저에 저장됩니다.</p>
+              <div class="pref-row" id="phone-wake-row">
+                <div>
+                  <h3 id="phone-wake-label">휴대폰에서 ‘자비서’ 듣기</h3>
+                  <p>휴대폰에서도 ‘자비서’라고 부르면 대화를 시작합니다. 끄면 호출 버튼으로만 부르고 배터리를 덜 씁니다. 다음에 페이지를 열 때 적용돼요.</p>
+                </div>
+                <span class="switch">
+                  <input type="checkbox" id="pref-phone-wake" role="switch" aria-labelledby="phone-wake-label" checked>
+                  <span></span>
+                </span>
+              </div>
+              <p class="fine">HUD 애니메이션 · 대상 검출 표시 · 휴대폰 ‘자비서’ 듣기는 이 브라우저에 저장됩니다.</p>
             </div>
           </div>
         </article>

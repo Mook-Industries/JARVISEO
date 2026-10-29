@@ -10,6 +10,7 @@ resolve_target 으로 고른 박스를 정답 박스와 비교한다(IoU 0.5 이
 v2+C 는 단서가 아니라 대비책(손 우선 크롭, #205)을 v2 위에 얹은 임시 버전이다. 손 크롭은 박스를
 고르지 않아 IoU 로는 맞을 수 없으므로, 정답률 · 확신 오답률에 섞지 않고 크롭 담김으로만 센다.
 v2+lang · v2+lang+ctx 는 시선(v3) 없이 말 단서 · 이어 묻기 단서를 v2 위에 쌓은 임시 버전이다(#166).
+v3 이 생긴 뒤(#245)에도 남긴다. 실제 비서의 기본값(시선 · 이어 묻기는 꺼 둠)이 v2+lang 이다.
 고르는 말 · 직전 대상이 든 발화는 말 · 맥락 세션(s04)에 있어서 --sessions 4 로 따로 잰다.
 v2+lang+C 는 실제 비서와 같은 설정이다(말 단서 + 손 우선 크롭, 이어 묻기는 꺼 둔 채, #266).
 검출은 가중치마다 사진마다 한 번만 해서, 버전 차이가 단서에서만 나오게 한다.
@@ -26,6 +27,8 @@ STT · VLM 없이 촬영 때 적은 발화로 채점해서, 가리킴 모델 실
     python scripts/run_ablation.py --weights yolov8n.pt data/models/detector_r1.pt --note "R0 vs R1"
     python scripts/run_ablation.py --sessions 4 --variants v2 v2+lang v2+lang+ctx \
         --weights yolov8n.pt data/models/detector_r2.pt --note "말 · 맥락 세션"
+    python scripts/run_ablation.py --variants v2 v3 v4 v5 \
+        --weights yolov8n.pt data/models/detector_r2.pt --note "시선 단서"
     python scripts/run_ablation.py --variants v2 v2+lang+C --note "실제 설정" \
         --weights yolov8n.pt data/models/detector_r2.pt data/models/detector_r3.pt
     python scripts/run_ablation.py --split test --note "최종"     # 10/24 최종 측정 때만
@@ -65,8 +68,8 @@ VARIANTS: dict[str, frozenset[CueKind]] = {
     "v5": frozenset(CueKind),
     # 임시 버전: 단서는 v2 그대로, 선 위에 후보가 없으면 손 우선 크롭(v2+lang 과 같은 방식의 이름).
     "v2+C": frozenset({CueKind.CENTER, CueKind.POINT}),
-    # 임시 버전: v3(시선)이 없어 누적 버전 v4 · v5 가 건너뛰어지므로, 그 사이엔 v2 위에 쌓아 잰다
-    # (10/22 결정 ④). 말 단서는 말 · 맥락 세션(s04, --sessions 4)에서 잰다.
+    # 임시 버전: v3(시선)이 없던 동안 누적 버전 v4 · v5 대신 v2 위에 쌓아 쟀다(10/22 결정 ④).
+    # v3 이 생긴 뒤(#245)에도 남긴다 — 시선을 꺼 둔 실제 비서의 기본값이 v2+lang 이라 비교 기준이다.
     "v2+lang": frozenset({CueKind.CENTER, CueKind.POINT, CueKind.LANG}),
     "v2+lang+ctx": frozenset({CueKind.CENTER, CueKind.POINT, CueKind.LANG, CueKind.CTX}),
     # 임시 버전: 실제 비서 설정(가운데 + 손 + 말 + 손 우선 크롭). 공식 표에 서버 · 발표 설정 줄이

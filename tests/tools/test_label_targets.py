@@ -150,3 +150,10 @@ def test_chosen_label_uses_yolo_name_when_input_is_blank():
 def test_chosen_label_prefers_typed_name_and_strips_spaces():
     """박스는 맞고 이름이 틀린 후보(안경 케이스를 remote 로 부름)는 입력한 이름으로 남긴다."""
     assert label_targets.chosen_label("remote", "  glasses case ") == "glasses case"
+
+
+def test_split_accepts_train_for_gaze_session():
+    """학습용 세션(s05, v3 시선 분포)을 train 으로 표시한다. valid 로 두면 채점에 섞인다."""
+    assert label_targets.SPLITS == ("valid", "test", "train")
+    row = label_targets.make_row("s05/a.jpg", 5, "train", "이거 뭐야?", BBox(1, 2, 3, 4), "cup")
+    assert row["split"] == "train"
