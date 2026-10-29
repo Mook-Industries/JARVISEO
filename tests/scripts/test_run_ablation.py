@@ -1,4 +1,4 @@
-"""가리킴 ablation — 정답 표시 읽기(세션 고르기), 8분류 채점, v1 · v2 채점, v2+C(손 우선 크롭),
+"""가리킴 ablation — 정답 표시 읽기(세션 고르기), 8분류 채점, v1 · v2 · v3 채점, v2+C(손 우선 크롭),
 v2+lang · v2+lang+ctx(말 · 이어 묻기 임시 버전, 색은 raw 사진에서),
 확신 오답 · 크롭 담김, 지표, DB 기록, 실행 조건(커밋 · 가중치 지문 · 세션) 기록과
 같은 조건끼리만 비교, 가중치끼리 후보 적중 변화.
@@ -135,8 +135,16 @@ def test_load_samples_without_file_is_empty(tmp_path):
     assert run_ablation.load_samples(tmp_path / "none.csv", "valid", [1, 2]) == []
 
 
-def test_unimplemented_variants_are_skipped():
-    """지금 구현된 단서는 center · point 라 v1 · v2 만 돌고 v3~v5 는 건너뛴다."""
+def test_unimplemented_variants_are_skipped(monkeypatch):
+    """구현 안 된 단서가 든 버전은 건너뛴다.
+
+    지금은 다섯 단서가 다 있어 v1~v5 가 모두 돈다(#245). 시선 단서를 뺀 표로 바꾸면 v3 이 들어간
+    누적 버전 v5 가 빠진다.
+    """
+    assert run_ablation.implemented_variants(["v1", "v3", "v5"]) == (["v1", "v3", "v5"], [])
+
+    without_gaze = run_ablation.IMPLEMENTED_CUES - {CueKind.GAZE}
+    monkeypatch.setattr(run_ablation, "IMPLEMENTED_CUES", without_gaze)
     ready, skipped = run_ablation.implemented_variants(["v1", "v2", "v5"])
     assert (ready, skipped) == (["v1", "v2"], ["v5"])
 
@@ -378,6 +386,24 @@ def test_evaluate_v2c_without_hand_still_asks():
     """손을 못 찾은 사진에서는 손 크롭이 없다. 후보가 0개면 되묻는다(손 없이는 자를 곳이 없다)."""
     row = _evaluate_one("v2+C", _sample(has_hand=True), [], None)
     assert (row["outcome"], row["hand_crop"], row["clarified"]) == ("후보 없어 되물음", False, True)
+
+
+# --- 시선 단서 (v3, #245) ---------------------------------------------------------------------
+
+
+def test_evaluate_v3_scores_gaze_without_hand():
+    """v3 은 손이 없어도 시선 점수를 낸다. 가운데 근처 두 컵에서 v2 는 되묻고 v3 은 가운데 쪽을
+    단정한다. 정답이 오른쪽 컵이면 같은 단정이 확신 오답이 된다(기준을 못 넘은 까닭)."""
+    near_right = BBox(1110, 440, 1310, 640)
+    candidates = [_det(GT), _det(near_right)]
+
+    v2 = _evaluate_one("v2", _sample(gt=GT), candidates, None)
+    hit = _evaluate_one("v3", _sample(gt=GT), candidates, None)
+    miss = _evaluate_one("v3", _sample(gt=near_right), candidates, None)
+
+    assert v2["clarified"]
+    assert (hit["outcome"], hit["correct"]) == ("정답", True)
+    assert (miss["correct"], miss["confident_error"]) == (False, True)
 
 
 # --- 말 · 이어 묻기 임시 버전 (v2+lang · v2+lang+ctx, #166) ------------------------------------

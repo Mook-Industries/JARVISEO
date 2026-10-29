@@ -6,7 +6,8 @@
 |---|---|
 | `device_check/` | 카메라·마이크가 제대로 물렸는지 확인하는 5종 |
 | `capture_scenes.py` | 가리킴 평가 장면 촬영 — 안경 카메라로 찍고, 그때 한 말을 `manifest.csv` 에 같이 남긴다 |
-| `label_targets.py` | 가리킴 정답 표시 — 찍은 사진에 YOLO 후보를 번호로 띄우고, 정답을 골라(없으면 박스를 그려) `labels.csv` 에 남긴다 |
+| `label_targets.py` | 가리킴 정답 표시 — 찍은 사진에 YOLO 후보를 번호로 띄우고, 정답을 골라(없으면 박스를 그려) `labels.csv` 에 남긴다. `--split` valid · test · train |
+| `fit_gaze.py` | v3 시선 분포 — 학습용(train) 세션의 정답 박스 중심(0~1 좌표)으로 평균 · 공분산을 맞추고, `pointing/cues.py` 에 붙일 상수 두 줄을 찍는다 |
 | `extract_frames.py` | 검출기 학습 사진 — 안경 카메라 영상에서 3초에 1장(`--every`, 기본 3) 뽑고, 거의 같은 장면은 버린다 |
 | `auto_label.py` | 검출기 학습 라벨 — 선생 모델 비교(`compare`), 박스 초안(`label`), 사람 검수 작업(`review`), 회차별 학습 묶음(`build`) |
 
@@ -31,6 +32,10 @@ python tools/capture_scenes.py --session 1 --place desk   # 1. 촬영: 스페이
 python tools/label_targets.py --session 1                 # 2. 정답 표시 (test 세션은 --split test)
 python scripts/run_ablation.py --note "v1 기준선"          # 3. v1~v5 채점 · 기록
 ```
+
+- **학습용 세션(train)은 채점하지 않고 단서를 맞추는 데만 쓴다.** s05(계단 15 · 내 방 15)는 `--session 5 --split train` 으로 표시하고,
+  `python tools/fit_gaze.py` 로 시선 분포(v3)를 맞춘다. `run_ablation.py` 는 valid · test 줄만 읽어서 train 줄은 숫자에 섞이지 않는다.
+  채점할 사진(valid · test)으로 단서를 맞추면 그 단서의 숫자가 실력보다 부풀려진다.
 
 - **valid/test 는 세션 단위로 나눈다.** 같은 자리에서 연달아 찍은 사진은 거의 같아서, 사진 단위로 섞으면 test 가 valid 를 베낀 셈이 된다.
   세션 1·2 는 valid, 3 은 test. test 는 최종 측정 전까지 채점하지 않는다. 세션 99 는 연습·지연 측정용이다.
