@@ -193,6 +193,49 @@ def test_pick_uses_given_threshold():
     assert pick_pointing_hand([hand], min_gap_deg=5.0) is hand
 
 
+class _FixedProb:
+    """손마다 정해 둔 확률을 주는 가짜 분류기(#223)."""
+
+    def __init__(self, probs: dict[int, float], threshold: float = 0.5) -> None:
+        self.probs, self.threshold = probs, threshold
+
+    def prob(self, hand: HandPose) -> float:
+        return self.probs[id(hand)]
+
+
+def test_pick_with_classifier_drops_fist_that_rule_passes():
+    """15° 를 넘는 손도 분류기 확률이 낮으면 버린다(주먹 · 브이를 가리킴으로 읽던 문제)."""
+    hand = _hand(other_bend=60.0)
+    assert pick_pointing_hand([hand], classifier=None) is hand
+    assert pick_pointing_hand([hand], classifier=_FixedProb({id(hand): 0.1})) is None
+
+
+def test_pick_with_classifier_takes_hand_rule_rejects():
+    """15° 를 못 넘어도 확률이 문턱 이상이면 고른다."""
+    hand = _hand(other_bend=0.0)
+    assert pick_pointing_hand([hand], classifier=None) is None
+    assert pick_pointing_hand([hand], classifier=_FixedProb({id(hand): 0.9})) is hand
+
+
+def test_pick_with_classifier_prefers_higher_prob_and_needs_direction():
+    """손이 둘이면 확률이 높은 쪽, 방향을 모르는 손은 확률이 높아도 안 고른다."""
+    low, high = _hand(), _hand()
+    no_ray = _hand(base=(100.0, 100.0), tip=(100.0, 100.0))
+    probs = _FixedProb({id(low): 0.6, id(high): 0.8, id(no_ray): 0.99})
+    assert pick_pointing_hand([low, no_ray, high], classifier=probs) is high
+
+
+def test_pick_follows_config_and_falls_back_to_rule(monkeypatch, tmp_path):
+    """플래그를 켜도 가중치 파일이 없으면 15° 규칙으로 판정한다."""
+    from jarviseo.pointing import hand_classifier
+
+    hand_classifier._load.cache_clear()
+    monkeypatch.setattr(config, "ENABLE_HAND_CLASSIFIER", True)
+    monkeypatch.setattr(config, "HAND_CLASSIFIER_PATH", tmp_path / "없음.npz")
+    pointing = _hand(other_bend=60.0)
+    assert pick_pointing_hand([pointing]) is pointing
+
+
 # --- MediaPipe 결과 → HandPose -------------------------------------------------
 
 
