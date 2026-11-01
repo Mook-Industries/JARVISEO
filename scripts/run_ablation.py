@@ -51,7 +51,14 @@ from sqlalchemy import select
 from jarviseo import config
 from jarviseo.memory import EvalRun, EvalSample, MemoryStore
 from jarviseo.pointing.crop import crop_region, hand_crop_region
-from jarviseo.pointing.hands import HandDetector, HandPose, pick_pointing_hand
+from jarviseo.pointing.hand_classifier import HandClassifier, load_default
+from jarviseo.pointing.hands import (
+    HandDetector,
+    HandPose,
+    pick_pointing_hand,
+    pointing_ray,
+    pointing_score,
+)
 from jarviseo.pointing.resolver import IMPLEMENTED_CUES, resolve_target
 from jarviseo.types import BBox, CueKind, Detection, TargetResolution
 
@@ -345,7 +352,7 @@ def package_version(name: str) -> str:
         return "none"
 
 
-def run_conditions(weights: dict, sessions: list[int], conf: float) -> dict:
+def run_conditions(weights: dict, sessions: list[int], conf: float, hand_rule: str = "r0") -> dict:
     """이번 실행을 무엇으로 쟀나. eval_run.metrics["conditions"] 에 들어간다.
 
     ERD 가 원본이라 열을 늘리지 않고 metrics(JSON)에 둔다.
@@ -356,21 +363,39 @@ def run_conditions(weights: dict, sessions: list[int], conf: float) -> dict:
         "weights": weights,
         "sessions": sorted(sessions),
         "conf": conf,
+        "hand_rule": hand_rule,
         "device": f"{platform.system()} {platform.machine()}",
         "ultralytics": package_version("ultralytics"),
     }
 
 
 def same_conditions(old: dict | None, new: dict) -> bool:
-    """같은 가중치(지문) · 같은 세션이면 같은 조건이다.
+    """같은 가중치(지문) · 같은 세션 · 같은 손 판정이면 같은 조건이다.
 
     커밋은 안 본다. 같은 가중치에서 코드를 고친 효과를 보려는 비교다.
     조건 기록이 없는 옛 실행(run 1~3)은 무엇으로 쟀는지 몰라서 비교하지 않는다.
+    손 판정을 안 적은 옛 실행은 15° 규칙(r0)으로 쟀다. 판정을 안 보면 R1 실행이 R0 와
+    "같은 조건"으로 비교돼 분류기 효과가 코드 변화처럼 보인다.
     """
     if not old:
         return False
     same_weights = old.get("weights", {}).get("sha256") == new["weights"]["sha256"]
-    return same_weights and old.get("sessions") == new["sessions"]
+    same_rule = old.get("hand_rule", "r0") == new.get("hand_rule", "r0")
+    return same_weights and same_rule and old.get("sessions") == new["sessions"]
+
+
+# 손 판정 방식(#223). r0 = 15° 규칙, r1 = 학습한 분류기, all = 찾은 손 다 쓰기(비교용, 비서엔 없음)
+HAND_RULES = ("r0", "r1", "all")
+
+
+def choose_hand(
+    found: list[HandPose], rule: str, classifier: HandClassifier | None
+) -> HandPose | None:
+    """찾은 손들 중 손 단서에 쓸 손. all 은 판정 없이 방향을 아는 손 중 굽힘 점수가 가장 높은 손."""
+    if rule == "all":
+        usable = [h for h in found if pointing_ray(h) is not None]
+        return max(usable, key=pointing_score, default=None)
+    return pick_pointing_hand(found, classifier=classifier if rule == "r1" else None)
 
 
 def hit_changes(base: dict[str, bool], other: dict[str, bool]) -> tuple[list[str], list[str]]:
@@ -536,6 +561,11 @@ def main() -> None:
         default=[config.DETECTOR_WEIGHTS],
         help="검출기 가중치. 여러 개면 한 실행에서 나란히 재고 첫 번째와 비교한다",
     )
+    parser.add_argument(
+        "--hand-rule",
+        choices=HAND_RULES,
+        help="가리키는 손 판정. 안 주면 설정을 따른다(손 분류기 플래그가 켜지면 r1)",
+    )
     parser.add_argument("--db", default=config.DATABASE_URL, help="결과를 남길 DB")
     parser.add_argument("--note", default="", help="이번 실행 메모, 예: v2 손 방향 추가")
     parser.add_argument("--out", type=Path, default=POINTING_DIR / "runs", help="사진별 CSV 폴더")
@@ -566,6 +596,13 @@ def main() -> None:
     hand_detector = None
     if any(CueKind.POINT in VARIANTS[v] for v in ready):
         hand_detector = HandDetector()
+    classifier = load_default()
+    hand_rule = args.hand_rule or ("r1" if classifier is not None else "r0")
+    if hand_rule == "r1" and classifier is None:
+        if not config.HAND_CLASSIFIER_PATH.exists():
+            raise SystemExit(f"손 분류기 가중치가 없다: {config.HAND_CLASSIFIER_PATH}")
+        classifier = HandClassifier.from_file(config.HAND_CLASSIFIER_PATH)
+    print(f"손 판정: {hand_rule}")
     # 쓰는 쪽이라 테이블이 없으면 만든다(이미 있으면 아무것도 안 한다).
     store = MemoryStore(database_url=args.db)
     store.init_schema()
@@ -583,7 +620,7 @@ def main() -> None:
             raise SystemExit(f"같은 가중치를 두 번 적었다: {weights} = {same}")
         seen[fingerprint["sha256"]] = weights
         label = weights_label(fingerprint)
-        conditions = run_conditions(fingerprint, sessions, detector.conf_threshold)
+        conditions = run_conditions(fingerprint, sessions, detector.conf_threshold, hand_rule)
 
         # 사진은 가중치마다 다시 읽는다. 1080p 62장을 다 들고 있으면 약 370MB 라
         # 저사양 PC 에 무겁다.
@@ -605,7 +642,7 @@ def main() -> None:
                 if i == 0:
                     hand_detector.detect(image)  # 첫 호출은 모델을 올리느라 느려서 버린다
                 started = time.perf_counter()
-                hands[s["file"]] = pick_pointing_hand(hand_detector.detect(image))
+                hands[s["file"]] = choose_hand(hand_detector.detect(image), hand_rule, classifier)
                 hand_ms.append((time.perf_counter() - started) * 1000)
 
         # 검출은 모든 버전이 같은 결과를 쓰므로 버전 줄마다가 아니라 가중치마다 한 번만 찍는다.
