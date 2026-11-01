@@ -39,7 +39,14 @@ import cv2
 import numpy as np
 
 from jarviseo import config
-from jarviseo.pointing.hands import NUM_LANDMARKS, HandDetector, HandPose, bend_gap_deg, is_pointing
+from jarviseo.pointing.hands import (
+    NUM_LANDMARKS,
+    HandDetector,
+    HandPose,
+    bend_gap_deg,
+    hand_patch,
+    is_pointing,
+)
 
 # 촬영 순서와 같아야 한다. 구간 이름을 이 순서로 붙인다.
 CLASSES = ("point", "hold", "open", "fist", "rest", "other")
@@ -65,9 +72,6 @@ SEGMENT_MIN_SEC, SEGMENT_MAX_SEC = 8.0, 40.0
 SHEET_EVERY_SEC = 2.0
 SHEET_TILE = (192, 108)
 SHEET_COLUMNS = 10
-# 손 사진. 224 는 R2 에 쓸 ImageNet 사전학습 CNN 의 입력 크기, 여백은 손가락 끝이 잘리지 않게.
-CROP_SIZE = 224
-CROP_MARGIN = 0.25
 JPEG_QUALITY = 95
 
 SEGMENTS_COLUMNS = ["video", "place", "person", "cls", "start_sec", "end_sec", "source"]
@@ -185,25 +189,6 @@ def label_for(cls: str, n_hands: int) -> int | None:
     if cls == POSITIVE:
         return 1 if n_hands == 1 else None
     return 0
-
-
-def crop_box(
-    points: Sequence[tuple[float, float]], image_size: tuple[int, int], margin: float = CROP_MARGIN
-) -> tuple[int, int, int, int]:
-    """손 관절을 감싸는 정사각형 (x1, y1, x2, y2). 한 변 = 관절 상자의 긴 변 × (1 + 2 × 여백).
-
-    사진 밖으로 나가면 잘라 내지 않고 안쪽으로 민다. 잘라 내면 정사각이 아니게 돼서
-    224×224 로 줄일 때 손이 찌그러진다. 한 변이 관절 상자보다 크니 밀어도 손은 안에 남는다.
-    """
-    width, height = image_size
-    xs = [p[0] for p in points]
-    ys = [p[1] for p in points]
-    long_side = max(max(xs) - min(xs), max(ys) - min(ys))
-    side = max(1, min(round(long_side * (1 + 2 * margin)), width, height))
-    cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
-    x1 = min(max(round(cx - side / 2), 0), width - side)
-    y1 = min(max(round(cy - side / 2), 0), height - side)
-    return x1, y1, x1 + side, y1 + side
 
 
 def hand_values(hand: HandPose) -> dict[str, object]:
@@ -425,14 +410,10 @@ def run_extract(root: Path, detector: HandDetector) -> None:
             if not hands:
                 rows.append(base)  # 손을 못 찾은 프레임도 남겨 손 검출률을 같은 표에서 센다
                 continue
-            height, width = frame.shape[:2]
             for i, hand in enumerate(hands):
-                x1, y1, x2, y2 = crop_box(hand.landmarks, (width, height))
-                crop = cv2.resize(
-                    frame[y1:y2, x1:x2], (CROP_SIZE, CROP_SIZE), interpolation=cv2.INTER_AREA
-                )
                 name = crop_name(t_sec, i)
-                save_jpg(crops_dir / name, crop)
+                # 실행 때 R2 분류기가 자르는 손 사진과 같은 함수(pointing/hands.py)로 자른다
+                save_jpg(crops_dir / name, hand_patch(frame, hand))
                 row = {
                     **base,
                     "hand_idx": i,
@@ -509,7 +490,7 @@ def main() -> None:
         if args.command == "segments":
             run_segments(args.root)
         elif args.command == "extract":
-            run_extract(args.root, HandDetector())
+            run_extract(args.root, HandDetector(encoder=None))
         else:
             run_summary(args.root)
     except (ValueError, FileNotFoundError) as e:
