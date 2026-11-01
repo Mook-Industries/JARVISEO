@@ -141,3 +141,45 @@ def test_shipped_weights_load():
     loaded = HandClassifier.from_file(config.HAND_CLASSIFIER_PATH)
     assert 0 < loaded.threshold < 1
     assert loaded.weights[0].shape[0] == 63
+
+
+# --- R2 (관절 + 손 사진 특징) -----------------------------------------------------
+
+
+def test_r1_file_reads_as_joints_only():
+    """patch_dim 키가 없는 R1 가중치는 관절만 쓰는 분류기로 읽힌다."""
+    r1 = HandClassifier.from_file(config.HAND_CLASSIFIER_PATH.with_name("hand_r1.npz"))
+    assert r1.patch_dim == 0 and not r1.needs_patch
+
+
+def test_shipped_r2_weights_need_patch():
+    r2 = HandClassifier.from_file(config.HAND_CLASSIFIER_PATH.with_name("hand_r2.npz"))
+    assert r2.patch_dim == 576 and r2.weights[0].shape[0] == 63 + 576
+
+
+def test_vector_appends_patch_feature_and_requires_it():
+    """R2 는 관절 63 뒤에 사진 특징을 붙이고, 특징이 없으면 계산하지 않고 알린다."""
+    clf = HandClassifier(**{**_tiny().__dict__, "patch_dim": 2})
+    pose = _pose(_world())
+    with pytest.raises(ValueError, match="손 사진 특징"):
+        clf.vector(pose)
+    from dataclasses import replace
+
+    with_patch = replace(pose, patch_feature=np.array([7.0, 8.0]))
+    assert list(clf.vector(with_patch)[-2:]) == [7.0, 8.0]
+    assert clf.vector(with_patch).shape == (65,)
+
+
+def test_save_keeps_patch_dim(tmp_path):
+    path = tmp_path / "r2.npz"
+    HandClassifier(**{**_tiny().__dict__, "patch_dim": 576}).save(path)
+    assert HandClassifier.from_file(path).patch_dim == 576
+
+
+def test_patch_encoder_gives_576_features():
+    """실제 MobileNetV3-Small 특징기(torch 있는 곳만, 가중치를 처음엔 내려받는다)."""
+    pytest.importorskip("torchvision")
+    from jarviseo.pointing.hand_classifier import PatchEncoder
+
+    out = PatchEncoder().encode([np.zeros((224, 224, 3), np.uint8)] * 2)
+    assert out.shape == (2, 576)

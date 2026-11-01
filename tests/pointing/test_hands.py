@@ -8,16 +8,20 @@ MediaPipe 없이 관절 좌표와 결과 모양을 직접 만들어 본다.
 import math
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from jarviseo import config
 from jarviseo.pointing.hands import (
+    HAND_PATCH_SIZE,
     HandDetector,
     HandPose,
     angle_to,
+    attach_patch_features,
     bend_deg,
     bend_gap_deg,
     finger_bend,
+    hand_patch_box,
     is_pointing,
     pick_pointing_hand,
     pointing_ray,
@@ -196,6 +200,8 @@ def test_pick_uses_given_threshold():
 class _FixedProb:
     """손마다 정해 둔 확률을 주는 가짜 분류기(#223)."""
 
+    needs_patch = False
+
     def __init__(self, probs: dict[int, float], threshold: float = 0.5) -> None:
         self.probs, self.threshold = probs, threshold
 
@@ -234,6 +240,61 @@ def test_pick_follows_config_and_falls_back_to_rule(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "HAND_CLASSIFIER_PATH", tmp_path / "없음.npz")
     pointing = _hand(other_bend=60.0)
     assert pick_pointing_hand([pointing]) is pointing
+
+
+def test_pick_falls_back_to_rule_when_patch_feature_missing():
+    """R2 분류기인데 손에 사진 특징이 없으면(encoder 없이 찾은 손) 15° 규칙으로 판정한다."""
+    hand = _hand(other_bend=60.0)
+    needs = _FixedProb({id(hand): 0.0})
+    needs.needs_patch = True
+    assert pick_pointing_hand([hand], classifier=needs) is hand
+
+
+# --- 손 사진 (R2, #223) ----------------------------------------------------------
+
+
+def test_patch_box_is_square_with_margin_around_hand():
+    """긴 변 100 × (1 + 2 × 0.25) = 150 정사각, 손 상자 가운데."""
+    x1, y1, x2, y2 = hand_patch_box([(400.0, 300.0), (500.0, 340.0)], (1280, 720))
+    assert x2 - x1 == y2 - y1 == 150
+    assert (x1 + x2) / 2 == 450 and (y1 + y2) / 2 == 320
+
+
+def test_patch_box_shifts_inside_instead_of_cutting():
+    """사진 모서리의 손은 잘라 내지 않고 안쪽으로 밀어 정사각을 지킨다(찌그러짐 방지)."""
+    x1, y1, x2, y2 = hand_patch_box([(1240.0, 690.0), (1280.0, 720.0)], (1280, 720), margin=1.0)
+    assert x2 == 1280 and y2 == 720
+    assert x2 - x1 == y2 - y1 == 120
+    assert x1 <= 1240 and y1 <= 690  # 손은 상자 안에 남는다
+
+
+def test_patch_box_never_larger_than_image():
+    """손이 화면보다 크게 잡혀도 상자는 사진의 짧은 변까지."""
+    assert hand_patch_box([(-100.0, -50.0), (700.0, 500.0)], (640, 360)) == (120, 0, 480, 360)
+
+
+class _ShapeEncoder:
+    """손 사진 크기를 확인하고 손마다 다른 특징을 주는 가짜 특징기."""
+
+    def encode(self, patches):
+        assert all(p.shape == (HAND_PATCH_SIZE, HAND_PATCH_SIZE, 3) for p in patches)
+        return np.arange(len(patches) * 4, dtype=float).reshape(len(patches), 4)
+
+
+def test_attach_patch_features_adds_one_vector_per_hand():
+    """손마다 224×224 손 사진의 특징이 붙고, 관절은 그대로다."""
+    image = np.zeros((720, 1280, 3), np.uint8)
+    hands = [_hand(), _hand(base=(300.0, 400.0), tip=(320.0, 380.0))]
+    out = attach_patch_features(image, hands, _ShapeEncoder())
+    assert [list(h.patch_feature) for h in out] == [[0, 1, 2, 3], [4, 5, 6, 7]]
+    assert out[0].landmarks == hands[0].landmarks
+    assert attach_patch_features(image, [], _ShapeEncoder()) == []
+
+
+def test_hand_pose_with_feature_still_compares():
+    """배열 칸이 있어도 == 가 에러 없이 관절로만 비교한다."""
+    a = _hand()
+    assert attach_patch_features(np.zeros((720, 1280, 3), np.uint8), [a], _ShapeEncoder())[0] == a
 
 
 # --- MediaPipe 결과 → HandPose -------------------------------------------------
