@@ -9,6 +9,7 @@
 | `datasets/wakeword/` | 웨이크워드 녹음과 평가 결과 (`scripts/wakeword/`) |
 | `datasets/pointing/` | 가리킴 평가셋 — 촬영 사진 · 정답 표시 · 채점 결과 (`tools/capture_scenes.py` · `tools/label_targets.py` · `scripts/run_ablation.py`) |
 | `datasets/detector/` | 검출기 파인튜닝 학습셋 — 안경 영상 · 뽑은 사진 · 라벨 · 회차별 묶음 (`tools/extract_frames.py` · `tools/auto_label.py`) |
+| `datasets/hand/` | 가리키는 손 분류기 학습 데이터 — 손 영상 · 구간표 · 손 관절 표 · 손 사진 (`tools/hand_clips.py`) |
 | `models/` | 학습된 가중치 (`.pt`, `.onnx`) |
 | `videos/` | 촬영한 원본 영상 |
 | `eval/` | 작은 평가셋 CSV. 이것만 커밋한다 (`recall_set.csv`: 기억 질문, `scripts/eval_recall.py`) |
@@ -100,6 +101,21 @@ R2 부터 뺐다. 그래서 R1 묶음(`yolo_r1`)과 R2 부터의 묶음은 번�
 - **학습한 가중치는 `models/detector_rN.pt` 로 둔다.** Colab 결과(Drive `detector/runs/rN/weights/best.pt`)를 이 이름으로 받는다.
   회차마다 파일 이름이 다 `best.pt` 라 이름으로 회차를 구별하고, 평가 기록(`run_ablation.py`)에는 내용 지문(sha256 앞 12자리)이 남는다.
   실제 비서에서 시험하려면 `.env` 에 `JARVISEO_DETECTOR_WEIGHTS=data/models/detector_rN.pt`. 비워 두면 사전학습 `yolov8n.pt` 다.
+
+## 손 분류기 학습셋 보관 규칙 (#223)
+
+```
+datasets/hand/
+├── videos/          손 영상. h_<장소>_p<사람>.mov (h_hall_p2.mov) — 장소 3 × 사람 3 = 9개
+├── segments.csv     video · place · person · cls · start_sec · end_sec · source(auto / manual) — 영상마다 손 모양 6줄
+├── review/          자동으로 못 자른 영상의 2초 간격 모음 사진 (손으로 구간을 적을 때 본다)
+├── landmarks.csv    한 줄 = 프레임 하나의 손 하나 — 이름표 · 15° 규칙 판정 · 관절 105칸 (열은 tools/README.md)
+└── crops/<영상>/     손 사진 224×224, <시각 ms>_<손 번호>.jpg
+```
+
+- **학습 / 시험은 사람 단위로 나눈다**(p1 · p2 · p3 을 돌아가며 시험). 같은 사람 손을 섞으면 처음 보는 사람 손에서의 실력보다 점수가 부풀려진다.
+- `segments.csv` 의 `source=manual` 줄은 사람이 영상을 보고 적은 시각이라 다시 만들 수 없다. 지우지 말고 Drive 에도 같이 올린다.
+- 손 사진에는 얼굴이 없지만 배경에 화면 · 문서가 찍힐 수 있다. Colab · Drive 로 올리기 전에 `review/` 모음 사진으로 한 번 훑는다.
 
 ## 웨이크워드 녹음 보관 규칙
 
