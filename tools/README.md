@@ -10,6 +10,7 @@
 | `fit_gaze.py` | v3 시선 분포 — 학습용(train) 세션의 정답 박스 중심(0~1 좌표)으로 평균 · 공분산을 맞추고, `pointing/cues.py` 에 붙일 상수 두 줄을 찍는다 |
 | `extract_frames.py` | 검출기 학습 사진 — 안경 카메라 영상에서 3초에 1장(`--every`, 기본 3) 뽑고, 거의 같은 장면은 버린다 |
 | `auto_label.py` | 검출기 학습 라벨 — 선생 모델 비교(`compare`), 박스 초안(`label`), 사람 검수 작업(`review`), 회차별 학습 묶음(`build`) |
+| `hand_clips.py` | 가리키는 손 분류기 학습 데이터 — 손 영상을 손 모양 구간으로(`segments`), 구간마다 손 관절 표 · 손 사진(`extract`), 15° 규칙 기준선(`summary`) |
 
 ## device_check
 
@@ -241,3 +242,32 @@ cd data/datasets/detector && zip -qr JARVISEO_R3_data.zip yolo_r3 prep_report.tx
 - 검증은 R2 검수본에 든 d05 짝수 31장 그대로다.
 - 노트북 `notebooks/detector_finetune.ipynb` 는 셀 1 이 `ROUND = "r3"` · `RUNS = ["r3"]` 이다. 결과는 `data/models/detector_r3.pt` 로 받아
   `run_ablation.py --weights yolov8n.pt data/models/detector_r2.pt data/models/detector_r3.pt` 로 R0 · R2 와 한 실행에서 잰다.
+
+## 가리키는 손 분류기 학습 데이터 — 손 영상 → 구간 → 관절 표 · 손 사진 (#223)
+
+```bash
+python tools/hand_clips.py segments   # 1. 렌즈 가림으로 6구간 → segments.csv (못 자른 영상은 review/<영상>.jpg)
+python tools/hand_clips.py extract    # 2. 0.2초 간격 → landmarks.csv + crops/ (영상 9개 약 3분)
+python tools/hand_clips.py summary    # 3. 사람 · 장소 · 손 모양별 손 찾은 비율 · 15° 규칙(R0) 점수
+```
+
+- **촬영 규칙**: 영상 이름 `h_<장소 영어 소문자>_p<사람 번호>.mov`(`data/datasets/hand/videos/`). 한 영상에 손 모양 6가지를
+  point(가리킴) → hold(물건 쥐기) → open(편 손) → fist(주먹) → rest(쉬는 손) → other(브이 · 엄지척 등) 순서로 약 20초씩,
+  사이마다 **손바닥을 렌즈에 붙여** 2초 가린다. 손을 띄워 가리면 살색으로 찍혀 자동으로 못 자른다.
+- **학습 / 시험은 사람 단위로 나눈다.** 같은 사람 손은 장소가 달라도 모양 버릇이 같아서, 섞으면 처음 보는 사람 손에서의 실력보다 점수가 부풀려진다.
+- **자동으로 못 자른 영상**은 `review/<영상>.jpg`(2초 간격 모음 사진, 칸마다 시각 · 밝기)를 보고 `segments.csv` 에 그 영상 6줄을 `source=manual` 로 적는다.
+  가림 앞뒤 손 모양이 보이는 마지막 · 첫 시각을 쓴다. 손으로 적은 영상은 `segments` 를 다시 돌려도 덮어쓰지 않는다.
+- `extract` 는 `landmarks.csv` 가 있으면 멈춘다. 다시 뽑으려면 `landmarks.csv` 와 `crops/` 를 지운다.
+
+`landmarks.csv` 열 (한 줄 = 프레임 하나의 손 하나, 손을 못 찾은 프레임은 `n_hands` 0 인 한 줄):
+
+| 열 | 뜻 |
+|---|---|
+| `video` · `place` · `person` · `cls` · `t_sec` | 영상 · 장소 · 사람 · 손 모양 구간 · 영상 시각 |
+| `hand_idx` · `n_hands` | 이 프레임에서 몇 번째 손 · 찾은 손 수 |
+| `handedness` · `hand_score` | MediaPipe 왼손/오른손과 그 신뢰도 (MediaPipe 는 손별 검출 신뢰도를 따로 주지 않는다) |
+| `label` | 학습 이름표. 가리킴 구간의 손 하나 = 1, 다른 구간 = 0, 가리킴 구간에 손이 둘 이상이면 빈칸(뺌) |
+| `rule` · `bend_gap` | 지금 15° 규칙 판정(`is_pointing`, 0/1)과 굽힘 차이(°) |
+| `w0_x` ~ `w20_z` | 3D 관절 63칸 (손 중심 기준 미터, `HandPose.world`) |
+| `p0_x` ~ `p20_y` | 화면 관절 42칸 (원본 픽셀, `HandPose.landmarks`) |
+| `crop` | 손 사진 `crops/` 기준 경로. 관절 상자 긴 변 × 1.5 정사각을 224×224 로, 사진 밖으로 나가면 안쪽으로 민다 |
