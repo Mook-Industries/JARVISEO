@@ -51,7 +51,7 @@ from sqlalchemy import select
 from jarviseo import config
 from jarviseo.memory import EvalRun, EvalSample, MemoryStore
 from jarviseo.pointing.crop import crop_region, hand_crop_region
-from jarviseo.pointing.hand_classifier import HandClassifier, load_default
+from jarviseo.pointing.hand_classifier import HandClassifier, PatchEncoder, load_default
 from jarviseo.pointing.hands import (
     HandDetector,
     HandPose,
@@ -384,8 +384,11 @@ def same_conditions(old: dict | None, new: dict) -> bool:
     return same_weights and same_rule and old.get("sessions") == new["sessions"]
 
 
-# 손 판정 방식(#223). r0 = 15° 규칙, r1 = 학습한 분류기, all = 찾은 손 다 쓰기(비교용, 비서엔 없음)
-HAND_RULES = ("r0", "r1", "all")
+# 손 판정 방식(#223). r0 = 15° 규칙, r1 = 관절 분류기, r2 = 관절 + 손 사진 특징 분류기,
+# all = 찾은 손 다 쓰기(비교용, 비서엔 없음)
+HAND_RULES = ("r0", "r1", "r2", "all")
+# 회차별 가중치 파일. 실제 비서가 쓰는 파일은 config.HAND_CLASSIFIER_PATH 하나다.
+HAND_WEIGHTS = {"r1": "hand_r1.npz", "r2": "hand_r2.npz"}
 
 
 def choose_hand(
@@ -395,7 +398,7 @@ def choose_hand(
     if rule == "all":
         usable = [h for h in found if pointing_ray(h) is not None]
         return max(usable, key=pointing_score, default=None)
-    return pick_pointing_hand(found, classifier=classifier if rule == "r1" else None)
+    return pick_pointing_hand(found, classifier=classifier if rule in HAND_WEIGHTS else None)
 
 
 def hit_changes(base: dict[str, bool], other: dict[str, bool]) -> tuple[list[str], list[str]]:
@@ -593,15 +596,19 @@ def main() -> None:
     from jarviseo.pointing.detector import ObjectDetector
 
     # 손 단서를 켠 버전이 있을 때만 손을 찾는다. 모델 파일이 없어도 v1 은 돌아야 한다.
+    classifier = load_default()
+    default_rule = "r0" if classifier is None else ("r2" if classifier.needs_patch else "r1")
+    hand_rule = args.hand_rule or default_rule
+    if hand_rule in HAND_WEIGHTS:
+        path = config.HAND_CLASSIFIER_PATH.with_name(HAND_WEIGHTS[hand_rule])
+        if not path.exists():
+            raise SystemExit(f"손 분류기 가중치가 없다: {path}")
+        classifier = HandClassifier.from_file(path)
     hand_detector = None
     if any(CueKind.POINT in VARIANTS[v] for v in ready):
-        hand_detector = HandDetector()
-    classifier = load_default()
-    hand_rule = args.hand_rule or ("r1" if classifier is not None else "r0")
-    if hand_rule == "r1" and classifier is None:
-        if not config.HAND_CLASSIFIER_PATH.exists():
-            raise SystemExit(f"손 분류기 가중치가 없다: {config.HAND_CLASSIFIER_PATH}")
-        classifier = HandClassifier.from_file(config.HAND_CLASSIFIER_PATH)
+        # r2 는 손 사진 특징이 필요해 특징기를 붙여 찾는다. 나머지는 관절만.
+        encoder = PatchEncoder() if hand_rule == "r2" else None
+        hand_detector = HandDetector(encoder=encoder)
     print(f"손 판정: {hand_rule}")
     # 쓰는 쪽이라 테이블이 없으면 만든다(이미 있으면 아무것도 안 한다).
     store = MemoryStore(database_url=args.db)
