@@ -568,15 +568,15 @@
                   <div class="field-head"><span class="label" id="cam-saver-label">호출 전 절전 모드</span></div>
                   <p class="field-desc">“자비서”를 부르기 전에는 낮은 해상도 · 낮은 Hz 로 기다리다가, 부르면 호출 설정으로 바꿔요.</p>
                   <div class="switch-row">
-                    <span id="cam-saver-state">켜짐</span>
+                    <span id="cam-saver-state">꺼짐</span>
                     <span class="switch">
-                      <input type="checkbox" id="cam-saver" role="switch" aria-labelledby="cam-saver-label" checked>
+                      <input type="checkbox" id="cam-saver" role="switch" aria-labelledby="cam-saver-label">
                       <span></span>
                     </span>
                   </div>
                 </div>
 
-                <div class="field" id="cam-idle-field">
+                <div class="field" id="cam-idle-field" hidden>
                   <div class="field-head"><label for="cam-idle-res">대기 (호출 전)</label></div>
                   <div style="display:flex;gap:8px;flex-wrap:wrap">
                     <span class="select"><select id="cam-idle-res" aria-label="대기 해상도"><option value="640x360">640 × 360</option><option value="1280x720">1280 × 720 (HD)</option><option value="1920x1080">1920 × 1080 (FHD)</option><option value="max">카메라 최대</option></select></span>
