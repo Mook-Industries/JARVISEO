@@ -227,3 +227,22 @@ def test_hand_crop_only_when_every_candidate_is_off_the_line(degrees, crops):
     """
     region = hand_crop_region([_at_angle(degrees), _at_angle(-90.0)], POINT_UP, (1920, 1080))
     assert (region is not None) is crops
+
+
+def test_no_hand_crop_when_fingertip_touches_a_candidate():
+    """손끝이 박스 안이면 중심이 옆(90°)이어도 선 위 후보로 쳐서 박스로 고른다(#282).
+
+    전에는 손 점수가 0 이라 손끝 방향을 잘랐다 — 손을 댄 물건이 있는데 손 크롭으로 갔다.
+    """
+    touched = Detection("bottle", 0.9, BBox(900, 980, 1100, 1020))  # 중심 (1000, 1000)
+    assert hand_crop_region([touched, _at_angle(-90.0)], POINT_UP, (1920, 1080)) is None
+
+
+def test_hand_crop_when_box_holds_whole_finger():
+    """검지 뿌리 (960, 1040) 까지 품은 박스(손을 얹은 노트북)는 선 위 후보가 아니다.
+
+    손끝 방향을 자른다(#282).
+    """
+    under = Detection("laptop", 0.9, BBox(700, 950, 1300, 1080))  # 중심 (1000, 1015) 은 손 뒤쪽
+    region = hand_crop_region([under], POINT_UP, (1920, 1080))
+    assert region == hand_region(pointing_ray(POINT_UP), (1920, 1080))

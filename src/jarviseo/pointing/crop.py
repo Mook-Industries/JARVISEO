@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 
 from jarviseo.pointing.cues import score_point
-from jarviseo.pointing.hands import HandPose, Ray, pointing_ray
+from jarviseo.pointing.hands import INDEX_BASE, HandPose, Ray, pointing_ray
 from jarviseo.types import BBox, Detection
 
 __all__ = [
@@ -111,13 +111,15 @@ def hand_crop_region(
     """가리키는 손이 있는데 선 위에 후보가 없으면 손 우선 크롭 사각형. 아니면 None(박스로 고른다).
 
     "선 위에 후보가 없다" = 후보가 0개이거나, 모든 후보의 손 점수가 ON_LINE_SCORE 미만.
+    손끝만 들어간 박스는 손 점수가 1 이라(cues.score_point, #282) 그 후보가 있으면 박스로 고른다.
     점수는 resolver 결과를 읽지 않고 여기서 다시 매긴다. resolver 는 켠 단서만 기록해서
     손 단서를 끈 실행(v1)에는 point 점수가 없다. 후보마다 각도 하나라 비용은 없다.
     """
     ray = pointing_ray(hand) if hand is not None else None
     if ray is None:
         return None
-    if candidates and max(s.score for s in score_point(candidates, ray)) >= ON_LINE_SCORE:
+    scores = score_point(candidates, ray, base=hand.landmarks[INDEX_BASE])
+    if candidates and max(s.score for s in scores) >= ON_LINE_SCORE:
         return None
     return hand_region(ray, frame_size)
 

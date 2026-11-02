@@ -22,7 +22,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from jarviseo.pointing.hands import Ray, angle_to
+from jarviseo.pointing.hands import Point2, Ray, angle_to
 from jarviseo.pointing.labels import KIND_WORDS
 from jarviseo.types import BBox, CueKind, CueScore, Detection
 
@@ -143,20 +143,50 @@ def score_center(candidates: list[Detection], frame_size: tuple[int, int]) -> li
     return scores
 
 
-def score_point(candidates: list[Detection], ray: Ray) -> list[CueScore]:
+def score_point(
+    candidates: list[Detection], ray: Ray, base: Point2 | None = None
+) -> list[CueScore]:
     """검지 끝에서 뻗은 선이 후보 중심을 향할수록 높은 점수. 후보와 같은 순서로 돌려준다.
 
     선과 '검지 끝 → 후보 중심' 사이 각도를 종 모양(가우시안)으로 바꾼다. 0° 면 1, 손 뒤쪽은 0 쪽.
     코사인은 30° 에서도 0.87 이라 후보끼리 차이가 안 난다. 선이 박스를 지나는지로 재면 책상의
     큰 박스(노트북 · 모니터)가 겹쳐 비긴다(valid 10/62, 중심 각도는 13/62).
     후보 중심이 검지 끝과 같은 자리면 손가락이 그 물건 위에 있는 것이라 1점이다.
+
+    검지 끝이 후보 박스 안에 들어가 있으면 그런 후보 중 가장 작은 박스 하나를 1점으로 준다(#282).
+    안경 시점에서는 손끝이 가리킨 물건 위에 겹쳐 찍히는데(짚을 때도, "저거"로 먼 물건을 가리킬
+    때도), 손끝이 박스 안이면 '손끝 → 중심' 방향은 손가락 방향이 아니라 손끝이 박스 어디에
+    놓였는지로 정해진다. 각도로만 재면 그 물건이 낮게 나와 옆 물건을 고르거나 손 우선 크롭으로
+    갔다(s01 0015 · 0017, s04 0019). 가장 작은 박스만 주는 것은 노트북 위 휴대폰처럼 품은 박스가
+    여럿일 때 아래 깔린 물건이 아니라 짚은 물건을 고르려는 것이다.
+    검지 뿌리(base)까지 품은 박스는 뺀다 — 손이 통째로 그 물건(손을 얹은 노트북 · 냉장고 · 큰 헛
+    박스) 앞에 있는 것이라 손끝 자리가 대상을 말해 주지 않는다(COCO 검출기 valid 에서 틀린 박스를
+    품은 9장 중 7장). #215 에서 품은 박스를 모두 1점으로 줬다가 이런 박스가 1등이 돼 뺐다.
+    base 가 없으면 손끝만 본다.
     """
+    tip = ray[0]
+    touched = [i for i, d in enumerate(candidates) if _touches(d.bbox, tip, base)]
+    touch = min(touched, key=lambda i: candidates[i].bbox.area, default=None)
     scores = []
-    for d in candidates:
+    for i, d in enumerate(candidates):
         angle = angle_to(ray, d.bbox.center)
+        if i == touch:
+            detail = {"angle": angle, "touch": True}
+            scores.append(CueScore(kind=CueKind.POINT, score=1.0, detail=detail))
+            continue
         score = 1.0 if angle is None else math.exp(-0.5 * (angle / POINT_SIGMA_DEG) ** 2)
         scores.append(CueScore(kind=CueKind.POINT, score=score, detail={"angle": angle}))
     return scores
+
+
+def _touches(box: BBox, tip: Point2, base: Point2 | None) -> bool:
+    """손가락이 바깥에서 박스 안으로 들어갔나 — 손끝은 안, 뿌리는 밖. base 가 없으면 손끝만 본다."""
+    return _contains(box, tip) and (base is None or not _contains(box, base))
+
+
+def _contains(box: BBox, point: Point2) -> bool:
+    """점이 박스 안(테두리 포함)에 있나. types.BBox 는 세 사람의 계약이라 여기서 잰다."""
+    return box.x1 <= point[0] <= box.x2 and box.y1 <= point[1] <= box.y2
 
 
 def score_gaze(candidates: list[Detection], frame_size: tuple[int, int]) -> list[CueScore]:

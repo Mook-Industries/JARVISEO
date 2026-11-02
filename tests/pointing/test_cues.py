@@ -96,6 +96,7 @@ def test_no_candidates():
 
 # 검지 끝 (0, 0) 에서 오른쪽(+x)을 가리키는 선
 RAY = ((0.0, 0.0), (1.0, 0.0))
+BASE = (-40.0, 0.0)  # RAY 를 만든 검지 뿌리(손끝 왼쪽)
 
 
 def _at(cx: float, cy: float, label: str = "cup") -> Detection:
@@ -148,6 +149,50 @@ def test_point_kind_and_order():
 def test_point_no_candidates():
     """후보가 없으면 빈 리스트다."""
     assert score_point([], RAY) == []
+
+
+def test_point_fingertip_inside_box_scores_one_even_if_center_is_aside():
+    """검지 끝만 박스 안이면(손가락이 물건 위로 들어감) 중심이 옆 · 뒤에 있어도 1점이다(#282).
+
+    각도로만 재면 이 박스 중심은 손끝에서 위로 90° 라 0 에 가깝다.
+    """
+    touched = _det(-20, -200, 20, 20)  # 손끝 (0, 0) 을 품고, 중심은 (0, -90). 뿌리는 밖
+    [score] = score_point([touched], RAY, base=BASE)
+    assert score.score == 1.0
+    assert score.detail["touch"] is True
+    assert score.detail["angle"] == pytest.approx(90.0)
+
+
+def test_point_box_holding_whole_finger_is_not_touch():
+    """검지 뿌리까지 품은 박스(손을 얹은 노트북)는 손끝을 품어도 1점이 아니라 각도대로다(#282).
+
+    손이 통째로 그 물건 앞에 있는 것이라 손끝 자리가 대상을 말해 주지 않는다.
+    선 위 앞쪽 컵이 그대로 1점이다.
+    """
+    under = _det(-300, -100, 100, 300, "laptop")  # 손끝 (0, 0) · 뿌리 (-40, 0) 를 다 품음
+    under_score, ahead_score = score_point([under, _at(300, 0)], RAY, base=BASE)
+    assert "touch" not in under_score.detail and under_score.score < 0.01  # 중심이 135° 뒤쪽
+    assert ahead_score.score == pytest.approx(1.0)
+
+
+def test_point_only_smallest_box_holding_fingertip_gets_touch():
+    """손끝을 품은 박스가 여럿이면(노트북 위 휴대폰) 가장 작은 하나만 1점, 큰 박스는 각도대로."""
+    phone = _det(-30, -60, 30, 10, "cell phone")
+    laptop = _det(-400, -300, 400, 300, "laptop")  # 중심이 손끝과 같은 자리라 각도가 없다
+    beside = _det(-500, -500, 50, 100, "book")  # 품었지만 휴대폰보다 크다 — 중심은 손 뒤쪽
+
+    phone_score, laptop_score, beside_score = score_point([phone, laptop, beside], RAY)
+
+    assert phone_score.score == 1.0 and phone_score.detail.get("touch") is True
+    assert "touch" not in laptop_score.detail
+    assert "touch" not in beside_score.detail and beside_score.score < 0.01
+
+
+def test_point_fingertip_outside_every_box_keeps_angle_scores():
+    """손끝을 품은 박스가 없으면 지금처럼 각도로만 매긴다."""
+    ahead, aside = score_point([_at(300, 0), _at(0, 300)], RAY)
+    assert ahead.score == pytest.approx(1.0) and "touch" not in ahead.detail
+    assert aside.score < 1e-6
 
 
 # --- 시선 단서 (v3) ---------------------------------------------------------------

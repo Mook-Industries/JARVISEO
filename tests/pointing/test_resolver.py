@@ -317,6 +317,21 @@ def test_point_only_without_hand_gives_up():
     assert result.clarify_question is None
 
 
+def test_box_under_whole_hand_does_not_win_by_fingertip():
+    """손을 얹은 박스는 손끝을 품어도 손 점수 1점이 아니다(#282) — resolver 가 검지 뿌리를 넘긴다.
+
+    뿌리를 안 넘기면 노트북이 손끝 1점을 받아 손이 가리킨 오른쪽 컵을 제친다.
+    """
+    under = _det("laptop", BBox(900, 700, 1300, 1000))  # 손끝 (1100, 900) · 뿌리 (1068, 936) 품음
+    right = _det("cup", RIGHT)
+
+    result = _resolve([under, right], hand=TO_RIGHT)
+
+    assert result.chosen.detection is right
+    [laptop] = [c for c in result.candidates if c.detection is under]
+    assert laptop.score_of(CueKind.POINT) < 0.1
+
+
 def test_reply_narrowing_keeps_hand():
     """되묻기 대답으로 다시 고를 때도 손 단서를 쓴다. 손이 가리킨 쪽 이름을 대면 그걸 고른다."""
     left, right, corner = _det("cup", LEFT), _det("bottle", RIGHT), _det("book", CORNER)
