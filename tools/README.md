@@ -253,7 +253,8 @@ d05 는 못 봤다(`docs/experiments.md` "R4"). 바뀌는 것은 고르는 기�
 
 - 노트북 `notebooks/detector_finetune.ipynb` 는 셀 1 이 `ROUND = "r4"` · `DATA = "r3"`(R3 묶음 zip 그대로) · `SAVE_PERIOD = 5` 다. 새 zip 은 없다.
 - 결과 `detector/runs/r4` 에 `epoch0.pt`~`epoch95.pt` 20개 + best · last 가 남는다. 중간 파일은 노트북이 최적화 상태를 빼서 best · last 처럼 6MB 안팎이다.
-- 보고서의 best epoch · d05 mAP50 이 R3(67 · 0.413)와 같으면 R3 학습을 그대로 다시 만든 것이다(저장만 늘렸고 난수는 그대로).
+- 런타임은 **T4 + 고용량 RAM(CPU 8)** 이어야 한다. 보고서의 `CPU N개` 가 데이터 준비 워커 수이고, 워커 수가 바뀌면 같은 seed 라도 증강 순서가 달라져 다른 학습이 된다.
+  11/2 R4 는 CPU 2개로 돌아 R3(best 67 · d05 mAP50 0.413)를 그대로 다시 만들지 못했다(64 · 0.460, `docs/experiments.md` "R4").
 
 ### 2. 받기 · 고르기 (레포 맨 위 폴더에서, 팀 환경)
 
@@ -274,9 +275,10 @@ python tools/auto_label.py pick --run data/datasets/detector/runs/r4 --out data/
 ### 3. 회차 비교 (R0 · R2 · R3 와 한 실행)
 
 ```bash
-python scripts/run_ablation.py --weights yolov8n.pt data/models/detector_r2.pt data/models/detector_r3.pt data/models/detector_r4.pt --variants v1 v2 v2+lang+C
+python scripts/run_ablation.py --weights yolov8n.pt data/models/detector_r2.pt data/models/detector_r3.pt data/models/detector_r4.pt data/datasets/detector/runs/r4/weights/best.pt --variants v1 v2 v2+lang+C
 ```
 
+- 마지막 `best.pt` 는 같은 학습에서 d05 가 고른 가중치다. R4(s06 으로 고른 것)와 견주면 고르는 기준의 몫만 남는다 — R4 가 R3 를 그대로 다시 만든 학습이 아니라서 필요하다.
 - `--sessions 4` 로 한 번 더 잰다(말 세션 s04). test(s03 · s07)는 최종 측정 때 한 번만 연다.
 
 ## 가리키는 손 분류기 학습 데이터 — 손 영상 → 구간 → 관절 표 · 손 사진 (#223)
