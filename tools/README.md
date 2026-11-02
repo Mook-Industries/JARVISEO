@@ -256,7 +256,7 @@ d05 는 못 봤다(`docs/experiments.md` "R4"). 바뀌는 것은 고르는 기�
 - 결과 `detector/runs/r4` 에 `epoch0.pt`~`epoch95.pt` 20개 + best · last 가 남는다. 중간 파일은 노트북이 최적화 상태를 빼서 best · last 처럼 6MB 안팎이다.
 - 런타임은 **T4 + 고용량 RAM(CPU 8)** 이어야 한다. 보고서의 `CPU N개` 가 데이터 준비 워커 수이고, 워커 수가 바뀌면 같은 seed 라도 증강 순서가 달라져 다른 학습이 된다.
   11/2 R4 는 CPU 2개로 돌아 R3(best 67 · d05 mAP50 0.413)를 그대로 다시 만들지 못했다(64 · 0.460, `docs/experiments.md` "R4").
-  11/2 밤에는 '고용량 RAM' 이 떠 있는 T4 도 CPU 2개였다(아래 "시드 반복").
+  고용량 RAM 은 Colab Pro 에서만 보인다 — 11/2 밤 구독이 끊겼을 때는 T4 가 CPU 2개였다(아래 "시드 반복").
 
 ### 2. 받기 · 고르기 (레포 맨 위 폴더에서, 팀 환경)
 
@@ -291,10 +291,10 @@ R4 에서 데이터 준비 워커 수만 달라도 가리킴 valid 9장이 갈�
 ### 1. Colab
 
 - Drive `JARVISEO/` 에 `JARVISEO_R2_data.zip` · `JARVISEO_R3_data.zip` 이 있어야 한다(없으면 맥 `data/datasets/detector/` 의 것을 올린다).
-- 노트북 `notebooks/detector_finetune.ipynb` 는 셀 1 이 `DATAS = ["r2", "r3"]` · `SEEDS = [0, 1, 2]` 다. 학습 6번(걸린 시간은 보고서에 남는다).
-- 런타임은 **A100(없으면 L4) · CPU 8개 이상**이다. 아니면 셀 1 이 멈춘다. CPU 수가 데이터 준비 워커 수(최대 8)라 회차끼리 맞춰야 하는데,
-  11/2 밤 Colab 의 T4 는 '고용량 RAM' 이 떠 있어도 CPU 2개였다. 그래서 원래 R2 · R3(T4 · CPU 8)와는 견주지 않고 6개끼리 견준다.
-- 결과: `SEEDS_report.txt`(학습마다 best epoch · d05 · 걸린 시간)와 `JARVISEO_seeds_weights.zip`(학습마다 `<이름>_best.pt` · `<이름>_last.pt` · `<이름>_results.csv`).
+- 노트북 `notebooks/detector_finetune.ipynb` 는 셀 1 이 `DATAS = ["r2", "r3"]` · `SEEDS = [0, 1, 2]` 다. 학습 6번 · 약 45분.
+- 런타임은 **T4 + 고용량 RAM(CPU 8)** 이다. R1~R4 와 GPU · 워커 수가 같아야 시드 0 이 원래 R2 · R3 를 다시 만드는지 볼 수 있어서, 아니면 셀 1 이 멈춘다.
+  고용량 RAM 은 Colab Pro 에서만 보인다(11/2 밤 구독이 끊겼을 때는 토글이 없고 T4 가 CPU 2개였다).
+- 결과: `SEEDS_report.txt`(학습마다 best epoch · d05 · 시드 0 재현 줄)와 `JARVISEO_seeds_weights.zip`(학습마다 `<이름>_best.pt` · `<이름>_last.pt` · `<이름>_results.csv`).
 
 ### 2. 받기 · 재기 (레포 맨 위 폴더에서, 팀 환경)
 
