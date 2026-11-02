@@ -11,6 +11,9 @@ tools/label_targets.py 가 만든 labels.csv 의 사진에서 MediaPipe 로 손�
 
 표 끝의 "0.10+조각" 줄은 조각 확대(#256)를 켠 지금 기준(0.1 · 15°)이다. 가리키는 손을 못 고른
 사진만 4조각에서 다시 찾는다. 조각을 돌릴지를 15° 로 정해서 다른 판정 기준으로는 재지 않는다.
+--hand-boxes 를 주면 두 줄을 더 찍는다(#256 ⑤-b). "0.10+조각+박스" 는 그래도 못 고른 사진에서
+손 박스 검출기 박스로 관절을 읽은 실제 비서 흐름이고, "박스 혼자" 는 MediaPipe 손바닥 찾기 없이
+손 박스 검출기 + 관절 모델만 쓴 것이다 — 검출기 자체가 손을 얼마나 찾는지 본다.
 
 run_ablation.py 와 따로 둔다. 손 검출기 채점을 단서 채점에 섞으면 7분류가 흐려진다.
 DB 에는 남기지 않는다(eval_run 은 ablation 버전 비교용). 결과는 docs/experiments.md 에 옮긴다.
@@ -18,6 +21,7 @@ DB 에는 남기지 않는다(eval_run 은 ablation 버전 비교용). 결과는
 실행 (레포 맨 위 폴더에서):
     python scripts/check_hands.py
     python scripts/check_hands.py --draw          # 관절 · 선 · 정답 박스를 그린 사진 저장
+    python scripts/check_hands.py --sessions 1 2 6 --hand-boxes   # s06 까지 · 손 박스 줄
 """
 
 import argparse
@@ -30,6 +34,7 @@ import cv2
 import numpy as np
 from run_ablation import DEFAULT_SESSIONS, POINTING_DIR, load_samples, percentiles, read_image
 
+from jarviseo.pointing.hand_boxes import HandBoxFinder
 from jarviseo.pointing.hands import (
     MIN_HAND_CONFIDENCE,
     POINTING_MIN_GAP_DEG,
@@ -95,15 +100,25 @@ def summarize(rows: list[dict]) -> dict:
     }
 
 
-def format_row(confidence: float, min_gap_deg: float, m: dict, tiles: bool = False) -> str:
+def format_row(label: str, min_gap_deg: float, m: dict) -> str:
+    """표 한 줄. label 은 첫 칸 — 검출 기준("0.10") 또는 흐름 이름("0.10+조각", "박스 혼자")."""
     n = m["with_hand"]
     angle = "-" if m["median_angle"] is None else f"{m['median_angle']:.0f}°"
-    mark = "+조각" if tiles else ""
     return (
-        f"{confidence:.2f}{mark} | {min_gap_deg:.0f}° | {m['found']}/{n} | {m['pointing']}/{n} | "
+        f"{label} | {min_gap_deg:.0f}° | {m['found']}/{n} | {m['pointing']}/{n} | "
         f"{m['within']} | {angle} | {m['false_pointing']}/{m['without_hand']} | "
         f"{m['p50_ms']:.1f}/{m['p95_ms']:.1f}"
     )
+
+
+class BoxOnly:
+    """손 박스 검출기 + 관절 모델만으로 찾는다(MediaPipe 손바닥 찾기 없이). find_hands 가 부른다."""
+
+    def __init__(self, finder: HandBoxFinder) -> None:
+        self.finder = finder
+
+    def detect(self, image: np.ndarray) -> list[HandPose]:
+        return self.finder.find(image)
 
 
 def false_pointing_files(rows: list[dict]) -> list[str]:
@@ -162,6 +177,14 @@ def main() -> None:
     parser.add_argument("--labels", type=Path, default=POINTING_DIR / "labels.csv")
     parser.add_argument("--raw", type=Path, default=POINTING_DIR / "raw")
     parser.add_argument("--split", choices=("valid", "test"), default="valid")
+    parser.add_argument(
+        "--sessions", type=int, nargs="+", help="잴 세션. 안 주면 valid 는 1 2, test 는 3"
+    )
+    parser.add_argument(
+        "--hand-boxes",
+        action="store_true",
+        help="손 박스 줄 두 개를 더 찍는다(가중치가 있어야 한다)",
+    )
     parser.add_argument("--confidences", type=float, nargs="+", default=[0.5, 0.3, 0.1])
     parser.add_argument("--gaps", type=float, nargs="+", default=[0.0, 15.0, 30.0])
     parser.add_argument("--out", type=Path, default=POINTING_DIR / "runs" / "hands")
@@ -170,9 +193,10 @@ def main() -> None:
 
     if args.split == "test":
         print("주의: test 를 연다 — 최종 측정 때만. 보면서 고치면 test 숫자가 실력이 아니게 된다.")
-    samples = load_samples(args.labels, args.split, sorted(DEFAULT_SESSIONS[args.split]))
+    sessions = sorted(args.sessions or DEFAULT_SESSIONS[args.split])
+    samples = load_samples(args.labels, args.split, sessions)
     if not samples:
-        raise SystemExit(f"{args.split} 로 표시된 사진이 없다: {args.labels}")
+        raise SystemExit(f"{args.split} 세션 {sessions} 로 표시된 사진이 없다: {args.labels}")
     images = {}
     for s in samples:
         image = read_image(args.raw / s["file"])
@@ -184,7 +208,8 @@ def main() -> None:
     confidences = sorted({*args.confidences, MIN_HAND_CONFIDENCE}, reverse=True)
     gaps = sorted({*args.gaps, POINTING_MIN_GAP_DEG})
     n_hand = sum(s["has_hand"] for s in samples)
-    print(f"\n{args.split} {len(samples)}장 (손 있음 {n_hand} · 없음 {len(samples) - n_hand})\n")
+    where = f"{args.split} {len(samples)}장 (세션 {' '.join(map(str, sessions))})"
+    print(f"\n{where} (손 있음 {n_hand} · 없음 {len(samples) - n_hand})\n")
     print(
         "검출 기준 | 판정 기준 | 손 찾음 | 가리킴 통과 | 30° 안 | 각도 중앙값 | "
         "손 없음 오탐 | p50/p95 ms"
@@ -192,25 +217,37 @@ def main() -> None:
 
     default_rows, default_hands = None, None
     for confidence in confidences:
-        # 기준별 줄은 MediaPipe 한 번(조각 없음)이다. 판정은 hand_rows 처럼 15° 규칙.
-        detector = HandDetector(min_confidence=confidence, classifier=None, tiles=False)
+        # 기준별 줄은 MediaPipe 한 번(조각 · 손 박스 없음)이다. 판정은 hand_rows 처럼 15° 규칙.
+        detector = HandDetector(
+            min_confidence=confidence, classifier=None, tiles=False, boxes=False
+        )
         hands, detect_ms = find_hands(detector, images)
         for gap in gaps:
             rows = hand_rows(samples, hands, detect_ms, gap)
-            print(format_row(confidence, gap, summarize(rows)))
+            print(format_row(f"{confidence:.2f}", gap, summarize(rows)))
             if confidence == MIN_HAND_CONFIDENCE and gap == POINTING_MIN_GAP_DEG:
                 default_rows, default_hands = rows, hands
 
-    tile_hands, tile_ms = find_hands(HandDetector(classifier=None, tiles=True), images)
-    tile_rows = hand_rows(samples, tile_hands, tile_ms, POINTING_MIN_GAP_DEG)
-    print(format_row(MIN_HAND_CONFIDENCE, POINTING_MIN_GAP_DEG, summarize(tile_rows), tiles=True))
+    # 아래 줄들은 지금 기준(0.1 · 15°)이다. 조각 · 손 박스를 돌릴지를 15° 로 정한다.
+    base = f"{MIN_HAND_CONFIDENCE:.2f}"
+    flows = [(f"{base}+조각", HandDetector(classifier=None, tiles=True, boxes=False))]
+    if args.hand_boxes:
+        # boxes=True 를 직접 넘겨서 가중치가 없으면 조용히 끄지 않고 멈춘다
+        boxed = HandDetector(classifier=None, tiles=True, boxes=True)
+        flows += [(f"{base}+조각+박스", boxed), ("박스 혼자", BoxOnly(boxed.box_finder))]
+    flow_rows = {}
+    for label, detector in flows:
+        found, ms = find_hands(detector, images)
+        flow_rows[label] = hand_rows(samples, found, ms, POINTING_MIN_GAP_DEG)
+        print(format_row(label, POINTING_MIN_GAP_DEG, summarize(flow_rows[label])))
 
     print(
         f"\n기본 기준({MIN_HAND_CONFIDENCE} · {POINTING_MIN_GAP_DEG:.0f}°) 손 없음 오탐: ", end=""
     )
     print(", ".join(false_pointing_files(default_rows)) or "없음")
-    print("조각 확대 손 없음 오탐: ", end="")
-    print(", ".join(false_pointing_files(tile_rows)) or "없음")
+    for label, rows in flow_rows.items():
+        print(f"{label} 손 없음 오탐: ", end="")
+        print(", ".join(false_pointing_files(rows)) or "없음")
     path = write_csv(args.out / f"hands_{args.split}.csv", default_rows)
     print(f"사진별 결과: {path}")
 
