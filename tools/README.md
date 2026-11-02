@@ -10,6 +10,7 @@
 | `fit_gaze.py` | v3 시선 분포 — 학습용(train) 세션의 정답 박스 중심(0~1 좌표)으로 평균 · 공분산을 맞추고, `pointing/cues.py` 에 붙일 상수 두 줄을 찍는다 |
 | `extract_frames.py` | 검출기 학습 사진 — 안경 카메라 영상에서 3초에 1장(`--every`, 기본 3) 뽑고, 거의 같은 장면은 버린다 |
 | `auto_label.py` | 검출기 학습 라벨 — 선생 모델 비교(`compare`), 박스 초안(`label`), 사람 검수 작업(`review`), 회차별 학습 묶음(`build`) |
+| `train_hand_classifier.py` | 가리키는 손 분류기 R1 — `landmarks.csv` 로 손 관절 MLP 를 사람 단위 3겹으로 평가 · 문턱을 고르고 전부로 학습해 `src/jarviseo/pointing/hand_r1.npz` 로 내보낸다 |
 | `hand_clips.py` | 가리키는 손 분류기 학습 데이터 — 손 영상을 손 모양 구간으로(`segments`), 구간마다 손 관절 표 · 손 사진(`extract`), 15° 규칙 기준선(`summary`) |
 
 ## device_check
@@ -271,3 +272,15 @@ python tools/hand_clips.py summary    # 3. 사람 · 장소 · 손 모양별 손
 | `w0_x` ~ `w20_z` | 3D 관절 63칸 (손 중심 기준 미터, `HandPose.world`) |
 | `p0_x` ~ `p20_y` | 화면 관절 42칸 (원본 픽셀, `HandPose.landmarks`) |
 | `crop` | 손 사진 `crops/` 기준 경로. 관절 상자 긴 변 × 1.5 정사각을 224×224 로, 사진 밖으로 나가면 안쪽으로 민다 |
+
+### 손 분류기 학습 (R1, `tools/train_hand_classifier.py`)
+
+```bash
+python tools/train_hand_classifier.py           # 사람 단위 3겹 표 → 문턱 → 전부로 학습 → hand_r1.npz (몇 초)
+python tools/train_hand_classifier.py --force   # 이미 있는 가중치를 덮어쓴다
+```
+
+- **사람 단위 3겹**: p1 · p2 · p3 를 차례로 시험으로 빼고 나머지 두 사람으로 학습한다. 표에는 R0(15° 규칙) · R1(MLP) · 로지스틱(참고)의 사람별 · 손 모양별 재현율 / 오탐률이 나온다.
+- **문턱은 3겹에서 고른다**: 가리킴 재현율이 R0 이상이 되는 가장 높은 문턱. valid 사진을 보고 고르지 않는다.
+- 학습만 scikit-learn 을 쓴다(맥 · 윈도우에만 깔림). 가중치는 숫자 배열만 담은 `.npz` 라 실행 쪽(`pointing/hand_classifier.py`)은 numpy 로 계산한다 — 서버 · CI 에는 sklearn 이 없다.
+- 가중치(약 50KB)는 패키지 안(`src/jarviseo/pointing/hand_r1.npz`)에 커밋한다. 머지만으로 서버 이미지에 들어가서 배포 설정을 안 바꿔도 된다. 다시 학습하면 회차 비교가 끊기지 않게 기록(`docs/experiments.md`)을 같이 고친다.

@@ -8,6 +8,7 @@
 | `detector.py` | 물체 후보 검출 (기본 사전학습 COCO `yolov8n.pt`, `.env` 로 학습한 10종 가중치) | 후보 재현율 (식품 장면 따로) |
 | `labels.py` | 검출 라벨의 한글 이름(COCO 80종 + `product` = "식품")과 종류 낱말표 `KIND_WORDS`(텀블러 → `bottle`, 캔 · 봉지 · 컵라면 → `product` 같은 별칭 포함). 되묻기 문장 · 대답 찾기 · 말 단서 · VLM 맥락 문장에 쓴다 | — |
 | `hands.py` | 손 관절 21점(MediaPipe `HandLandmarker`) → 가리키는 손인지 · 검지 방향(5 → 8) | 손 검출률 · 가리킴 판정 · 방향 오차 (`scripts/check_hands.py`) |
+| `hand_classifier.py` | 가리키는 손 분류기 R1 — 손 관절 MLP(가중치 `hand_r1.npz`, numpy 로 계산). `JARVISEO_ENABLE_HAND_CLASSIFIER` 를 켜면 `pick_pointing_hand` 의 15° 규칙을 대신하고, 가중치를 못 읽으면 규칙으로 돌아간다 | 사람 단위 3겹 재현율 · 오탐률 (`tools/train_hand_classifier.py`, #223) |
 | `cues.py` | 후보별 단서 점수 — v1 center(가운데 · 크기), v2 point(검지 끝 선 ↔ 후보 중심 각도, 가우시안 σ 15°), v3 gaze(가리킨 물건이 화면에 잘 오는 자리 — 학습용 세션 s05 의 2D 가우시안, 꺼 둠), v4 lang(질문 속 색 · 종류 · 위치 · 크기, 속성 점수를 곱함), v5 ctx("그거" · "아까" 같은 이어 묻기에서 직전 대상과 같은 종류) | — |
 | `resolver.py` | 단서 융합 → 1위 결정 · 되묻기 판단 | 대상 선택 정확도 · 되묻기 비율 |
 | `crop.py` | 고른 박스를 여백 15% 넣어 자르기 · VLM 크기 맞추기 · 손 우선 크롭(가리키는 손이 있는데 선 위에 후보가 없으면 손끝 방향 사각형) | 크롭 담김률 |

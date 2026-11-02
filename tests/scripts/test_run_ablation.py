@@ -795,3 +795,32 @@ def test_write_csv_names_file_by_run(tmp_path):
     assert path.name == "7_v1.csv"
     with path.open(encoding="utf-8", newline="") as f:
         assert [r["file"] for r in csv.DictReader(f)] == ["s01/a.jpg", "s01/b.jpg"]
+
+
+# --- 손 판정 방식 (#223) -----------------------------------------------------------
+
+
+class _AlwaysPointing:
+    threshold = 0.5
+
+    def prob(self, hand: HandPose) -> float:
+        return 0.9
+
+
+def test_choose_hand_rules():
+    """r0 = 15° 규칙(관절이 펴져 있지 않아 버림), r1 = 분류기, all = 방향을 아는 손이면 다 쓴다."""
+    no_ray = _hand(base=(900.0, 900.0), tip=(900.0, 900.0))
+    found = [no_ray, TO_RIGHT]
+    assert run_ablation.choose_hand(found, "r0", _AlwaysPointing()) is None
+    assert run_ablation.choose_hand(found, "r1", _AlwaysPointing()) is TO_RIGHT
+    assert run_ablation.choose_hand(found, "all", None) is TO_RIGHT
+    assert run_ablation.choose_hand([no_ray], "all", None) is None
+
+
+def test_same_conditions_needs_same_hand_rule():
+    """손 판정이 다르면 다른 조건. 판정을 안 적은 옛 실행은 r0 로 읽는다."""
+    r0 = {**_conditions(), "hand_rule": "r0"}
+    r1 = {**_conditions(), "hand_rule": "r1"}
+    assert run_ablation.same_conditions(_conditions(), r0)
+    assert not run_ablation.same_conditions(r0, r1)
+    assert run_ablation.run_conditions({"sha256": "a"}, [1], 0.25, "all")["hand_rule"] == "all"

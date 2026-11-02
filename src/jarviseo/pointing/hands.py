@@ -6,7 +6,9 @@
 향하는지 모른다. MediaPipe 관절 21개 중 검지 뿌리(5) → 끝(8)으로 방향을 구한다.
 
 물건을 들고 있거나 키보드에 얹은 손도 MediaPipe 는 손으로 잡는다. 그 손의 방향은 뜻이 없어서
-"가리키는 손"인지 따로 가른다. 가리키는 손이 없으면 손 단서(v2)는 0점이 아니라 기권이다.
+"가리키는 손"인지 따로 가른다. 판정은 15° 굽힘 규칙이고, ENABLE_HAND_CLASSIFIER 를 켜면
+손 영상으로 학습한 분류기(hand_classifier.py, #223)가 대신한다.
+가리키는 손이 없으면 손 단서(v2)는 0점이 아니라 기권이다.
 손이 화면에 없어도 대상은 골라야 하므로(10/14 요구사항) 나머지 단서로 고른다.
 
 여기 함수는 좌표 계산이라 MediaPipe 없이 테스트한다. 신경망은 HandDetector 까지만 쓴다.
@@ -24,6 +26,7 @@ import cv2
 import numpy as np
 
 from jarviseo import config
+from jarviseo.pointing.hand_classifier import HandClassifier, load_default
 
 __all__ = [
     "FULL_GAP_DEG",
@@ -145,15 +148,29 @@ def angle_to(ray: Ray, point: Point2) -> float | None:
     return math.degrees(math.acos(max(-1.0, min(1.0, cos))))
 
 
+_FROM_CONFIG: Any = object()
+
+
 def pick_pointing_hand(
-    hands: Sequence[HandPose], min_gap_deg: float = POINTING_MIN_GAP_DEG
+    hands: Sequence[HandPose],
+    min_gap_deg: float = POINTING_MIN_GAP_DEG,
+    classifier: HandClassifier | None = _FROM_CONFIG,
 ) -> HandPose | None:
     """가리키는 손 하나. 여럿이면 점수가 가장 높은 손, 없으면 None(손 단서 기권).
 
     한 손으로 물건을 들고 다른 손으로 가리키는 장면이 있다.
+    classifier 를 안 주면 설정을 따른다(플래그가 꺼졌거나 가중치가 없으면 15° 규칙).
+    None 을 주면 15° 규칙, 분류기를 주면 그 확률로 판정 · 고르기를 한다.
+    부르는 쪽(그래프 · 웹 · 측정 스크립트)은 이 함수만 부르므로 판정을 여기서 한 번에 바꾼다.
     """
-    pointing = [h for h in hands if is_pointing(h, min_gap_deg) and pointing_ray(h) is not None]
-    return max(pointing, key=pointing_score, default=None)
+    if classifier is _FROM_CONFIG:
+        classifier = load_default()
+    if classifier is None:
+        pointing = [h for h in hands if is_pointing(h, min_gap_deg) and pointing_ray(h) is not None]
+        return max(pointing, key=pointing_score, default=None)
+    probs = [(classifier.prob(h), h) for h in hands if pointing_ray(h) is not None]
+    passed = [(p, h) for p, h in probs if p >= classifier.threshold]
+    return max(passed, key=lambda ph: ph[0], default=(0.0, None))[1]
 
 
 def poses_from_result(result: Any, frame_size: tuple[int, int]) -> list[HandPose]:

@@ -54,7 +54,8 @@ def hand_rows(
     rows = []
     for s in samples:
         found = hands[s["file"]]
-        hand = pick_pointing_hand(found, min_gap_deg)
+        # 15° 규칙의 기준별 측정이라 손 분류기(#223) 설정과 상관없이 규칙으로 판정한다
+        hand = pick_pointing_hand(found, min_gap_deg, classifier=None)
         angle = None
         if hand is not None:
             angle = angle_to(pointing_ray(hand), s["gt"].center)
@@ -196,7 +197,7 @@ def main() -> None:
     if args.draw:
         for s in samples:
             found = default_hands[s["file"]]
-            chosen = pick_pointing_hand(found)
+            chosen = pick_pointing_hand(found, classifier=None)
             picture = draw(images[s["file"]], found, chosen, s["gt"])
             save_image(args.out / args.split / s["file"], picture)
         print(f"그림: {args.out / args.split}")
