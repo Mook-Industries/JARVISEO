@@ -2,7 +2,7 @@
 
 CI 에는 ultralytics · CLIP 이 없다. 틀리면 학습 라벨이 조용히 망가지는 곳을 잡는다 —
 종류 번호 순서 · 글귀 표 · YOLO 좌표 · 겹친 박스 합치기 · Label Studio 형식(오가는 변환) ·
-선생 성적 계산 · 검수 초안 만들기 · 이미 만든 라벨 덮어쓰기.
+선생 성적 계산 · 검수 초안 만들기 · 이미 만든 라벨 덮어쓰기 · 회차 가중치 고르기(epoch 번호 · 규칙).
 
 tools/ 는 패키지가 아니라서 파일 경로로 직접 불러온다.
 """
@@ -1153,6 +1153,245 @@ def test_import_without_any_submitted_photo_stops(monkeypatch, tmp_path):
 )
 def test_parse_args_import_needs_exactly_one_source_and_out(monkeypatch, args):
     """검수 결과(--export)와 R1 초안(--predictions) 중 하나만, 그리고 --out 은 꼭."""
+    _set_argv(monkeypatch, *args)
+    with pytest.raises(SystemExit):
+        auto_label.parse_args()
+
+
+# --- 회차 가중치 고르기 (pick, R4) --------------------------------------------------------
+
+
+def _write_results(run: Path, rows: list[tuple[int, float, float]]) -> None:
+    """ultralytics results.csv 모양(epoch · d05 mAP50 · mAP50-95). 옛 버전처럼 열 이름에 빈칸."""
+    run.mkdir(parents=True, exist_ok=True)
+    lines = ["                  epoch,   metrics/mAP50(B),metrics/mAP50-95(B)"]
+    lines += [f"{epoch},{map50},{map50_95}" for epoch, map50, map50_95 in rows]
+    (run / "results.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_weights(run: Path, *names: str) -> None:
+    """가짜 가중치. 파일마다 내용이 달라야 어느 파일이 복사됐는지 가린다."""
+    (run / "weights").mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (run / "weights" / name).write_bytes(name.encode())
+
+
+def test_gt_to_class_counts_box_as_product():
+    """과자 상자(box, s07)도 식품으로 센다. 표에 없으면 10종 밖으로 빠진다."""
+    samples = [{"file": "a", "gt": BBox(0, 0, 100, 100), "gt_label": "box"}]
+    r = auto_label.recall(samples, {"a": [_det("product", (0, 0, 100, 100))]})
+    assert (r["product_total"], r["product_recall"]) == (1, 1.0)
+
+
+def test_read_results_strips_column_names(tmp_path):
+    _write_results(tmp_path, [(1, 0.2, 0.1), (2, 0.3, 0.2)])
+    rows = auto_label.read_results(tmp_path)
+    assert [row["epoch"] for row in rows] == ["1", "2"]
+    assert rows[1]["metrics/mAP50(B)"] == "0.3"
+
+
+def test_read_results_stops_without_results_file(tmp_path):
+    """best.pt 만 받으면 epoch 번호를 모른다. 회차 폴더를 통째로 받으라고 알린다."""
+    with pytest.raises(SystemExit, match="통째로"):
+        auto_label.read_results(tmp_path)
+
+
+def test_checkpoint_epochs_numbers_epoch_files_from_one(tmp_path):
+    """epochN.pt 의 N 은 0부터라 epoch5.pt 가 6번째다. best 는 mAP50-95 최고, last 는 끝."""
+    rows = [(epoch, 0.1, 0.05 * epoch) for epoch in range(1, 11)]
+    rows[6] = (7, 0.4, 0.9)  # 7번째 epoch 가 mAP50-95 최고
+    _write_results(tmp_path, rows)
+    # 두 번 받아 생긴 이름은 건너뛴다
+    _write_weights(tmp_path, "epoch0.pt", "epoch5.pt", "best.pt", "last.pt", "epoch5 (1).pt")
+    found = auto_label.checkpoint_epochs(tmp_path, auto_label.read_results(tmp_path))
+    assert [(name, epoch, path.name) for name, epoch, path in found] == [
+        ("epoch0", 1, "epoch0.pt"),
+        ("epoch5", 6, "epoch5.pt"),
+        ("best", 7, "best.pt"),
+        ("last", 10, "last.pt"),
+    ]
+
+
+def test_checkpoint_epochs_best_is_first_of_equal_scores(tmp_path):
+    """노트북 셀 5 의 max() 처럼 mAP50-95 가 같으면 앞 epoch 를 best 로 본다."""
+    _write_results(tmp_path, [(1, 0.1, 0.3), (2, 0.1, 0.3)])
+    _write_weights(tmp_path, "best.pt")
+    found = auto_label.checkpoint_epochs(tmp_path, auto_label.read_results(tmp_path))
+    assert [(name, epoch) for name, epoch, _ in found] == [("best", 1)]
+
+
+def test_checkpoint_epochs_stops_without_weights(tmp_path):
+    with pytest.raises(SystemExit, match="가중치 폴더가 없습니다"):
+        auto_label.checkpoint_epochs(tmp_path, [])
+    (tmp_path / "weights").mkdir()
+    with pytest.raises(SystemExit, match="고를 가중치가 없습니다"):
+        auto_label.checkpoint_epochs(tmp_path, [])
+
+
+def test_gt_confidence_takes_best_overlapping_box_and_zero_when_missed():
+    gt = BBox(0, 0, 100, 100)
+    samples = [{"file": "a", "gt": gt}, {"file": "b", "gt": gt}]
+    detections = {
+        # 정답 자리 박스 둘(0.4 · 0.7) 중 높은 것. 멀리 있는 0.9 박스는 안 본다
+        "a": [
+            _det("bottle", (0, 0, 100, 100), 0.4),
+            _det("cup", (5, 5, 100, 100), 0.7),
+            _det("book", (300, 300, 400, 400), 0.9),
+        ],
+        "b": [_det("bottle", (60, 60, 160, 160), 0.8)],  # IoU 0.5 미만 → 못 잡음 = 0
+    }
+    assert auto_label.gt_confidence(samples, detections) == pytest.approx(0.35)
+    assert auto_label.gt_confidence([], {}) is None
+
+
+def _score(name: str, epoch: int, box_recall: float, gt_conf: float) -> dict:
+    return {"name": name, "epoch": epoch, "box_recall": box_recall, "gt_confidence": gt_conf}
+
+
+def test_pick_checkpoint_prefers_recall_then_confidence_then_earlier_epoch():
+    """규칙은 결과 전에 정했다: 후보 재현율 → 정답 자리 확신 → 이른 epoch."""
+    pick = auto_label.pick_checkpoint
+    assert pick([_score("epoch0", 1, 0.5, 0.9), _score("epoch5", 6, 0.6, 0.1)])["name"] == "epoch5"
+    assert pick([_score("epoch5", 6, 0.6, 0.3), _score("last", 100, 0.6, 0.4)])["name"] == "last"
+    tied = [_score("last", 100, 0.6, 0.4), _score("epoch25", 26, 0.6, 0.4)]
+    assert pick(tied)["name"] == "epoch25"
+
+
+def test_pick_checkpoint_without_scores_raises():
+    with pytest.raises(ValueError):
+        auto_label.pick_checkpoint([])
+
+
+def test_format_pick_is_a_table_row():
+    score = {
+        "name": "epoch25",
+        "epoch": 26,
+        "map50": 0.3051,
+        "box_recall": 0.575,
+        "class_recall": 0.5,
+        "product_recall": None,
+        "gt_confidence": 0.4123,
+        "boxes_per_photo": 4.25,
+    }
+    assert auto_label.format_pick(score) == (
+        "| epoch25 | 26 | 0.305 | 57.5% | 50.0% | - | 0.412 | 4.2 |"
+    )
+
+
+def _pick_setup(tmp_path: Path) -> tuple[Path, Path]:
+    """s06 valid 2장(+ 고르지 않을 s01 1장) · 회차 폴더(epoch0 · epoch5 · last)."""
+    pointing = tmp_path / "pointing"
+    pointing.mkdir()
+    base = {"gt_label": "bottle", "excluded": "0", "split": "valid"}
+    _write_labels(
+        pointing / "labels.csv",
+        [
+            {**base, "file": "s06/a.jpg", "session": "6"},
+            {**base, "file": "s06/b.jpg", "session": "6"},
+            {**base, "file": "s01/c.jpg", "session": "1"},
+        ],
+    )
+    for name in ("s06/a.jpg", "s06/b.jpg", "s01/c.jpg"):
+        _write_jpg(pointing / "raw" / name)
+    run = tmp_path / "runs" / "r4"
+    _write_results(run, [(epoch, 0.1 * (epoch % 3), 0.01 * epoch) for epoch in range(1, 11)])
+    _write_weights(run, "epoch0.pt", "epoch5.pt", "last.pt")
+    return pointing, run
+
+
+def _fake_checkpoint_detector(weights: Path, conf: float):
+    """정답 자리를 epoch5 는 0.6, last 는 0.3 으로 잡고, epoch0 은 0.1 이라 0.25 에선 못 잡는다."""
+    score = {"epoch0.pt": 0.1, "epoch5.pt": 0.6, "last.pt": 0.3}[weights.name]
+    return lambda image: [_det("bottle", (0, 0, 10, 10), score)] if score >= conf else []
+
+
+def _pick_argv(monkeypatch, pointing: Path, run: Path, out: Path, *extra: str) -> None:
+    _set_argv(
+        monkeypatch,
+        "pick",
+        "--run",
+        str(run),
+        "--pointing",
+        str(pointing),
+        "--out",
+        str(out),
+        *extra,
+    )
+
+
+def test_pick_copies_chosen_weights_and_prints_table(monkeypatch, tmp_path, capsys):
+    """epoch5 와 last 가 후보 재현율 동점 → 정답 자리 확신이 높은 epoch5 를 고른다."""
+    pointing, run = _pick_setup(tmp_path)
+    seen = []
+
+    def detector(weights: Path, conf: float):
+        seen.append((weights.name, conf))
+        return _fake_checkpoint_detector(weights, conf)
+
+    monkeypatch.setattr(auto_label, "make_checkpoint_detector", detector)
+    out = tmp_path / "models" / "detector_r4.pt"
+    _pick_argv(monkeypatch, pointing, run, out)
+    auto_label.main()
+
+    assert out.read_bytes() == b"epoch5.pt"
+    # 가중치마다 비서 기준(0.25)으로 한 번, 정답 자리 확신(0.01)으로 한 번
+    low = auto_label.PICK_LOW_CONF
+    assert seen == [
+        ("epoch0.pt", 0.25),
+        ("epoch0.pt", low),
+        ("epoch5.pt", 0.25),
+        ("epoch5.pt", low),
+        ("last.pt", 0.25),
+        ("last.pt", low),
+    ]
+    printed = capsys.readouterr().out
+    assert "valid 2장 (세션 6) · 가중치 3개 · conf 0.25" in printed
+    assert "| epoch0 | 1 | 0.100 | 0.0% |" in printed
+    assert "| epoch5 | 6 | 0.000 | 100.0% |" in printed
+    assert "| last | 10 | 0.100 | 100.0% |" in printed
+    assert "고른 것: epoch5 (6번째 epoch)" in printed
+
+
+def test_pick_refuses_existing_out_before_loading_weights(monkeypatch, tmp_path):
+    """다른 회차 가중치를 덮어쓰지 않는다. 모델을 읽기 전에 멈춘다."""
+    pointing, run = _pick_setup(tmp_path)
+    out = tmp_path / "detector_r3.pt"
+    out.write_bytes(b"R3")
+
+    def must_not_load(weights: Path, conf: float):
+        pytest.fail("가중치를 읽기 전에 멈춰야 한다")
+
+    monkeypatch.setattr(auto_label, "make_checkpoint_detector", must_not_load)
+    _pick_argv(monkeypatch, pointing, run, out)
+    with pytest.raises(SystemExit, match="이미 있습니다"):
+        auto_label.main()
+    assert out.read_bytes() == b"R3"
+
+
+def test_pick_stops_when_chosen_sessions_have_no_photos(monkeypatch, tmp_path):
+    pointing, run = _pick_setup(tmp_path)
+    monkeypatch.setattr(auto_label, "make_checkpoint_detector", _fake_checkpoint_detector)
+    _pick_argv(monkeypatch, pointing, run, tmp_path / "o.pt", "--sessions", "7")
+    with pytest.raises(SystemExit, match="valid 사진이 없습니다"):
+        auto_label.main()
+
+
+def test_parse_args_pick_defaults_to_s06_and_detector_conf(monkeypatch):
+    """고르는 사진은 R0~R3 비교표(valid 62장)에 안 쓴 s06, 기준은 비서 검출과 같은 0.25."""
+    _set_argv(monkeypatch, "pick", "--run", "r4", "--out", "o.pt")
+    args = auto_label.parse_args()
+    assert (args.sessions, args.conf) == ([6], auto_label.CONF)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["pick", "--out", "o.pt"],  # 회차 폴더 없음
+        ["pick", "--run", "r4"],  # 복사할 곳 없음
+        ["pick", "--run", "r4", "--out", "o.pt", "--conf", "1.5"],
+    ],
+)
+def test_parse_args_pick_needs_run_out_and_conf_in_range(monkeypatch, args):
     _set_argv(monkeypatch, *args)
     with pytest.raises(SystemExit):
         auto_label.parse_args()

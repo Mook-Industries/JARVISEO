@@ -9,7 +9,7 @@
 | `label_targets.py` | 가리킴 정답 표시 — 찍은 사진에 YOLO 후보를 번호로 띄우고, 정답을 골라(없으면 박스를 그려) `labels.csv` 에 남긴다. `--split` valid · test · train |
 | `fit_gaze.py` | v3 시선 분포 — 학습용(train) 세션의 정답 박스 중심(0~1 좌표)으로 평균 · 공분산을 맞추고, `pointing/cues.py` 에 붙일 상수 두 줄을 찍는다 |
 | `extract_frames.py` | 검출기 학습 사진 — 안경 카메라 영상에서 3초에 1장(`--every`, 기본 3) 뽑고, 거의 같은 장면은 버린다 |
-| `auto_label.py` | 검출기 학습 라벨 — 선생 모델 비교(`compare`), 박스 초안(`label`), 사람 검수 작업(`review`), 회차별 학습 묶음(`build`) |
+| `auto_label.py` | 검출기 학습 라벨 — 선생 모델 비교(`compare`), 박스 초안(`label`), 사람 검수 작업(`review`), 회차별 학습 묶음(`build`), 회차 가중치 중 epoch 고르기(`pick`, R4) |
 | `train_hand_classifier.py` | 가리키는 손 분류기 — `landmarks.csv` 로 손 관절 MLP(R1, `hand_r1.npz`) 또는 관절 + 손 사진 CNN 특징 MLP(R2 `--with-patches`, `hand_r2.npz`)를 사람 단위 3겹으로 평가 · 문턱을 고르고 전부로 학습해 `src/jarviseo/pointing/` 에 내보낸다 |
 | `hand_clips.py` | 가리키는 손 분류기 학습 데이터 — 손 영상을 손 모양 구간으로(`segments`), 구간마다 손 관절 표 · 손 사진(`extract`), 15° 규칙 기준선(`summary`) |
 | `hand_box_labels.py` | 손 박스 검출기 학습 데이터(#256 ⑤-b) — 손 영상 · 검출기 프레임 · s05 에서 MediaPipe(사진 전체 → 4조각 → 3조각) + 이어 읽기로 자동 정답(`label`), 단계별 확인 모음 사진(`sheet`), 장소로 나눈 학습 묶음 zip(`build`) |
@@ -244,6 +244,44 @@ cd data/datasets/detector && zip -qr JARVISEO_R3_data.zip yolo_r3 prep_report.tx
 - 검증은 R2 검수본에 든 d05 짝수 31장 그대로다.
 - 노트북 `notebooks/detector_finetune.ipynb` 는 셀 1 이 `ROUND = "r3"` · `RUNS = ["r3"]` 이다. 결과는 `data/models/detector_r3.pt` 로 받아
   `run_ablation.py --weights yolov8n.pt data/models/detector_r2.pt data/models/detector_r3.pt` 로 R0 · R2 와 한 실행에서 잰다.
+
+## R4 — epoch 를 실제 사진으로 고르기 (#167)
+
+R3 의 학습 묶음 · 설정을 그대로 두고, 학습 중 5 epoch 마다 가중치를 남겨 **실제 사진(valid s06)의 후보 재현율로 고른다.**
+R3 는 d05 검증(학습과 같은 영상 · 병 0개)의 mAP 로 best.pt 를 골랐는데, 오래 학습할수록 실제 사진의 병 · 식품 확신이 떨어지는 것을
+d05 는 못 봤다(`docs/experiments.md` "R4"). 바뀌는 것은 고르는 기준 하나라 R3 가 그대로 대조군이다.
+
+### 1. Colab
+
+- 노트북 `notebooks/detector_finetune.ipynb` 는 셀 1 이 `ROUND = "r4"` · `DATA = "r3"`(R3 묶음 zip 그대로) · `SAVE_PERIOD = 5` 다. 새 zip 은 없다.
+- 결과 `detector/runs/r4` 에 `epoch0.pt`~`epoch95.pt` 20개 + best · last 가 남는다. 중간 파일은 노트북이 최적화 상태를 빼서 best · last 처럼 6MB 안팎이다.
+- 런타임은 **T4 + 고용량 RAM(CPU 8)** 이어야 한다. 보고서의 `CPU N개` 가 데이터 준비 워커 수이고, 워커 수가 바뀌면 같은 seed 라도 증강 순서가 달라져 다른 학습이 된다.
+  11/2 R4 는 CPU 2개로 돌아 R3(best 67 · d05 mAP50 0.413)를 그대로 다시 만들지 못했다(64 · 0.460, `docs/experiments.md` "R4").
+
+### 2. 받기 · 고르기 (레포 맨 위 폴더에서, 팀 환경)
+
+Drive 의 `JARVISEO/detector/runs/r4` 폴더를 통째로 받아 `data/datasets/detector/runs/` 에 푼다(`runs/r4/results.csv` · `runs/r4/weights/`).
+
+```bash
+python tools/auto_label.py pick --run data/datasets/detector/runs/r4 --out data/models/detector_r4.pt
+```
+
+- results.csv 에 epoch 번호 · d05 mAP 가 있어서 best.pt 만 받으면 안 된다.
+- `epochN.pt` 의 N 은 0부터라 `epoch5.pt` 가 6번째 epoch 다. 표 · 기록은 results.csv 번호로 쓴다.
+- 고르는 규칙(결과를 보기 전에 정함): s06 40장의 후보 재현율(기준 0.25, 비서와 같은 `ObjectDetector`) → 같으면 정답 자리 박스 확신 평균(기준 0.01 로 본 값)
+  → 그래도 같으면 이른 epoch. 가중치마다 두 번(0.25 · 0.01) 돌려도 22개에 1분 안팎이다(R3 best · last 두 개로 6초).
+- 왜 s06 인가: valid 62장(s01 · s02)으로 고르면 R0~R3 비교표의 그 62장이 R4 에게만 유리해진다. s06 은 어느 회차에도 안 쓴 새 장소다.
+  그래서 R4 는 valid 62 · s04 · test 로 비교하고, s06 이 든 '늘린 valid 102' 숫자는 R4 에게 유리하다고 적는다.
+- 찍힌 표는 experiments.md 에 그대로 붙인다. `--out` 이 이미 있으면 멈춘다(다른 회차 가중치를 덮어쓰지 않는다).
+
+### 3. 회차 비교 (R0 · R2 · R3 와 한 실행)
+
+```bash
+python scripts/run_ablation.py --weights yolov8n.pt data/models/detector_r2.pt data/models/detector_r3.pt data/models/detector_r4.pt data/datasets/detector/runs/r4/weights/best.pt --variants v1 v2 v2+lang+C
+```
+
+- 마지막 `best.pt` 는 같은 학습에서 d05 가 고른 가중치다. R4(s06 으로 고른 것)와 견주면 고르는 기준의 몫만 남는다 — R4 가 R3 를 그대로 다시 만든 학습이 아니라서 필요하다.
+- `--sessions 4` 로 한 번 더 잰다(말 세션 s04). test(s03 · s07)는 최종 측정 때 한 번만 연다.
 
 ## 가리키는 손 분류기 학습 데이터 — 손 영상 → 구간 → 관절 표 · 손 사진 (#223)
 

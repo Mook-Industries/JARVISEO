@@ -13,11 +13,15 @@ YOLO 파인튜닝(#167)의 둘째 단계. tools/extract_frames.py 가 뽑은 사
     import   검수 결과(Label Studio JSON)나 R1 초안을 사진별 YOLO 라벨로 바꾼다(R2 · 대조군)
     build    사진 + 라벨로 회차 폴더(yolo_r1 …)를 만든다. 학습 / 검증은 영상 단위로 나눈다.
              라벨 폴더를 여러 개 받는다(R3 = R2 검수본 + R3 검수본)
+    pick     회차 학습이 5 epoch 마다 남긴 가중치 중 실제 사진(valid s06)의 후보 재현율이
+             가장 높은 것을 고른다(R4). 검증 d05 는 학습과 같은 영상 · 병 0개라
+             실제 사진의 하락을 못 본다
 
 compare · label · review(R2) 는 CLIP 이 있는 곳(Colab, 또는 CLIP 을 깐 별도 가상환경)에서만 돈다.
 ultralytics 는 YOLO-World · YOLOE 의 글귀를 처음 읽을 때 CLIP 을 git 에서 자동으로 설치해서,
 팀 파이썬 환경에서 돌리면 승인 없이 패키지가 깔린다. 그래서 CLIP 이 없으면 미리 멈춘다.
-review --weights(R3) 는 글귀를 안 읽어서 팀 환경에서 돈다. import · build 는 모델을 안 쓴다.
+review --weights(R3) · pick(R4) 은 글귀를 안 읽어서 팀 환경에서 돈다.
+import · build 는 모델을 안 쓴다.
 
 실행 (Colab, 레포 맨 위 폴더에서. 먼저 pip install git+https://github.com/ultralytics/CLIP.git):
     python tools/auto_label.py compare --pointing /content/drive/MyDrive/JARVISEO/pointing
@@ -34,6 +38,10 @@ review --weights(R3) 는 글귀를 안 읽어서 팀 환경에서 돈다. import
     python tools/auto_label.py review --weights data/models/detector_r2.pt \\
         --videos d07 d08 d09 --out data/datasets/detector/review_r3
 
+실행 (맥, R4 epoch 고르기. Drive 의 runs/r4 폴더를 통째로 받은 뒤 레포 맨 위 폴더에서):
+    python tools/auto_label.py pick --run data/datasets/detector/runs/r4 \\
+        --out data/models/detector_r4.pt
+
 저장 (--root 아래):
     auto/labels/d01_0001.txt   YOLO 라벨 (번호 중심x 중심y 너비 높이, 0~1)
     auto/tasks.json            Label Studio 로 가져올 검수 작업
@@ -48,6 +56,7 @@ review --weights(R3) 는 글귀를 안 읽어서 팀 환경에서 돈다. import
 
 import argparse
 import csv
+import hashlib
 import importlib.util
 import json
 import re
@@ -64,7 +73,7 @@ import cv2
 import numpy as np
 
 from jarviseo import config
-from jarviseo.pointing.detector import FINETUNE_CLASSES
+from jarviseo.pointing.detector import FINETUNE_CLASSES, ObjectDetector
 from jarviseo.types import BBox, Detection
 
 WORLD_WEIGHTS = "yolov8x-worldv2.pt"
@@ -97,6 +106,11 @@ REVIEW_CONF = 0.1
 # 짧은 변이 이보다 작은 박스는 라벨하지 않는다(검수 규칙, 1280×720 사진의 px).
 # 40×40 은 가리킴 후보의 최소 넓이(MIN_AREA_RATIO, 1280×720 에서 약 43×43)와 비슷하다.
 MIN_SIDE = 40
+# pick 이 정답 자리 박스의 확신을 볼 때 쓰는 낮은 기준.
+# 0.25 아래로 떨어진 박스(R3 병 0.02~0.13)도 보려고.
+PICK_LOW_CONF = 0.01
+# ultralytics 가 save_period 마다 남기는 가중치 이름(epoch0.pt, epoch5.pt …).
+EPOCH_FILE = re.compile(r"epoch(\d+)\.pt")
 
 # 우리 종류 → YOLO-World 에 줄 영어 글귀. "product" 한 단어로는 무엇을 찾을지 몰라서
 # 구체적인 물건 이름으로 찾고 product 로 묶는다. 햇반은 bowl 이라 product 글귀에 넣지 않는다.
@@ -125,6 +139,7 @@ GT_TO_CLASS: dict[str, str] = {name: name for name in FINETUNE_CLASSES if name !
     "jar": "product",
     "cup noodle": "product",
     "pouch": "product",
+    "box": "product",  # 과자 상자. s07 정답 표시(10/28)에서 새로 정한 이름
 }
 
 Teacher = Callable[[np.ndarray], list[Detection]]
@@ -349,6 +364,97 @@ def format_recall(teacher: str, r: dict) -> str:
         f"| {teacher} | {pct(r['box_recall'])} ({r['photos']}장) | "
         f"{pct(r['class_recall'])} ({r['class_total']}장) | "
         f"{pct(r['product_recall'])} ({r['product_total']}장) | {per_photo} |"
+    )
+
+
+def read_results(run_dir: Path) -> list[dict]:
+    """회차 폴더의 results.csv(ultralytics 가 epoch 마다 한 줄씩 쓴다). 열 이름 앞뒤 빈칸은 지운다.
+
+    마지막 epoch · d05 가 고른 epoch · epoch 마다의 d05 mAP50 이 다 여기 있어서, 가중치 파일을
+    열지 않고 번호를 안다. 노트북 셀 5 와 같은 읽기다.
+    """
+    path = run_dir / "results.csv"
+    if not path.exists():
+        raise SystemExit(
+            f"학습 기록이 없습니다: {path} — "
+            "Drive 의 회차 폴더를 통째로(results.csv · weights/) 받습니다"
+        )
+    with path.open(encoding="utf-8", newline="") as f:
+        return [{k.strip(): v for k, v in row.items()} for row in csv.DictReader(f)]
+
+
+def checkpoint_epochs(run_dir: Path, rows: list[dict]) -> list[tuple[str, int, Path]]:
+    """(표에 쓸 이름, 학습 epoch(1부터), 가중치 파일) 목록. epoch 순서.
+
+    epochN.pt 의 N 은 0부터 센다. ultralytics 는 save_period 마다 epoch{self.epoch}.pt 로
+    저장하고(trainer.py:804) results.csv 에는 self.epoch + 1 을 적는다(trainer.py:963).
+    그래서 epoch5.pt 가 6번째 epoch 다. 번호는 results.csv 쪽으로 맞춘다.
+    best.pt 는 d05 가 고른 epoch(mAP50-95 최고, 같으면 앞 epoch — 노트북 셀 5 와 같은 계산),
+    last.pt 는 마지막 epoch 다. 이름이 셋 중 어디에도 안 맞는 파일은 건너뛴다.
+    """
+    weights = run_dir / "weights"
+    if not weights.is_dir():
+        raise SystemExit(f"가중치 폴더가 없습니다: {weights}")
+    epochs = [int(float(row["epoch"])) for row in rows]
+    found = []
+    for path in sorted(weights.glob("*.pt")):
+        number = EPOCH_FILE.fullmatch(path.name)
+        if number:
+            found.append((path.stem, int(number.group(1)) + 1, path))
+        elif path.name == "best.pt" and rows:
+            best = max(rows, key=lambda row: float(row["metrics/mAP50-95(B)"]))
+            found.append(("best", int(float(best["epoch"])), path))
+        elif path.name == "last.pt" and epochs:
+            found.append(("last", max(epochs), path))
+    if not found:
+        raise SystemExit(f"고를 가중치가 없습니다(epoch*.pt · best.pt · last.pt): {weights}")
+    return sorted(found, key=lambda item: (item[1], item[0]))
+
+
+def gt_confidence(samples: list[dict], detections: dict[str, list[Detection]]) -> float | None:
+    """사진마다 정답 박스와 겹치는(IoU 0.5 이상) 박스 중 가장 높은 확신의 평균. 못 잡은 사진은 0.
+
+    후보 재현율은 기준(0.25)을 넘었는지만 봐서, 사진 40장이면 한 장에 2.5%p 씩 움직여
+    동점이 잦다. 이 값은 기준을 얼마나 여유 있게 넘었는지를 이어지는 숫자로 보여 준다.
+    """
+    if not samples:
+        return None
+    best = [
+        max(
+            (d.confidence for d in detections[s["file"]] if d.bbox.iou(s["gt"]) >= MATCH_IOU),
+            default=0.0,
+        )
+        for s in samples
+    ]
+    return sum(best) / len(best)
+
+
+def pick_checkpoint(scores: list[dict]) -> dict:
+    """후보 재현율 → 정답 자리 확신 평균 → 이른 epoch 순서로 하나를 고른다.
+
+    규칙은 R4 학습 결과를 보기 전에 정했다. 결과를 보고 바꾸면 고르는 사진(s06)에 맞춘 셈이라
+    그 고름을 믿을 수 없다. 이른 epoch 를 고르는 것은 R2 · R3 모두 오래 학습할수록 실제 사진
+    성적이 떨어졌기 때문이다(R3 best 53.2 → last 45.2%, docs/experiments.md "R4").
+    """
+    if not scores:
+        raise ValueError("고를 가중치가 없습니다")
+    return max(scores, key=lambda s: (s["box_recall"], s["gt_confidence"], -s["epoch"]))
+
+
+def format_pick(score: dict) -> str:
+    """pick 표의 한 줄. experiments.md 에 그대로 옮겨 적을 수 있게 표 모양으로."""
+
+    def pct(value: float | None) -> str:
+        return "-" if value is None else f"{value * 100:.1f}%"
+
+    def num(value: float | None, digits: int) -> str:
+        return "-" if value is None else f"{value:.{digits}f}"
+
+    return (
+        f"| {score['name']} | {score['epoch']} | {num(score['map50'], 3)} | "
+        f"{pct(score['box_recall'])} | {pct(score['class_recall'])} | "
+        f"{pct(score['product_recall'])} | {num(score['gt_confidence'], 3)} | "
+        f"{num(score['boxes_per_photo'], 1)} |"
     )
 
 
@@ -934,6 +1040,63 @@ def cmd_build(args: argparse.Namespace) -> None:
         print(f"경고: 박스가 가장 많은 종류의 10% 에 못 미치는 종류 — {', '.join(rare)}")
 
 
+def make_checkpoint_detector(weights: Path, conf: float) -> Teacher:
+    """회차 가중치 하나로 비서와 똑같이 후보를 찾는다(ObjectDetector.detect).
+
+    make_weight_teacher(run_model)는 filter_detections(사람 · 아주 작은 박스 · 사진 절반 넘는
+    박스 빼기)를 안 거쳐서, 비서 · run_ablation.py 가 보는 후보와 다르다. epoch 를 고르는 숫자와
+    나중의 공식 숫자가 같은 정의여야 한다.
+    """
+    return ObjectDetector(weights, conf_threshold=conf).detect
+
+
+def cmd_pick(args: argparse.Namespace) -> None:
+    # 다른 회차 가중치 위에 덮어쓰면 그 회차를 같은 파일로 다시 잴 수 없다.
+    if args.out.exists():
+        raise SystemExit(f"이미 있습니다: {args.out} — 회차마다 새 이름(detector_r4.pt …)을 씁니다")
+    samples = load_samples(args.pointing, args.sessions)
+    if not samples:
+        raise SystemExit(f"valid 사진이 없습니다: {args.pointing / 'labels.csv'}")
+    rows = read_results(args.run)
+    checkpoints = checkpoint_epochs(args.run, rows)
+    map50 = {int(float(row["epoch"])): float(row["metrics/mAP50(B)"]) for row in rows}
+    images = {s["file"]: read_image(args.pointing / "raw" / s["file"]) for s in samples}
+
+    sessions = " ".join(str(s) for s in args.sessions)
+    print(
+        f"valid {len(samples)}장 (세션 {sessions}) · 가중치 {len(checkpoints)}개 · conf {args.conf}"
+    )
+    print("고르는 규칙: 후보 재현율 → 정답 자리 확신 평균 → 이른 epoch")
+    print(
+        "| 가중치 | epoch | d05 mAP50 | 후보 재현율 | 종류까지 맞음 | product | "
+        "정답 자리 확신 | 사진당 박스 |"
+    )
+    print("|---|---|---|---|---|---|---|---|")
+    scores = []
+    for name, epoch, path in checkpoints:
+        # 후보 재현율은 비서와 같은 기준(0.25)으로, 정답 자리 확신은 기준 아래 박스까지 본다.
+        detect = make_checkpoint_detector(path, args.conf)
+        loose = make_checkpoint_detector(path, PICK_LOW_CONF)
+        score = {
+            "name": name,
+            "epoch": epoch,
+            "path": path,
+            "map50": map50.get(epoch),
+            **recall(samples, {file: detect(image) for file, image in images.items()}),
+            "gt_confidence": gt_confidence(
+                samples, {file: loose(image) for file, image in images.items()}
+            ),
+        }
+        print(format_pick(score))
+        scores.append(score)
+
+    chosen = pick_checkpoint(scores)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(chosen["path"], args.out)
+    digest = hashlib.sha256(args.out.read_bytes()).hexdigest()[:12]
+    print(f"고른 것: {chosen['name']} ({chosen['epoch']}번째 epoch) → {args.out} · sha256 {digest}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="자동 라벨 — 선생 모델로 박스 초안")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1009,6 +1172,37 @@ def parse_args() -> argparse.Namespace:
     build.add_argument("--val", nargs="+", required=True, help="검증으로 뺄 영상 번호, 예: d05")
     build.add_argument("--out", type=Path, required=True, help="회차 폴더, 예: <root>/yolo_r1")
 
+    pick = sub.add_parser(
+        "pick", help="회차 가중치 중 실제 사진(valid) 후보 재현율이 가장 높은 epoch 고르기(R4)"
+    )
+    pick.add_argument(
+        "--run",
+        type=Path,
+        required=True,
+        help="받은 회차 폴더(results.csv · weights/), 예: data/datasets/detector/runs/r4",
+    )
+    pick.add_argument(
+        "--pointing",
+        type=Path,
+        default=config.DATASETS_DIR / "pointing",
+        help="가리킴 평가셋 폴더 (labels.csv · raw/)",
+    )
+    pick.add_argument(
+        "--sessions",
+        type=int,
+        nargs="+",
+        default=[6],
+        help="고르는 데 쓸 valid 세션. 기본 s06 — R0~R3 비교표의 valid 62장(s01 · s02)으로 "
+        "고르면 그 표가 R4 에게만 유리해진다",
+    )
+    pick.add_argument("--conf", type=float, default=CONF, help="신뢰도 기준(비서 검출과 같게)")
+    pick.add_argument(
+        "--out",
+        type=Path,
+        required=True,
+        help="고른 가중치를 복사할 곳, 예: data/models/detector_r4.pt",
+    )
+
     imp = sub.add_parser("import", help="검수 결과(Label Studio JSON) 또는 R1 초안 → YOLO 라벨")
     source = imp.add_mutually_exclusive_group(required=True)
     source.add_argument("--export", type=Path, help="Label Studio 에서 JSON 으로 내보낸 파일(R2)")
@@ -1043,7 +1237,7 @@ def parse_args() -> argparse.Namespace:
             parser.error(f"--videos 는 d07 처럼 영상 번호로 씁니다: {bad}")
         if args.conf is None:
             args.conf = CONF if args.weights is not None else REVIEW_CONF
-    if args.command in ("compare", "label", "review") and not 0 < args.conf < 1:
+    if args.command in ("compare", "label", "review", "pick") and not 0 < args.conf < 1:
         parser.error(f"--conf 는 0 과 1 사이입니다: {args.conf}")
     return args
 
@@ -1056,6 +1250,7 @@ def main() -> None:
         "review": cmd_review,
         "import": cmd_import,
         "build": cmd_build,
+        "pick": cmd_pick,
     }
     commands[args.command](args)
 
