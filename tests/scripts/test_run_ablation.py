@@ -826,3 +826,23 @@ def test_same_conditions_needs_same_hand_rule():
     assert run_ablation.same_conditions(_conditions(), r0)
     assert not run_ablation.same_conditions(r0, r1)
     assert run_ablation.run_conditions({"sha256": "a"}, [1], 0.25, "all")["hand_rule"] == "all"
+
+
+# --- 조각 확대 (#256) -----------------------------------------------------------------
+
+
+def test_run_conditions_records_hand_tiles(monkeypatch):
+    """조각 확대를 켜고 쟀는지 남긴다. 안 주면 끔."""
+    monkeypatch.setattr(run_ablation, "git_commit", lambda: "abc1234")
+    weights = {"sha256": "a"}
+    assert run_ablation.run_conditions(weights, [1], 0.25)["hand_tiles"] is False
+    assert run_ablation.run_conditions(weights, [1], 0.25, "r1", True)["hand_tiles"] is True
+
+
+def test_same_conditions_needs_same_hand_tiles():
+    """조각 확대를 켠 실행은 끈 실행과 다른 조건. 조각을 안 적은 옛 실행은 끈 것으로 읽는다."""
+    off = {**_conditions(), "hand_tiles": False}
+    on = {**_conditions(), "hand_tiles": True}
+    assert run_ablation.same_conditions(_conditions(), off)
+    assert not run_ablation.same_conditions(off, on)
+    assert not run_ablation.same_conditions(_conditions(), on)

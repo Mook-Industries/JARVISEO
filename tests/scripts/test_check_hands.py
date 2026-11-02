@@ -1,4 +1,4 @@
-"""손 관절 측정 — 사진별 결과 · 표 한 줄 집계 · 출력 · CSV · 그림.
+"""손 관절 측정 — 사진별 결과 · 표 한 줄 집계 · 출력 · CSV · 그림 · 조각 확대 줄 · main 한 바퀴.
 
 MediaPipe 없이 HandPose 를 직접 만들어 넣는다. 검출은 tests/pointing/test_hands.py 가 본다.
 """
@@ -132,3 +132,71 @@ def test_save_image_korean_path(tmp_path):
     path = tmp_path / "그림" / "s01" / "a.jpg"
     check_hands.save_image(path, np.full((10, 10, 3), 255, np.uint8))
     assert check_hands.read_image(path).shape == (10, 10, 3)
+
+
+# --- 조각 확대 (#256) -----------------------------------------------------------------
+
+
+def test_format_row_marks_tile_row():
+    """조각 확대 줄은 검출 기준 뒤에 +조각 을 붙인다."""
+    m = check_hands.summarize([_row(True, angle=12.4, ms=11.0), _row(False, pointing=False)])
+    line = check_hands.format_row(0.1, 15.0, m, tiles=True)
+    assert line == "0.10+조각 | 15° | 1/1 | 1/1 | 1 | 12° | 0/1 | 11.0/11.0"
+
+
+def test_false_pointing_files_only_no_hand_photos():
+    """손 없음 사진에서 가리키는 손을 고른 사진만 모은다."""
+    rows = [
+        {"file": "a.jpg", "has_hand": False, "pointing": True},
+        {"file": "b.jpg", "has_hand": True, "pointing": True},
+        {"file": "c.jpg", "has_hand": False, "pointing": False},
+    ]
+    assert check_hands.false_pointing_files(rows) == ["a.jpg"]
+
+
+class _NoHands:
+    """손을 하나도 못 찾는 가짜 검출기. 부른 횟수를 센다."""
+
+    def __init__(self, **kwargs) -> None:
+        self.calls = 0
+
+    def detect(self, image):
+        self.calls += 1
+        return []
+
+
+def test_find_hands_warms_up_once_then_times_each_photo():
+    """첫 사진으로 한 번 데우고(버림), 사진마다 찾은 손과 시간을 남긴다."""
+    images = {"a.jpg": np.zeros((4, 4, 3), np.uint8), "b.jpg": np.zeros((4, 4, 3), np.uint8)}
+    detector = _NoHands()
+    hands, detect_ms = check_hands.find_hands(detector, images)
+    assert detector.calls == 3
+    assert hands == {"a.jpg": [], "b.jpg": []}
+    assert set(detect_ms) == {"a.jpg", "b.jpg"}
+
+
+def test_main_reads_default_sessions_and_prints_tile_row(tmp_path, monkeypatch, capsys):
+    """main 이 기본 세션(valid 1 · 2)만 읽고 조각 확대 줄까지 끝까지 돈다.
+
+    세션 인자를 빠뜨려 load_samples 에서 바로 멈춘 적이 있다. 세션 4 사진은 안 섞인다.
+    """
+    labels = tmp_path / "labels.csv"
+    columns = ["file", "session", "split", "utterance", "gt_x1", "gt_y1", "gt_x2", "gt_y2"]
+    columns += ["gt_label", "has_hand", "ambiguous", "prev_label", "excluded"]
+    with labels.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(columns)
+        writer.writerow(["s01/a.jpg", "1", "valid", "이건 뭐야?", 1, 2, 3, 4, "cup", 1, 0, "", 0])
+        writer.writerow(["s04/d.jpg", "4", "valid", "저건 뭐야?", 1, 2, 3, 4, "cup", 0, 0, "", 0])
+    monkeypatch.setattr(check_hands, "HandDetector", _NoHands)
+    monkeypatch.setattr(check_hands, "read_image", lambda path: np.zeros((10, 10, 3), np.uint8))
+    out = tmp_path / "out"
+    argv = ["check_hands.py", "--labels", str(labels), "--raw", str(tmp_path), "--out", str(out)]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    check_hands.main()
+
+    printed = capsys.readouterr().out
+    assert "valid 1장 (손 있음 1 · 없음 0)" in printed
+    assert "0.10+조각 | 15° | 0/1 | 0/1 |" in printed
+    assert (out / "hands_valid.csv").exists()

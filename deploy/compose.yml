@@ -49,6 +49,10 @@ services:
       # 기억 검색("아까 물어본 마우스 뭐지?"). config 기본값은 꺼짐이라 노트북 .env 처럼 여기서 켠다.
       # 10/26 까지 이 줄이 없어 서버에서는 기억을 저장만 하고 찾지 않았다.
       JARVISEO_ENABLE_RECALL: "true"
+      # 가리키는 손 분류기(R1)와 조각 확대(#256). 둘은 짝으로 켠다 — 조각만 켜면 확신 오답이 늘고,
+      # 짝으로는 valid · s04 에서 미리 정한 기준을 넘었다(docs/experiments.md "조각 확대").
+      JARVISEO_ENABLE_HAND_CLASSIFIER: "true"
+      JARVISEO_ENABLE_HAND_TILES: "true"
       # 키는 secrets.env 에서 온다. 없으면 빈 값 — VLM 은 "키가 없다"고 답하고, 성분표는 읽지 못한다.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_VISION_API_KEY: ${GOOGLE_VISION_API_KEY:-}

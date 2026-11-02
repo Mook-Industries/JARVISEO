@@ -90,6 +90,7 @@ ENABLE_GAZE_CUE = _get_bool("JARVISEO_ENABLE_GAZE_CUE", False)
 ENABLE_CONTEXT_CUE = _get_bool("JARVISEO_ENABLE_CONTEXT_CUE", False)
 ENABLE_RECALL = _get_bool("JARVISEO_ENABLE_RECALL", False)
 ENABLE_HAND_CLASSIFIER = _get_bool("JARVISEO_ENABLE_HAND_CLASSIFIER", False)
+ENABLE_HAND_TILES = _get_bool("JARVISEO_ENABLE_HAND_TILES", False)
 
 # --- 외부 API -------------------------------------------------------------
 # 팀 공용 OpenAI 키 1개를 STT · VLM · TTS · 임베딩이 함께 쓴다. 월 사용 한도 설정 필수.
