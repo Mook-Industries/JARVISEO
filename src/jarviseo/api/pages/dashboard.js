@@ -785,7 +785,7 @@
      카메라가 그 값을 못 내면 브라우저가 가장 가까운 값으로 연다(ideal). */
   const CAM_DEFAULT = {
     deviceId: "",
-    saver: true,
+    saver: false, // 기본은 꺼짐: 늘 호출 설정으로 연다. 환경설정에서 켜면 대기 · 호출을 나눈다
     idle: { res: "640x360", hz: 5 },
     active: { res: "1920x1080", hz: 15 },
   };
