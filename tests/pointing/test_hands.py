@@ -26,6 +26,7 @@ from jarviseo.pointing.hands import (
     hand_patch_box,
     is_pointing,
     landmark_box,
+    load_box_finder,
     merge_hands,
     pick_pointing_hand,
     pointing_ray,
@@ -438,8 +439,11 @@ class _FakeDetector(HandDetector):
     첫 번째는 사진 전체, 그다음은 조각(왼위 · 오른위 · 왼아래 · 오른아래) 순서다.
     """
 
-    def __init__(self, found: list[list[HandPose]], tiles: bool = True, classifier=None) -> None:
+    def __init__(
+        self, found: list[list[HandPose]], tiles: bool = True, classifier=None, box_finder=None
+    ) -> None:
         self.encoder, self.classifier, self.tiles = None, classifier, tiles
+        self.box_finder = box_finder
         self.found, self.calls = found, 0
 
     def _landmarks(self, image: np.ndarray) -> list[HandPose]:
@@ -492,6 +496,74 @@ def test_detect_attaches_patch_feature_to_tile_hands():
     detector.encoder = _ShapeEncoder()
     (hand,) = detector.detect(IMAGE)
     assert list(hand.patch_feature) == [0, 1, 2, 3]
+
+
+# --- 손 박스 검출기 (#256 ⑤-b) ---------------------------------------------------------
+
+
+class _FakeBoxFinder:
+    """손 박스 검출기 흉내. 정해 둔 박스를 내고, 읽으면 박스 왼위 모서리에 가리키는 손을 둔다."""
+
+    def __init__(self, boxes: list[BBox]) -> None:
+        self._boxes, self.box_calls, self.read_boxes = boxes, 0, []
+
+    def boxes(self, image: np.ndarray) -> list[BBox]:
+        self.box_calls += 1
+        return list(self._boxes)
+
+    def read(self, image: np.ndarray, box: BBox) -> HandPose:
+        self.read_boxes.append(box)
+        return _hand_box(box.x1, box.y1)
+
+
+def test_detect_reads_hand_boxes_when_tiles_find_no_pointing_hand():
+    """사진 전체 · 4조각 모두 가리키는 손을 못 고르면 손 박스에서 읽은 손을 뒤에 붙인다."""
+    open_hand = _hand_box(100.0, 100.0, pointing=False)
+    finder = _FakeBoxFinder([BBox(1000.0, 500.0, 1100.0, 600.0)])
+    detector = _FakeDetector([[open_hand], [], [], [], []], box_finder=finder)
+
+    hands = detector.detect(IMAGE)
+
+    assert detector.calls == 5
+    assert hands[0] is open_hand
+    assert landmark_box(hands[1]) == BBox(1000.0, 500.0, 1100.0, 600.0)
+    assert pick_pointing_hand(hands, classifier=None) is hands[1]
+
+
+def test_detect_skips_hand_boxes_when_tiles_found_pointing_hand():
+    """4조각에서 가리키는 손을 골랐으면 손 박스 검출기를 아예 안 부른다."""
+    finder = _FakeBoxFinder([BBox(1000.0, 500.0, 1100.0, 600.0)])
+    detector = _FakeDetector([[], [_hand_box(10.0, 20.0)]], box_finder=finder)
+    detector.detect(IMAGE)
+    assert finder.box_calls == 0
+
+
+def test_detect_reads_only_boxes_away_from_known_hands():
+    """이미 찾은 손 자리의 박스는 같은 손이라 읽지 않는다(IoU 0.3 이상)."""
+    open_hand = _hand_box(100.0, 100.0, pointing=False)
+    same, other = BBox(100.0, 100.0, 200.0, 200.0), BBox(1000.0, 500.0, 1100.0, 600.0)
+    finder = _FakeBoxFinder([same, other])
+    detector = _FakeDetector([[open_hand], [], [], [], []], box_finder=finder)
+    detector.detect(IMAGE)
+    assert finder.read_boxes == [other]
+
+
+def test_detect_hand_boxes_work_without_tiles():
+    """조각을 끄고 손 박스만 켜면 사진 전체 다음에 바로 손 박스를 본다."""
+    finder = _FakeBoxFinder([BBox(1000.0, 500.0, 1100.0, 600.0)])
+    detector = _FakeDetector([[]], tiles=False, box_finder=finder)
+    (hand,) = detector.detect(IMAGE)
+    assert detector.calls == 1
+    assert landmark_box(hand) == BBox(1000.0, 500.0, 1100.0, 600.0)
+
+
+def test_load_box_finder_warns_from_config_but_raises_when_asked(tmp_path, monkeypatch, caplog):
+    """가중치가 없으면 설정으로 켠 비서는 경고 후 그 단계만 끄고, 직접 켠 측정은 멈춘다."""
+    monkeypatch.setattr(config, "HAND_BOX_WEIGHTS", tmp_path / "hand_box.pt")
+    assert load_box_finder(strict=False) is None
+    assert "손 박스 검출기를 못 읽어" in caplog.text
+    with pytest.raises(FileNotFoundError, match="손 박스 가중치가 없다"):
+        load_box_finder(strict=True)
 
 
 TILE_PHOTO = config.DATASETS_DIR / "pointing" / "raw" / "s02" / "s02_shelf_0009.jpg"

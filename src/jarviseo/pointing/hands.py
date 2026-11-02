@@ -14,12 +14,15 @@
 MediaPipe 는 손바닥을 먼저 찾고 그 둘레에서 관절을 읽는다. 손바닥은 사진 전체를
 192px 로 줄여서 찾아서, 팔을 뻗은 작은 손 · 화면 끝에 걸린 손은 그 크기에서 사라진다.
 ENABLE_HAND_TILES 를 켜면 가리키는 손을 못 고른 사진만 4조각으로 나눠 다시 찾는다(#256).
+ENABLE_HAND_BOX_DETECTOR 를 켜면 그래도 못 고른 사진은 우리 안경 영상으로 학습한 손 박스
+검출기가 찾은 박스에서 관절을 읽는다(hand_boxes.py, #256 ⑤-b).
 
 여기 함수는 좌표 계산이라 MediaPipe 없이 테스트한다. 신경망은 HandDetector 까지만 쓴다.
 """
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -51,6 +54,7 @@ __all__ = [
     "hand_patch_box",
     "is_pointing",
     "landmark_box",
+    "load_box_finder",
     "merge_hands",
     "pick_pointing_hand",
     "pointing_ray",
@@ -60,6 +64,8 @@ __all__ = [
     "shift_hand",
     "tile_boxes",
 ]
+
+log = logging.getLogger(__name__)
 
 Point2 = tuple[float, float]
 Point3 = tuple[float, float, float]
@@ -316,6 +322,24 @@ def poses_from_result(result: Any, frame_size: tuple[int, int]) -> list[HandPose
     ]
 
 
+def load_box_finder(strict: bool) -> Any:
+    """손 박스 검출기(hand_boxes.HandBoxFinder). 가중치 · 모델 파일이 없을 때
+    strict 면 그대로 터뜨리고, 아니면 한 번 알리고 None(이 단계만 끈다).
+
+    설정(플래그)으로 켠 비서는 가중치 하나 때문에 전체가 서면 안 된다. 측정 스크립트처럼
+    직접 켜라고 한 쪽은 조용히 꺼지면 손 박스 없이 잰 숫자가 나와서 터뜨린다.
+    """
+    from jarviseo.pointing.hand_boxes import HandBoxFinder  # hand_boxes 가 이 모듈을 불러 순환
+
+    try:
+        return HandBoxFinder()
+    except (FileNotFoundError, ImportError) as e:
+        if strict:
+            raise
+        log.warning("손 박스 검출기를 못 읽어 그 단계를 끕니다: %s", e)
+        return None
+
+
 class HandDetector:
     """사진 한 장에서 손을 찾는다. 앱에서 하나만 만들어 돌려 쓴다(모델을 한 번만 읽으려고).
 
@@ -324,6 +348,8 @@ class HandDetector:
 
     tiles 를 켜면 사진 전체에서 가리키는 손을 못 고른 사진만 4조각에서 다시 찾는다(#256).
     늘 조각까지 돌리면 사진마다 MediaPipe 가 다섯 번 돌아, 이미 찾은 사진까지 느려진다.
+    boxes 를 켜면 그래도 못 고른 사진만 손 박스 검출기가 찾은 박스에서 관절을 읽는다(#256 ⑤-b).
+    이미 가리키는 손을 고른 사진은 앞 단계 그대로라, 뒤 단계가 바꿀 수 있는 건 못 고른 사진뿐이다.
     """
 
     def __init__(
@@ -334,6 +360,7 @@ class HandDetector:
         encoder: Any = _FROM_CONFIG,
         classifier: HandClassifier | None = _FROM_CONFIG,
         tiles: bool = _FROM_CONFIG,
+        boxes: bool = _FROM_CONFIG,
     ) -> None:
         model_path = Path(model_path)
         # 파일부터 본다. mediapipe 가 없는 CI 에서도 이 안내가 테스트된다.
@@ -367,17 +394,38 @@ class HandDetector:
             encoder = PatchEncoder() if classifier is not None and classifier.needs_patch else None
         self.encoder = encoder
         self.tiles = config.ENABLE_HAND_TILES if tiles is _FROM_CONFIG else tiles
+        use_boxes = config.ENABLE_HAND_BOX_DETECTOR if boxes is _FROM_CONFIG else boxes
+        self.box_finder = load_box_finder(strict=boxes is not _FROM_CONFIG) if use_boxes else None
 
     def detect(self, image: np.ndarray) -> list[HandPose]:
         """BGR 이미지에서 손을 찾는다. 없으면 빈 리스트.
 
-        조각에서 찾은 손은 사진 전체에서 찾은 손 뒤에 붙는다(같은 손은 하나만).
+        사진 전체 → (가리키는 손을 못 고르면) 4조각 → (그래도 못 고르면) 손 박스 순서다.
+        뒤 단계에서 찾은 손은 앞에서 찾은 손 뒤에 붙는다(같은 손은 하나만).
         """
         hands = self._with_patch(image, self._landmarks(image))
-        if not self.tiles or pick_pointing_hand(hands, classifier=self.classifier) is not None:
-            return hands
-        # 손 사진 특징은 원본에서 자른다. 조각에서 자르면 조각 경계에서 손이 한쪽으로 밀린다.
-        return merge_hands(hands, self._with_patch(image, search_tiles(image, self._landmarks)))
+        if self.tiles and not self._has_pointing(hands):
+            # 손 사진 특징은 원본에서 자른다. 조각에서 자르면 조각 경계에서 손이 한쪽으로 밀린다.
+            tile_hands = search_tiles(image, self._landmarks)
+            hands = merge_hands(hands, self._with_patch(image, tile_hands))
+        if self.box_finder is not None and not self._has_pointing(hands):
+            hands = merge_hands(hands, self._with_patch(image, self._box_hands(image, hands)))
+        return hands
+
+    def _has_pointing(self, hands: list[HandPose]) -> bool:
+        """부르는 쪽 pick_pointing_hand 와 같은 판정으로 가리키는 손을 골랐나."""
+        return pick_pointing_hand(hands, classifier=self.classifier) is not None
+
+    def _box_hands(self, image: np.ndarray, found: list[HandPose]) -> list[HandPose]:
+        """이미 찾은 손과 겹치지 않는 손 박스에서만 관절을 읽는다(같은 손을 두 번 안 읽게)."""
+        known = [landmark_box(hand) for hand in found]
+        fresh = [
+            box
+            for box in self.box_finder.boxes(image)
+            if all(box.iou(other) < SAME_HAND_IOU for other in known)
+        ]
+        read = (self.box_finder.read(image, box) for box in fresh)
+        return [hand for hand in read if hand is not None]
 
     def _landmarks(self, image: np.ndarray) -> list[HandPose]:
         """MediaPipe 한 번. 관절은 넘겨받은 이미지의 픽셀 좌표다.

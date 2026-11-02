@@ -846,3 +846,42 @@ def test_same_conditions_needs_same_hand_tiles():
     assert run_ablation.same_conditions(_conditions(), off)
     assert not run_ablation.same_conditions(off, on)
     assert not run_ablation.same_conditions(_conditions(), on)
+
+
+# --- 손 박스 (#256 ⑤-b) ---------------------------------------------------------------
+
+
+def test_run_conditions_records_hand_boxes_and_their_weights(monkeypatch):
+    """손 박스를 켰으면 켬과 그 가중치 지문을 남긴다. 안 주면 끔이고 지문 칸이 없다."""
+    monkeypatch.setattr(run_ablation, "git_commit", lambda: "abc1234")
+    weights, boxes = {"sha256": "a"}, {"name": "hand_box.pt", "sha256": "b"}
+    off = run_ablation.run_conditions(weights, [1], 0.25)
+    assert off["hand_boxes"] is False and "hand_box_weights" not in off
+    on = run_ablation.run_conditions(weights, [1], 0.25, "r1", True, boxes)
+    assert on["hand_boxes"] is True and on["hand_box_weights"] == boxes
+
+
+def test_same_conditions_needs_same_hand_box_weights():
+    """손 박스를 켠 실행은 끈 실행과, 다른 손 박스 가중치로 켠 실행과도 다른 조건이다.
+
+    손 박스를 안 적은 옛 실행은 끈 것으로 읽는다.
+    """
+    off = {**_conditions(), "hand_boxes": False}
+    on = {**_conditions(), "hand_boxes": True, "hand_box_weights": {"sha256": "b"}}
+    retrained = {**on, "hand_box_weights": {"sha256": "c"}}
+    assert run_ablation.same_conditions(_conditions(), off)
+    assert run_ablation.same_conditions(on, dict(on))
+    assert not run_ablation.same_conditions(off, on)
+    assert not run_ablation.same_conditions(on, retrained)
+
+
+def test_pointing_counts_splits_by_hand_mark():
+    """가리키는 손을 고른 사진을 손 있음 / 손 없음(헛손)으로 나눠 센다."""
+    hand = object()
+    samples = [
+        {"file": "a.jpg", "has_hand": True},
+        {"file": "b.jpg", "has_hand": True},
+        {"file": "c.jpg", "has_hand": False},
+    ]
+    hands = {"a.jpg": hand, "b.jpg": None, "c.jpg": hand}
+    assert run_ablation.pointing_counts(samples, hands) == (1, 1)

@@ -1,4 +1,4 @@
-"""손 관절 측정 — 사진별 결과 · 표 한 줄 집계 · 출력 · CSV · 그림 · 조각 확대 줄 · main 한 바퀴.
+"""손 관절 측정 — 사진별 결과 · 집계 · 출력 · CSV · 그림 · 조각 · 손 박스 줄 · main 한 바퀴.
 
 MediaPipe 없이 HandPose 를 직접 만들어 넣는다. 검출은 tests/pointing/test_hands.py 가 본다.
 """
@@ -7,6 +7,7 @@ import csv
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -101,7 +102,7 @@ def test_summarize_without_any_pointing_hand():
 def test_format_row():
     """표 한 줄: 기준 · 장수 · 각도 · 지연."""
     m = check_hands.summarize([_row(True, angle=12.4, ms=11.0), _row(False, pointing=False)])
-    line = check_hands.format_row(0.1, 15.0, m)
+    line = check_hands.format_row("0.10", 15.0, m)
     assert line == "0.10 | 15° | 1/1 | 1/1 | 1 | 12° | 0/1 | 11.0/11.0"
 
 
@@ -137,10 +138,10 @@ def test_save_image_korean_path(tmp_path):
 # --- 조각 확대 (#256) -----------------------------------------------------------------
 
 
-def test_format_row_marks_tile_row():
-    """조각 확대 줄은 검출 기준 뒤에 +조각 을 붙인다."""
+def test_format_row_takes_flow_label():
+    """첫 칸은 검출 기준이나 흐름 이름 그대로 — 조각 확대 줄은 0.10+조각."""
     m = check_hands.summarize([_row(True, angle=12.4, ms=11.0), _row(False, pointing=False)])
-    line = check_hands.format_row(0.1, 15.0, m, tiles=True)
+    line = check_hands.format_row("0.10+조각", 15.0, m)
     assert line == "0.10+조각 | 15° | 1/1 | 1/1 | 1 | 12° | 0/1 | 11.0/11.0"
 
 
@@ -197,6 +198,43 @@ def test_main_reads_default_sessions_and_prints_tile_row(tmp_path, monkeypatch, 
     check_hands.main()
 
     printed = capsys.readouterr().out
-    assert "valid 1장 (손 있음 1 · 없음 0)" in printed
+    assert "valid 1장 (세션 1 2) (손 있음 1 · 없음 0)" in printed
     assert "0.10+조각 | 15° | 0/1 | 0/1 |" in printed
+    assert "박스" not in printed  # --hand-boxes 를 안 주면 손 박스 줄은 없다
     assert (out / "hands_valid.csv").exists()
+
+
+# --- 손 박스 (#256 ⑤-b) ---------------------------------------------------------------
+
+
+class _BoxDetector(_NoHands):
+    """손 박스 흐름 흉내. 손 박스 검출기를 달고 있고, 그 검출기도 손을 못 찾는다."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.box_finder = SimpleNamespace(find=lambda image: [])
+
+
+def test_main_with_sessions_and_hand_boxes_prints_box_rows(tmp_path, monkeypatch, capsys):
+    """--sessions 로 s06 까지 읽고, --hand-boxes 면 조각+박스 · 박스 혼자 줄을 더 찍는다."""
+    labels = tmp_path / "labels.csv"
+    columns = ["file", "session", "split", "utterance", "gt_x1", "gt_y1", "gt_x2", "gt_y2"]
+    columns += ["gt_label", "has_hand", "ambiguous", "prev_label", "excluded"]
+    with labels.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(columns)
+        writer.writerow(["s01/a.jpg", "1", "valid", "이건 뭐야?", 1, 2, 3, 4, "cup", 1, 0, "", 0])
+        writer.writerow(["s06/f.jpg", "6", "valid", "저건 뭐야?", 1, 2, 3, 4, "cup", 0, 0, "", 0])
+    monkeypatch.setattr(check_hands, "HandDetector", _BoxDetector)
+    monkeypatch.setattr(check_hands, "read_image", lambda path: np.zeros((10, 10, 3), np.uint8))
+    argv = ["check_hands.py", "--labels", str(labels), "--raw", str(tmp_path)]
+    argv += ["--out", str(tmp_path / "out"), "--sessions", "1", "6", "--hand-boxes"]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    check_hands.main()
+
+    printed = capsys.readouterr().out
+    assert "valid 2장 (세션 1 6) (손 있음 1 · 없음 1)" in printed
+    assert "0.10+조각+박스 | 15° | 0/1 | 0/1 |" in printed
+    assert "박스 혼자 | 15° | 0/1 | 0/1 |" in printed
+    assert "박스 혼자 손 없음 오탐: 없음" in printed
