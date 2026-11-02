@@ -16,4 +16,4 @@ YOLO 파인튜닝처럼 **GPU 가 필요한 작업**을 여기서 돌린다.
 | 이름 | 무엇 |
 |---|---|
 | `wakeword_train.ipynb` | "자비서" 호출어 openWakeWord 분류기 학습 |
-| `detector_finetune.ipynb` | 물체 후보 검출기(YOLOv8n) 회차 학습 — R2 부터. 맥에서 만든 묶음 zip 을 받아 같은 설정으로 학습하고 `<ROUND>_report.txt` 를 남긴다(`tools/README.md` "R2 사람 검수"). 셀 1 의 묶음 · 시드 목록으로 여러 번 학습한다 — 지금은 R2 · R3 묶음 × 시드 3개(`tools/README.md` "시드 반복"). T4 + 고용량 RAM(CPU 8)이 아니면 셀 1 에서 멈춘다. R4(5 epoch 마다 저장 → `tools/auto_label.py pick`) 판은 커밋 `4bba733` 이다 |
+| `detector_finetune.ipynb` | 물체 후보 검출기(YOLOv8n) 회차 학습 — R2 부터. 맥에서 만든 묶음 zip 을 받아 같은 설정으로 학습하고 `<ROUND>_report.txt` 를 남긴다(`tools/README.md` "R2 사람 검수"). 셀 1 의 묶음 · 시드 목록으로 여러 번 학습한다 — 지금은 R2 · R3 묶음 × 시드 3개(`tools/README.md` "시드 반복"). A100(없으면 L4) · CPU 8개 이상이 아니면 셀 1 에서 멈춘다. R4(5 epoch 마다 저장 → `tools/auto_label.py pick`) 판은 커밋 `4bba733` 이다 |
