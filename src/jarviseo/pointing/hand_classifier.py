@@ -24,11 +24,15 @@ from jarviseo import config
 if TYPE_CHECKING:  # hands.py 가 이 모듈을 불러서, 실행 중에 되불러오면 순환이 된다
     from jarviseo.pointing.hands import HandPose
 
-__all__ = ["HandClassifier", "features", "load_default"]
+__all__ = ["PATCH_DIM", "HandClassifier", "PatchEncoder", "features", "load_default"]
 
 log = logging.getLogger(__name__)
 
 WRIST, MIDDLE_BASE = 0, 9
+# 손 사진 특징 칸 수 = MobileNetV3-Small 마지막 특징 맵의 채널 수
+PATCH_DIM = 576
+IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 
 def features(hand: HandPose) -> np.ndarray:
@@ -60,6 +64,12 @@ class HandClassifier:
     biases: tuple[np.ndarray, ...]
     threshold: float
     note: str = ""
+    # 관절 63칸 뒤에 이어 붙이는 손 사진 특징 칸 수. R1 = 0(관절만), R2 = 576.
+    patch_dim: int = 0
+
+    @property
+    def needs_patch(self) -> bool:
+        return self.patch_dim > 0
 
     @classmethod
     def from_file(cls, path: Path | str) -> HandClassifier:
@@ -72,6 +82,8 @@ class HandClassifier:
                 biases=tuple(data[f"b{i}"] for i in range(layers)),
                 threshold=float(data["threshold"]),
                 note=str(data["note"]) if "note" in data else "",
+                # 옛 R1 파일에는 이 키가 없다 — 관절만 쓰는 분류기로 읽는다
+                patch_dim=int(data["patch_dim"]) if "patch_dim" in data else 0,
             )
 
     def save(self, path: Path | str) -> None:
@@ -84,12 +96,21 @@ class HandClassifier:
             threshold=self.threshold,
             layers=len(self.weights),
             note=self.note,
+            patch_dim=self.patch_dim,
             **arrays,
         )
 
+    def vector(self, hand: HandPose) -> np.ndarray:
+        """분류기 입력. 관절 63칸, R2 면 손 사진 특징을 이어 붙인다."""
+        if not self.needs_patch:
+            return features(hand)
+        if hand.patch_feature is None:
+            raise ValueError("이 분류기는 손 사진 특징이 필요하다(HandDetector 에 encoder 를 준다)")
+        return np.concatenate([features(hand), np.asarray(hand.patch_feature, dtype=float)])
+
     def prob(self, hand: HandPose) -> float:
         """가리키는 손일 확률 0~1."""
-        x = (features(hand) - self.mean) / self.scale
+        x = (self.vector(hand) - self.mean) / self.scale
         for w, b in zip(self.weights[:-1], self.biases[:-1], strict=True):
             x = np.maximum(x @ w + b, 0.0)
         logit = float((x @ self.weights[-1] + self.biases[-1])[0])
@@ -101,6 +122,32 @@ class HandClassifier:
 
     def is_pointing(self, hand: HandPose) -> bool:
         return self.prob(hand) >= self.threshold
+
+
+class PatchEncoder:
+    """손 사진(224×224 BGR) → CNN 특징 576칸. ImageNet 사전학습 MobileNetV3-Small 을 고정해 쓴다.
+
+    통째로 미세조정하면 세 사람 데이터로는 손 모양보다 사람 · 배경을 외웠다(experiments.md "R2").
+    학습하지 않고 특징만 뽑아 관절과 합친다. torch 는 여기서만 불러온다 — CI 에는 없고,
+    플래그가 꺼진 서버에서는 불러오는 시간도 쓰지 않는다. 가중치(약 10MB)는 torchvision 이
+    처음 쓸 때 내려받는다.
+    """
+
+    def __init__(self) -> None:
+        import torch
+        from torchvision import models
+
+        self._torch = torch
+        weights = models.MobileNet_V3_Small_Weights.IMAGENET1K_V1
+        self.model = models.mobilenet_v3_small(weights=weights).eval()
+
+    def encode(self, patches: list[np.ndarray]) -> np.ndarray:
+        """BGR 손 사진들 → (n, 576). 평균 풀링한 마지막 특징 맵."""
+        rgb = np.stack([p[:, :, ::-1] for p in patches]).astype(np.float32) / 255.0
+        x = self._torch.from_numpy((rgb - IMAGENET_MEAN) / IMAGENET_STD).permute(0, 3, 1, 2)
+        with self._torch.no_grad():
+            out = self.model.avgpool(self.model.features(x.contiguous())).flatten(1)
+        return out.numpy().astype(float)
 
 
 def load_default() -> HandClassifier | None:

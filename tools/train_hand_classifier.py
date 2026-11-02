@@ -10,9 +10,14 @@ tools/hand_clips.py 가 만든 landmarks.csv 로 "가리키는 손인가"를 학
 
 학습만 scikit-learn 을 쓴다(맥 · 윈도우에만 깔린다). 실행 쪽(hand_classifier.py)은 numpy 만 쓴다.
 
+R2(--with-patches)는 관절 63칸에 손 사진의 CNN 특징 576칸(ImageNet MobileNetV3-Small, 고정)을
+이어 붙여 같은 방식으로 학습한다. CNN 은 학습하지 않는다 — 통째로 미세조정하면 세 사람 데이터로는
+손 모양보다 사람 · 배경을 외웠다. 특징은 실행 때와 같은 PatchEncoder 로 뽑는다.
+
 실행 (레포 맨 위 폴더에서):
-    python tools/train_hand_classifier.py           # 3겹 표를 찍고 가중치를 내보낸다
-    python tools/train_hand_classifier.py --force   # 이미 있는 가중치를 덮어쓴다
+    python tools/train_hand_classifier.py                  # R1 → hand_r1.npz
+    python tools/train_hand_classifier.py --with-patches   # R2 → hand_r2.npz (사진 특징, 약 10초)
+    python tools/train_hand_classifier.py --force          # 이미 있는 가중치를 덮어쓴다
 """
 
 import argparse
@@ -20,10 +25,11 @@ import csv
 from collections.abc import Sequence
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 from jarviseo import config
-from jarviseo.pointing.hand_classifier import HandClassifier, features
+from jarviseo.pointing.hand_classifier import PATCH_DIM, HandClassifier, PatchEncoder, features
 from jarviseo.pointing.hands import NUM_LANDMARKS, HandPose
 
 HIDDEN = (64, 32)
@@ -112,7 +118,21 @@ def out_of_fold(fit, x: np.ndarray, y: np.ndarray, person: np.ndarray) -> np.nda
     return prob
 
 
-def to_classifier(model, threshold: float, note: str) -> HandClassifier:
+def patch_features(rows: list[dict[str, str]], crops_dir: Path, batch: int = 128) -> np.ndarray:
+    """손 사진들 → (n, 576) CNN 특징. 실행 때와 같은 PatchEncoder 를 쓴다."""
+    encoder = PatchEncoder()
+    out = []
+    for i in range(0, len(rows), batch):
+        # cv2.imread 는 윈도우 한글 경로에서 조용히 실패해서 바이트로 읽어 푼다
+        images = [
+            cv2.imdecode(np.fromfile(crops_dir / row["crop"], np.uint8), cv2.IMREAD_COLOR)
+            for row in rows[i : i + batch]
+        ]
+        out.append(encoder.encode(images))
+    return np.vstack(out)
+
+
+def to_classifier(model, threshold: float, note: str, patch_dim: int = 0) -> HandClassifier:
     """sklearn 파이프라인 → numpy 로 계산하는 HandClassifier."""
     scaler, mlp = model[0], model[-1]
     return HandClassifier(
@@ -122,6 +142,7 @@ def to_classifier(model, threshold: float, note: str) -> HandClassifier:
         biases=tuple(mlp.intercepts_),
         threshold=threshold,
         note=note,
+        patch_dim=patch_dim,
     )
 
 
@@ -144,19 +165,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--landmarks", type=Path, default=config.DATASETS_DIR / "hand" / "landmarks.csv"
     )
-    parser.add_argument("--out", type=Path, default=config.HAND_CLASSIFIER_PATH)
+    parser.add_argument(
+        "--with-patches", action="store_true", help="R2: 손 사진 CNN 특징을 관절에 이어 붙인다"
+    )
+    parser.add_argument("--out", type=Path, help="기본 R1 hand_r1.npz · R2 hand_r2.npz")
     parser.add_argument("--force", action="store_true", help="이미 있는 가중치를 덮어쓴다")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    name = "hand_r2.npz" if args.with_patches else "hand_r1.npz"
+    args.out = args.out or config.HAND_CLASSIFIER_PATH.with_name(name)
     if args.out.exists() and not args.force:
         raise SystemExit(
             f"이미 있습니다: {args.out} — 덮어쓰려면 --force (회차 가중치가 조용히 바뀌지 않게)"
         )
     rows = load_rows(args.landmarks)
-    x = np.array([features(pose_from_row(row)) for row in rows])
+    joints = np.array([features(pose_from_row(row)) for row in rows])
+    patch_dim = PATCH_DIM if args.with_patches else 0
+    if args.with_patches:
+        x = np.hstack([joints, patch_features(rows, args.landmarks.parent / "crops")])
+    else:
+        x = joints
     y = np.array([int(row["label"]) for row in rows])
     rule = np.array([int(row["rule"]) for row in rows])
     person = np.array([row["person"] for row in rows])
@@ -165,26 +196,33 @@ def main() -> None:
     r0_recall, _ = rates(rule == 1, y)
     mlp_prob = out_of_fold(fit_mlp, x, y, person)
     threshold = pick_threshold(mlp_prob, y, r0_recall)
+    # R2 표에 R1(관절만)을 같은 실행에서 나란히 둔다
+    r1_prob = out_of_fold(fit_mlp, joints, y, person) if args.with_patches else mlp_prob
+    r1_threshold = pick_threshold(r1_prob, y, r0_recall)
     logistic_prob = out_of_fold(fit_logistic, x, y, person)
     logistic_threshold = pick_threshold(logistic_prob, y, r0_recall)
 
     people = [(p, person == p) for p in sorted(set(person))]
     shapes = [(c, cls == c) for c in ("point", "hold", "open", "fist", "rest", "other")]
     print(f"손 {len(y)}개 (가리킴 {int(y.sum())} · 아님 {int((y == 0).sum())}) — 사람 단위 3겹")
-    print(f"문턱: MLP {threshold} · 로지스틱 {logistic_threshold} (R0 재현율 {r0_recall:.1%} 이상)")
+    model_name = "R2 관절+사진" if args.with_patches else "R1 MLP"
+    print(f"문턱: {model_name} {threshold} · 로지스틱 {logistic_threshold}", end=" ")
+    print(f"(R0 재현율 {r0_recall:.1%} 이상)")
     for title, groups in (("사람별 재현율 / 오탐률", people), ("손 모양별", shapes)):
         print(f"\n[{title}]")
         print("  " + table("R0 15° 규칙", rule == 1, y, groups))
-        print("  " + table("R1 MLP", mlp_prob >= threshold, y, groups))
+        if args.with_patches:
+            print("  " + table("R1 MLP", r1_prob >= r1_threshold, y, groups))
+        print("  " + table(model_name, mlp_prob >= threshold, y, groups))
         print("  " + table("로지스틱(참고)", logistic_prob >= logistic_threshold, y, groups))
 
     recall, false_alarm = rates(mlp_prob >= threshold, y)
     note = (
-        f"R1 MLP{HIDDEN} seed {SEED} · 손 {len(y)} · 사람 3겹 문턱 {threshold} "
+        f"{model_name} MLP{HIDDEN} seed {SEED} · 손 {len(y)} · 사람 3겹 문턱 {threshold} "
         f"재현율 {recall:.3f} 오탐률 {false_alarm:.3f} "
         f"(R0 {r0_recall:.3f} / {rates(rule == 1, y)[1]:.3f})"
     )
-    classifier = to_classifier(fit_mlp(x, y), threshold, note)
+    classifier = to_classifier(fit_mlp(x, y), threshold, note, patch_dim)
     classifier.save(args.out)
     print(f"\n저장: {args.out} ({args.out.stat().st_size / 1024:.0f}KB) — {note}")
 

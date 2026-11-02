@@ -802,6 +802,7 @@ def test_write_csv_names_file_by_run(tmp_path):
 
 class _AlwaysPointing:
     threshold = 0.5
+    needs_patch = False
 
     def prob(self, hand: HandPose) -> float:
         return 0.9
@@ -815,6 +816,7 @@ def test_choose_hand_rules():
     assert run_ablation.choose_hand(found, "r1", _AlwaysPointing()) is TO_RIGHT
     assert run_ablation.choose_hand(found, "all", None) is TO_RIGHT
     assert run_ablation.choose_hand([no_ray], "all", None) is None
+    assert run_ablation.choose_hand(found, "r2", _AlwaysPointing()) is TO_RIGHT  # r2 도 분류기로
 
 
 def test_same_conditions_needs_same_hand_rule():
