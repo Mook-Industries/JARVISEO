@@ -69,6 +69,8 @@ SHARPNESS_THRESHOLD = _get_float("JARVISEO_SHARPNESS_THRESHOLD", 100.0)
 CLARIFY_MARGIN_THRESHOLD = _get_float("JARVISEO_CLARIFY_MARGIN", 0.15)
 # 손 관절 모델(MediaPipe HandLandmarker). git 에 안 올라가서 각자 받는다(pointing/README.md).
 HAND_LANDMARKER_PATH = MODELS_DIR / "hand_landmarker.task"
+# 손 박스 검출기(YOLOv8n, 1종 hand, #256). 우리 안경 영상으로 학습했다. git 밖(data/models/*).
+HAND_BOX_WEIGHTS = MODELS_DIR / "hand_box.pt"
 # 가리키는 손 분류기 가중치(#223, 약 50KB). data/models 가 아니라 패키지 안에 둔다 —
 # 머지만으로 서버 이미지에 들어가서 배포 설정을 안 바꿔도 된다.
 HAND_CLASSIFIER_PATH = Path(__file__).resolve().parent / "pointing" / "hand_r1.npz"
@@ -91,6 +93,7 @@ ENABLE_CONTEXT_CUE = _get_bool("JARVISEO_ENABLE_CONTEXT_CUE", False)
 ENABLE_RECALL = _get_bool("JARVISEO_ENABLE_RECALL", False)
 ENABLE_HAND_CLASSIFIER = _get_bool("JARVISEO_ENABLE_HAND_CLASSIFIER", False)
 ENABLE_HAND_TILES = _get_bool("JARVISEO_ENABLE_HAND_TILES", False)
+ENABLE_HAND_BOX_DETECTOR = _get_bool("JARVISEO_ENABLE_HAND_BOX_DETECTOR", False)
 
 # --- 외부 API -------------------------------------------------------------
 # 팀 공용 OpenAI 키 1개를 STT · VLM · TTS · 임베딩이 함께 쓴다. 월 사용 한도 설정 필수.
