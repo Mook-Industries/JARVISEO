@@ -12,6 +12,7 @@
 | `auto_label.py` | 검출기 학습 라벨 — 선생 모델 비교(`compare`), 박스 초안(`label`), 사람 검수 작업(`review`), 회차별 학습 묶음(`build`) |
 | `train_hand_classifier.py` | 가리키는 손 분류기 — `landmarks.csv` 로 손 관절 MLP(R1, `hand_r1.npz`) 또는 관절 + 손 사진 CNN 특징 MLP(R2 `--with-patches`, `hand_r2.npz`)를 사람 단위 3겹으로 평가 · 문턱을 고르고 전부로 학습해 `src/jarviseo/pointing/` 에 내보낸다 |
 | `hand_clips.py` | 가리키는 손 분류기 학습 데이터 — 손 영상을 손 모양 구간으로(`segments`), 구간마다 손 관절 표 · 손 사진(`extract`), 15° 규칙 기준선(`summary`) |
+| `hand_box_labels.py` | 손 박스 검출기 학습 데이터(#256 ⑤-b) — 손 영상 · 검출기 프레임 · s05 에서 MediaPipe(사진 전체 → 4조각 → 3조각) + 이어 읽기로 자동 정답(`label`), 단계별 확인 모음 사진(`sheet`), 장소로 나눈 학습 묶음 zip(`build`) |
 
 ## device_check
 
@@ -286,3 +287,20 @@ python tools/train_hand_classifier.py --force   # 이미 있는 가중치를 덮
 - R2 의 손 사진은 24-a 가 저장한 `crops/` 이고, 손 사진 자르기(`hands.hand_patch_box`)와 특징기(`hand_classifier.PatchEncoder`)는 실행 때와 같은 코드다. CNN 은 학습하지 않는다(통째로 미세조정은 세 사람 데이터에서 사람 · 장소를 외웠다, `docs/experiments.md` "R2").
 - 학습만 scikit-learn 을 쓴다(맥 · 윈도우에만 깔림). 가중치는 숫자 배열만 담은 `.npz` 라 실행 쪽(`pointing/hand_classifier.py`)은 numpy 로 계산한다 — 서버 · CI 에는 sklearn 이 없다.
 - 가중치(약 50KB)는 패키지 안(`src/jarviseo/pointing/hand_r1.npz`)에 커밋한다. 머지만으로 서버 이미지에 들어가서 배포 설정을 안 바꿔도 된다. 다시 학습하면 회차 비교가 끊기지 않게 기록(`docs/experiments.md`)을 같이 고친다.
+
+## 손 박스 검출기 학습 데이터 — 손 영상 → 자동 정답 → 학습 묶음 → Colab (#256 ⑤-b)
+
+MediaPipe 가 손바닥을 찾을 때 사진을 192px 로 줄여 놓치는 손을, 우리 영상으로 학습한 YOLOv8n(1종 `hand`)이 찾게 하려는 학습 데이터다. 사람 검수 없이 자동 정답만 쓴다.
+
+```bash
+python tools/hand_box_labels.py label    # 1. 자동 정답 → data/datasets/hand/boxes/ (10~15분)
+python tools/hand_box_labels.py sheet    # 2. 단계별 확인 모음 사진 → boxes/sheets/<단계>.jpg
+python tools/hand_box_labels.py build    # 3. 학습 묶음 yolo_h1/ → drive_upload/ 에 zip · 노트북 사본
+```
+
+- **정답 박스** = MediaPipe 가 찾은 손의 관절 상자 + 사방 15% 여백(관절은 마디 중심이라 손끝 살이 상자 밖으로 나온다). 사진 전체에서 못 찾으면 4조각(`hands.search_tiles`) → 3조각(짧은 변 정사각 3개)에서 다시 찾고, 그래도 없으면 바로 앞뒤 0.2초 프레임에 손이 있을 때만 두 박스의 평균으로 채운다(이어 읽기). 사진 전체가 놓친 손이 검출기가 MediaPipe 보다 더 배울 몫이다.
+- **배경**: 손 영상에서 못 찾은 프레임은 넣지 않는다 — 거의 모든 프레임에 손이 있어서, 넣으면 놓친 손을 "손 없음"으로 가르친다. 배경은 검출기 영상 프레임(손 못 찾음)과 s05 의 손 없음 표시만. s05 는 사람 표시가 우선이라 손 없음 사진에서 잡힌 손은 버린다.
+- **평가 사진은 읽지 않는다**: `labels.csv` 에서 train(s05) 줄만 읽는다. valid · test · 실물 루프 사진은 묶음에 안 들어간다.
+- **나누기**: 손 영상 loby 3개 + 검출기 d05 가 검증, 나머지가 학습(장소 단위 — 0.2초 옆 프레임이 검증에 섞이면 점수가 부풀려진다). 묶음에는 0.4초 칸만, 사진은 긴 변 640(학습 입력과 같은 크기)으로 줄여 담는다.
+- worktree 에는 `data/datasets/detector` 링크가 없어 `--detector-frames <원래 폴더>/data/datasets/detector/frames` 로 준다.
+- 학습은 `notebooks/hand_box_finetune.ipynb`(Colab, 고성능 GPU). Drive `JARVISEO/hand_box/` 에 zip 과 노트북을 올리고 모두 실행 → 같은 폴더의 `hand_box_h1.pt`(`runs/h1/weights/best.pt` 사본 — `best.pt` 는 회차마다 이름이 같아 다운로드 폴더에서 섞인다)를 `data/models/hand_box.pt` 로 받는다.
