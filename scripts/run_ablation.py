@@ -31,6 +31,10 @@ STT · VLM 없이 촬영 때 적은 발화로 채점해서, 가리킴 모델 실
         --weights yolov8n.pt data/models/detector_r2.pt --note "시선 단서"
     python scripts/run_ablation.py --variants v2 v2+lang+C --note "실제 설정" \
         --weights yolov8n.pt data/models/detector_r2.pt data/models/detector_r3.pt
+    python scripts/run_ablation.py --variants v2+lang+C --hand-rule r1 --hand-tiles \
+        --weights data/models/detector_r2.pt --note "조각 확대 + R1"
+    python scripts/run_ablation.py --sessions 1 2 6 --variants v2 v2+lang+C --hand-rule r1 \
+        --hand-tiles --hand-boxes --weights data/models/detector_r2.pt --note "손 박스"
     python scripts/run_ablation.py --split test --note "최종"     # 10/24 최종 측정 때만
 """
 
@@ -352,36 +356,55 @@ def package_version(name: str) -> str:
         return "none"
 
 
-def run_conditions(weights: dict, sessions: list[int], conf: float, hand_rule: str = "r0") -> dict:
+def run_conditions(
+    weights: dict,
+    sessions: list[int],
+    conf: float,
+    hand_rule: str = "r0",
+    hand_tiles: bool = False,
+    hand_box_weights: dict | None = None,
+) -> dict:
     """이번 실행을 무엇으로 쟀나. eval_run.metrics["conditions"] 에 들어간다.
 
     ERD 가 원본이라 열을 늘리지 않고 metrics(JSON)에 둔다.
     컴퓨터 이름은 비교에 필요 없어 넣지 않는다.
+    손 박스 검출기(#256 ⑤-b)를 켰으면 그 가중치 지문도 남긴다 — 회차를 다시 학습하면 이름이 같다.
     """
-    return {
+    conditions = {
         "commit": git_commit(),
         "weights": weights,
         "sessions": sorted(sessions),
         "conf": conf,
         "hand_rule": hand_rule,
+        "hand_tiles": hand_tiles,
+        "hand_boxes": hand_box_weights is not None,
         "device": f"{platform.system()} {platform.machine()}",
         "ultralytics": package_version("ultralytics"),
     }
+    if hand_box_weights is not None:
+        conditions["hand_box_weights"] = hand_box_weights
+    return conditions
 
 
 def same_conditions(old: dict | None, new: dict) -> bool:
-    """같은 가중치(지문) · 같은 세션 · 같은 손 판정이면 같은 조건이다.
+    """같은 가중치(지문) · 세션 · 손 판정 · 조각 확대 · 손 박스(가중치 지문까지)면 같은 조건이다.
 
     커밋은 안 본다. 같은 가중치에서 코드를 고친 효과를 보려는 비교다.
     조건 기록이 없는 옛 실행(run 1~3)은 무엇으로 쟀는지 몰라서 비교하지 않는다.
     손 판정을 안 적은 옛 실행은 15° 규칙(r0)으로 쟀다. 판정을 안 보면 R1 실행이 R0 와
     "같은 조건"으로 비교돼 분류기 효과가 코드 변화처럼 보인다.
+    조각 확대(#256)를 안 적은 옛 실행은 끄고 쟀다. 손을 더 찾은 효과도 같은 까닭으로 가른다.
+    손 박스(#256 ⑤-b)를 안 적은 옛 실행도 끄고 쟀다.
     """
     if not old:
         return False
     same_weights = old.get("weights", {}).get("sha256") == new["weights"]["sha256"]
     same_rule = old.get("hand_rule", "r0") == new.get("hand_rule", "r0")
-    return same_weights and same_rule and old.get("sessions") == new["sessions"]
+    same_tiles = old.get("hand_tiles", False) == new.get("hand_tiles", False)
+    old_boxes = (old.get("hand_box_weights") or {}).get("sha256")
+    same_boxes = old_boxes == (new.get("hand_box_weights") or {}).get("sha256")
+    same_hands = same_rule and same_tiles and same_boxes
+    return same_weights and same_hands and old.get("sessions") == new["sessions"]
 
 
 # 손 판정 방식(#223). r0 = 15° 규칙, r1 = 관절 분류기, r2 = 관절 + 손 사진 특징 분류기,
@@ -399,6 +422,16 @@ def choose_hand(
         usable = [h for h in found if pointing_ray(h) is not None]
         return max(usable, key=pointing_score, default=None)
     return pick_pointing_hand(found, classifier=classifier if rule in HAND_WEIGHTS else None)
+
+
+def pointing_counts(samples: list[dict], hands: dict[str, HandPose | None]) -> tuple[int, int]:
+    """가리키는 손을 고른 사진 수를 (손 있음 표시, 손 없음 표시)로. 손 없음 쪽은 헛손이다.
+
+    손 박스(#256 ⑤-b) 켜는 기준의 "가리키는 손이 는다 · 새 헛손 0" 을 같은 실행에서 읽으려고 나눈다.
+    """
+    with_hand = sum(hands.get(s["file"]) is not None for s in samples if s["has_hand"])
+    without = sum(hands.get(s["file"]) is not None for s in samples if not s["has_hand"])
+    return with_hand, without
 
 
 def hit_changes(base: dict[str, bool], other: dict[str, bool]) -> tuple[list[str], list[str]]:
@@ -569,6 +602,16 @@ def main() -> None:
         choices=HAND_RULES,
         help="가리키는 손 판정. 안 주면 설정을 따른다(손 분류기 플래그가 켜지면 r1)",
     )
+    parser.add_argument(
+        "--hand-tiles",
+        action=argparse.BooleanOptionalAction,
+        help="가리키는 손을 못 고르면 4조각에서 손을 다시 찾는다. 안 주면 설정(조각 확대 플래그)",
+    )
+    parser.add_argument(
+        "--hand-boxes",
+        action=argparse.BooleanOptionalAction,
+        help="그래도 못 고르면 손 박스 검출기 박스에서 관절을 읽는다. 안 주면 설정(손 박스 플래그)",
+    )
     parser.add_argument("--db", default=config.DATABASE_URL, help="결과를 남길 DB")
     parser.add_argument("--note", default="", help="이번 실행 메모, 예: v2 손 방향 추가")
     parser.add_argument("--out", type=Path, default=POINTING_DIR / "runs", help="사진별 CSV 폴더")
@@ -604,12 +647,24 @@ def main() -> None:
         if not path.exists():
             raise SystemExit(f"손 분류기 가중치가 없다: {path}")
         classifier = HandClassifier.from_file(path)
-    hand_detector = None
+    hand_tiles = config.ENABLE_HAND_TILES if args.hand_tiles is None else args.hand_tiles
+    hand_boxes = config.ENABLE_HAND_BOX_DETECTOR if args.hand_boxes is None else args.hand_boxes
+    hand_detector, box_weights = None, None
     if any(CueKind.POINT in VARIANTS[v] for v in ready):
         # r2 는 손 사진 특징이 필요해 특징기를 붙여 찾는다. 나머지는 관절만.
         encoder = PatchEncoder() if hand_rule == "r2" else None
-        hand_detector = HandDetector(encoder=encoder)
-    print(f"손 판정: {hand_rule}")
+        # 조각 · 손 박스를 돌릴지도 choose_hand 와 같은 판정으로 정한다(all 은 15° 규칙).
+        rule_classifier = classifier if hand_rule in HAND_WEIGHTS else None
+        # boxes 를 직접 넘겨서, 손 박스 가중치가 없으면 조용히 끄지 않고 멈춘다.
+        hand_detector = HandDetector(
+            encoder=encoder, classifier=rule_classifier, tiles=hand_tiles, boxes=hand_boxes
+        )
+        if hand_detector.box_finder is not None:
+            box_weights = weights_fingerprint(hand_detector.box_finder.weights_path)
+    boxes_text = f"켬 {weights_label(box_weights)}" if box_weights else "끔"
+    print(
+        f"손 판정: {hand_rule} · 조각 확대: {'켬' if hand_tiles else '끔'} · 손 박스: {boxes_text}"
+    )
     # 쓰는 쪽이라 테이블이 없으면 만든다(이미 있으면 아무것도 안 한다).
     store = MemoryStore(database_url=args.db)
     store.init_schema()
@@ -627,7 +682,9 @@ def main() -> None:
             raise SystemExit(f"같은 가중치를 두 번 적었다: {weights} = {same}")
         seen[fingerprint["sha256"]] = weights
         label = weights_label(fingerprint)
-        conditions = run_conditions(fingerprint, sessions, detector.conf_threshold, hand_rule)
+        conditions = run_conditions(
+            fingerprint, sessions, detector.conf_threshold, hand_rule, hand_tiles, box_weights
+        )
 
         # 사진은 가중치마다 다시 읽는다. 1080p 62장을 다 들고 있으면 약 370MB 라
         # 저사양 PC 에 무겁다.
@@ -660,8 +717,11 @@ def main() -> None:
         )
         if index == 0 and hand_ms:
             hand_p50, hand_p95 = percentiles(hand_ms)
-            found = sum(h is not None for h in hands.values())
-            print(f"가리키는 손 {found}장 · 손 p50 {hand_p50:.1f}ms · p95 {hand_p95:.1f}ms")
+            with_hand, without = pointing_counts(samples, hands)
+            print(
+                f"가리키는 손 {with_hand + without}장(손 있음 {with_hand} · 손 없음 {without}) · "
+                f"손 p50 {hand_p50:.1f}ms · p95 {hand_p95:.1f}ms"
+            )
         print(
             "가중치 | 버전 | 장수 | 정답률 | 확신오답률 | 답한 것 정답률 | 되묻기율 | "
             "손있음/손없음 | 후보재현율 | 크롭담김 | 손크롭(담김) | resolve p50/p95 ms"

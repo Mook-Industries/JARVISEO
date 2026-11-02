@@ -1,4 +1,5 @@
-"""손 관절 → 가리키는 방향 — 굽힘 각도, 가리킴 판정, 방향, 손 고르기, MediaPipe 결과 바꾸기.
+"""손 관절 → 가리키는 방향 — 굽힘 각도, 가리킴 판정, 방향, 손 고르기, MediaPipe 결과 바꾸기,
+조각 확대(#256).
 
 MediaPipe 없이 관절 좌표와 결과 모양을 직접 만들어 본다.
 실제 모델로 사진 한 장을 돌리는 테스트는 모델 파일 · 사진이 있을 때만 돈다(CI 는 건너뜀).
@@ -6,6 +7,7 @@ MediaPipe 없이 관절 좌표와 결과 모양을 직접 만들어 본다.
 """
 
 import math
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -23,11 +25,18 @@ from jarviseo.pointing.hands import (
     finger_bend,
     hand_patch_box,
     is_pointing,
+    landmark_box,
+    load_box_finder,
+    merge_hands,
     pick_pointing_hand,
     pointing_ray,
     pointing_score,
     poses_from_result,
+    search_tiles,
+    shift_hand,
+    tile_boxes,
 )
+from jarviseo.types import BBox
 
 SEG = 0.02  # 마디 길이 2cm
 FINGER_BASES = (5, 9, 13, 17)
@@ -358,3 +367,221 @@ def test_detector_finds_pointing_hand_in_real_photo():
     hand = pick_pointing_hand(hands)
     assert hand is not None
     assert hand.landmarks[8] == pytest.approx((863, 522), abs=5)
+
+
+# --- 조각 확대 (#256) --------------------------------------------------------------
+
+
+def _hand_box(x: float, y: float, size: float = 100.0, pointing: bool = True) -> HandPose:
+    """화면 관절이 (x, y) ~ (x + size, y + size) 상자에 퍼진 손. 검지는 위를 가리킨다."""
+    landmarks = [(x + size / 2, y + size)] * 21
+    landmarks[0], landmarks[17] = (x, y + size), (x + size, y + size)
+    landmarks[5], landmarks[8] = (x + size / 2, y + size / 2), (x + size / 2, y)
+    return replace(_hand(other_bend=60.0 if pointing else 0.0), landmarks=tuple(landmarks))
+
+
+def test_tile_boxes_cover_corners_and_overlap_in_middle():
+    """1920×1080 → 한 변 60% 조각 4개(왼위 · 오른위 · 왼아래 · 오른아래). 가운데 20% 씩 겹친다."""
+    assert tile_boxes(1920, 1080) == [
+        (0, 0, 1152, 648),
+        (768, 0, 1920, 648),
+        (0, 432, 1152, 1080),
+        (768, 432, 1920, 1080),
+    ]
+
+
+def test_landmark_box_wraps_all_landmarks():
+    assert landmark_box(_hand_box(10.0, 20.0)) == BBox(10.0, 20.0, 110.0, 120.0)
+
+
+def test_shift_hand_moves_screen_landmarks_only():
+    """조각 좌표 → 원본 좌표. 화면 관절만 옮기고 3D 관절 · 왼손/오른손은 그대로다."""
+    hand = _hand_box(10.0, 20.0)
+    moved = shift_hand(hand, 768, 432)
+    assert landmark_box(moved) == BBox(778.0, 452.0, 878.0, 552.0)
+    assert (moved.world, moved.handedness) == (hand.world, hand.handedness)
+
+
+def test_merge_hands_drops_same_hand_and_keeps_order():
+    """조각에서 다시 잡힌 같은 손(IoU 0.3 이상)은 버리고 새 손만 뒤에 붙인다.
+
+    두 조각에 걸쳐 두 번 잡힌 새 손도 하나만 남는다.
+    """
+    kept = _hand_box(0.0, 0.0)
+    same = _hand_box(20.0, 0.0)  # 겹친 넓이 80 × 100 → IoU 0.67
+    new, new_again = _hand_box(500.0, 500.0), _hand_box(510.0, 500.0)
+    assert merge_hands([kept], [same, new, new_again]) == [kept, new]
+
+
+def test_merge_hands_keeps_neighbour_hand():
+    """조금 겹친 옆 손(IoU 0.18)은 다른 손이다. 한 손으로 들고 다른 손으로 가리킨 장면."""
+    left, right = _hand_box(0.0, 0.0), _hand_box(70.0, 0.0)
+    assert merge_hands([left], [right]) == [left, right]
+
+
+def test_search_tiles_finds_in_each_tile_and_shifts_to_original():
+    """조각 4개를 차례로 넘기고, 조각에서 찾은 손을 그 조각의 왼위 모서리만큼 옮긴다."""
+    image = np.zeros((1080, 1920, 3), np.uint8)
+    seen = []
+
+    def find(tile):
+        seen.append(tile.shape)
+        return [_hand_box(10.0, 20.0)] if len(seen) == 4 else []  # 오른아래 조각에서만
+
+    (hand,) = search_tiles(image, find)
+    assert seen == [(648, 1152, 3)] * 4
+    assert landmark_box(hand) == BBox(778.0, 452.0, 878.0, 552.0)
+
+
+class _FakeDetector(HandDetector):
+    """MediaPipe 없이 detect 흐름만 본다. 부를 때마다 정해 둔 손을 차례로 준다.
+
+    첫 번째는 사진 전체, 그다음은 조각(왼위 · 오른위 · 왼아래 · 오른아래) 순서다.
+    """
+
+    def __init__(
+        self, found: list[list[HandPose]], tiles: bool = True, classifier=None, box_finder=None
+    ) -> None:
+        self.encoder, self.classifier, self.tiles = None, classifier, tiles
+        self.box_finder = box_finder
+        self.found, self.calls = found, 0
+
+    def _landmarks(self, image: np.ndarray) -> list[HandPose]:
+        self.calls += 1
+        return self.found[self.calls - 1] if self.calls <= len(self.found) else []
+
+
+IMAGE = np.zeros((1080, 1920, 3), np.uint8)
+
+
+def test_detect_searches_tiles_when_no_pointing_hand():
+    """편 손만 찾으면 4조각을 더 보고, 오른아래 조각에서 찾은 손을 원본 좌표로 붙인다."""
+    open_hand = _hand_box(100.0, 100.0, pointing=False)
+    detector = _FakeDetector([[open_hand], [], [], [], [_hand_box(10.0, 20.0)]])
+
+    hands = detector.detect(IMAGE)
+
+    assert detector.calls == 5
+    assert hands[0] is open_hand
+    assert landmark_box(hands[1]) == BBox(778.0, 452.0, 878.0, 552.0)
+    assert pick_pointing_hand(hands, classifier=None) is hands[1]
+
+
+def test_detect_skips_tiles_when_pointing_hand_found():
+    """가리키는 손을 이미 골랐으면 조각을 안 돌린다(MediaPipe 한 번)."""
+    pointing = _hand_box(100.0, 100.0)
+    detector = _FakeDetector([[pointing]])
+    assert detector.detect(IMAGE) == [pointing]
+    assert detector.calls == 1
+
+
+def test_detect_with_tiles_off_is_one_pass():
+    """플래그를 끄면 가리키는 손이 없어도 사진 전체를 한 번만 본다(지금 서버와 같다)."""
+    detector = _FakeDetector([[]], tiles=False)
+    assert detector.detect(IMAGE) == []
+    assert detector.calls == 1
+
+
+def test_detect_decides_tiles_with_its_classifier():
+    """조각을 돌릴지는 검출기에 준 분류기로 정한다. 분류기가 편 손을 고르면 조각을 안 돌린다."""
+    open_hand = _hand_box(100.0, 100.0, pointing=False)
+    detector = _FakeDetector([[open_hand]], classifier=_FixedProb({id(open_hand): 0.9}))
+    assert detector.detect(IMAGE) == [open_hand]
+    assert detector.calls == 1
+
+
+def test_detect_attaches_patch_feature_to_tile_hands():
+    """분류기가 사진 특징을 쓰면(R2) 조각에서 찾은 손에도 특징을 붙인다."""
+    detector = _FakeDetector([[], [_hand_box(10.0, 20.0)]])
+    detector.encoder = _ShapeEncoder()
+    (hand,) = detector.detect(IMAGE)
+    assert list(hand.patch_feature) == [0, 1, 2, 3]
+
+
+# --- 손 박스 검출기 (#256 ⑤-b) ---------------------------------------------------------
+
+
+class _FakeBoxFinder:
+    """손 박스 검출기 흉내. 정해 둔 박스를 내고, 읽으면 박스 왼위 모서리에 가리키는 손을 둔다."""
+
+    def __init__(self, boxes: list[BBox]) -> None:
+        self._boxes, self.box_calls, self.read_boxes = boxes, 0, []
+
+    def boxes(self, image: np.ndarray) -> list[BBox]:
+        self.box_calls += 1
+        return list(self._boxes)
+
+    def read(self, image: np.ndarray, box: BBox) -> HandPose:
+        self.read_boxes.append(box)
+        return _hand_box(box.x1, box.y1)
+
+
+def test_detect_reads_hand_boxes_when_tiles_find_no_pointing_hand():
+    """사진 전체 · 4조각 모두 가리키는 손을 못 고르면 손 박스에서 읽은 손을 뒤에 붙인다."""
+    open_hand = _hand_box(100.0, 100.0, pointing=False)
+    finder = _FakeBoxFinder([BBox(1000.0, 500.0, 1100.0, 600.0)])
+    detector = _FakeDetector([[open_hand], [], [], [], []], box_finder=finder)
+
+    hands = detector.detect(IMAGE)
+
+    assert detector.calls == 5
+    assert hands[0] is open_hand
+    assert landmark_box(hands[1]) == BBox(1000.0, 500.0, 1100.0, 600.0)
+    assert pick_pointing_hand(hands, classifier=None) is hands[1]
+
+
+def test_detect_skips_hand_boxes_when_tiles_found_pointing_hand():
+    """4조각에서 가리키는 손을 골랐으면 손 박스 검출기를 아예 안 부른다."""
+    finder = _FakeBoxFinder([BBox(1000.0, 500.0, 1100.0, 600.0)])
+    detector = _FakeDetector([[], [_hand_box(10.0, 20.0)]], box_finder=finder)
+    detector.detect(IMAGE)
+    assert finder.box_calls == 0
+
+
+def test_detect_reads_only_boxes_away_from_known_hands():
+    """이미 찾은 손 자리의 박스는 같은 손이라 읽지 않는다(IoU 0.3 이상)."""
+    open_hand = _hand_box(100.0, 100.0, pointing=False)
+    same, other = BBox(100.0, 100.0, 200.0, 200.0), BBox(1000.0, 500.0, 1100.0, 600.0)
+    finder = _FakeBoxFinder([same, other])
+    detector = _FakeDetector([[open_hand], [], [], [], []], box_finder=finder)
+    detector.detect(IMAGE)
+    assert finder.read_boxes == [other]
+
+
+def test_detect_hand_boxes_work_without_tiles():
+    """조각을 끄고 손 박스만 켜면 사진 전체 다음에 바로 손 박스를 본다."""
+    finder = _FakeBoxFinder([BBox(1000.0, 500.0, 1100.0, 600.0)])
+    detector = _FakeDetector([[]], tiles=False, box_finder=finder)
+    (hand,) = detector.detect(IMAGE)
+    assert detector.calls == 1
+    assert landmark_box(hand) == BBox(1000.0, 500.0, 1100.0, 600.0)
+
+
+def test_load_box_finder_warns_from_config_but_raises_when_asked(tmp_path, monkeypatch, caplog):
+    """가중치가 없으면 설정으로 켠 비서는 경고 후 그 단계만 끄고, 직접 켠 측정은 멈춘다."""
+    monkeypatch.setattr(config, "HAND_BOX_WEIGHTS", tmp_path / "hand_box.pt")
+    assert load_box_finder(strict=False) is None
+    assert "손 박스 검출기를 못 읽어" in caplog.text
+    with pytest.raises(FileNotFoundError, match="손 박스 가중치가 없다"):
+        load_box_finder(strict=True)
+
+
+TILE_PHOTO = config.DATASETS_DIR / "pointing" / "raw" / "s02" / "s02_shelf_0009.jpg"
+
+
+@pytest.mark.skipif(
+    not (config.HAND_LANDMARKER_PATH.exists() and TILE_PHOTO.exists()),
+    reason="모델 파일이나 평가셋 사진이 없다(CI)",
+)
+def test_detector_tiles_find_hand_cut_by_bottom_edge():
+    """화면 아래 끝에서 올라온 손(사물함 속 텀블러를 가리킴)은 사진 전체로는 손이 안 잡히고,
+    오른아래 조각에서 찾아 검지 끝을 원본 좌표(1245, 736)로 옮긴다."""
+    pytest.importorskip("mediapipe")
+    import cv2
+
+    image = cv2.imdecode(np.fromfile(TILE_PHOTO, dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert HandDetector(classifier=None, tiles=False).detect(image) == []
+    hands = HandDetector(classifier=None, tiles=True).detect(image)
+    hand = pick_pointing_hand(hands, classifier=None)
+    assert hand is not None
+    assert hand.landmarks[8] == pytest.approx((1245, 736), abs=5)
