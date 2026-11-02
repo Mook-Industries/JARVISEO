@@ -40,7 +40,7 @@ from jarviseo.pointing.cues import (
     score_lang,
     score_point,
 )
-from jarviseo.pointing.hands import HandPose, Ray, pointing_ray
+from jarviseo.pointing.hands import INDEX_BASE, HandPose, Point2, Ray, pointing_ray
 from jarviseo.pointing.labels import KIND_WORDS, korean_name
 from jarviseo.types import (
     CueKind,
@@ -150,7 +150,8 @@ def resolve_target(
     if not candidates or not kinds:
         return TargetResolution([], chosen=None, margin=0.0, needs_clarify=True)
 
-    scorers = _scorers(frame_size, ray, {CueKind.LANG: lang, CueKind.CTX: ctx}, candidates)
+    base = hand.landmarks[INDEX_BASE] if hand is not None else None
+    scorers = _scorers(frame_size, ray, base, {CueKind.LANG: lang, CueKind.CTX: ctx}, candidates)
     narrowed = _narrow_by_replies(candidates, replies, kinds, scorers, frame_size[0])
     ranked = _rank(narrowed, kinds, scorers)
     margin = 1.0 if len(ranked) == 1 else ranked[0].total_score - ranked[1].total_score
@@ -167,11 +168,13 @@ def resolve_target(
 def _scorers(
     frame_size: tuple[int, int],
     ray: Ray | None,
+    base: Point2 | None,
     fixed: dict[CueKind, list[CueScore] | None],
     candidates: list[Detection],
 ) -> dict[CueKind, Scorer]:
     """이번 사진에서 쓸 단서별 점수 함수. 기권한 단서(손 · 말 · 이어 묻기 없음)는 넣지 않는다.
 
+    base 는 검지 뿌리 — 손 점수가 손끝을 품은 박스 중 뿌리까지 품은 것(손을 얹은 물건)을 뺄 때 쓴다.
     fixed 는 좁히기 전에 후보 전체로 미리 매긴 점수(말 · 이어 묻기)다. 같은 후보 객체로 꺼내서
     되묻기 대답으로 후보가 줄어도 처음 질문의 점수가 그대로다.
     """
@@ -180,7 +183,7 @@ def _scorers(
         CueKind.GAZE: partial(score_gaze, frame_size=frame_size),
     }
     if ray is not None:
-        scorers[CueKind.POINT] = partial(score_point, ray=ray)
+        scorers[CueKind.POINT] = partial(score_point, ray=ray, base=base)
     for kind, scores in fixed.items():
         if scores is not None:
             by_id = {id(d): s for d, s in zip(candidates, scores, strict=True)}
