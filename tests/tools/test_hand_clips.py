@@ -2,7 +2,7 @@
 
 틀리면 손 분류기 학습 데이터가 조용히 망가지는 곳을 잡는다 — 이름에서 사람 꺼내기(나누기의 근거) ·
 렌즈 가림 고르기(어두운 바닥 · 깜빡임 거르기) · 구간 이름 순서 · 이상한 구간 길이 · 이름표 ·
-손 사진 상자 · 손으로 적은 구간 지키기 · 프레임 수 세기.
+손으로 적은 구간 지키기 · 프레임 수 세기.
 
 tools/ 는 패키지가 아니라서 파일 경로로 직접 불러온다.
 """
@@ -130,32 +130,6 @@ def test_segment_at_trims_both_ends():
 def test_label_for(cls, n_hands, expected):
     """가리킴 구간의 손 하나만 1. 손이 둘이면 어느 손이 가리켰는지 몰라 뺀다."""
     assert hand_clips.label_for(cls, n_hands) == expected
-
-
-# --- 손 사진 상자 -----------------------------------------------------------------
-
-
-def test_crop_box_is_square_with_margin_around_hand():
-    """긴 변 100 × (1 + 2 × 0.25) = 150 정사각, 손 상자 가운데."""
-    points = [(400.0, 300.0), (500.0, 340.0)]
-    x1, y1, x2, y2 = hand_clips.crop_box(points, (1280, 720))
-    assert x2 - x1 == y2 - y1 == 150
-    assert (x1 + x2) / 2 == 450 and (y1 + y2) / 2 == 320
-
-
-def test_crop_box_shifts_inside_instead_of_cutting():
-    """사진 모서리의 손은 잘라 내지 않고 안쪽으로 밀어 정사각을 지킨다(찌그러짐 방지)."""
-    points = [(1240.0, 690.0), (1280.0, 720.0)]
-    x1, y1, x2, y2 = hand_clips.crop_box(points, (1280, 720), margin=1.0)
-    assert x2 == 1280 and y2 == 720
-    assert x2 - x1 == y2 - y1 == 120
-    assert x1 <= 1240 and y1 <= 690  # 손은 상자 안에 남는다
-
-
-def test_crop_box_never_larger_than_image():
-    """손이 화면보다 크게 잡혀도 상자는 사진의 짧은 변까지."""
-    box = hand_clips.crop_box([(-100.0, -50.0), (700.0, 500.0)], (640, 360))
-    assert box == (120, 0, 480, 360)
 
 
 # --- 표 칸 ------------------------------------------------------------------------

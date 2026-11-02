@@ -6,7 +6,9 @@
 향하는지 모른다. MediaPipe 관절 21개 중 검지 뿌리(5) → 끝(8)으로 방향을 구한다.
 
 물건을 들고 있거나 키보드에 얹은 손도 MediaPipe 는 손으로 잡는다. 그 손의 방향은 뜻이 없어서
-"가리키는 손"인지 따로 가른다. 가리키는 손이 없으면 손 단서(v2)는 0점이 아니라 기권이다.
+"가리키는 손"인지 따로 가른다. 판정은 15° 굽힘 규칙이고, ENABLE_HAND_CLASSIFIER 를 켜면
+손 영상으로 학습한 분류기(hand_classifier.py, #223)가 대신한다.
+가리키는 손이 없으면 손 단서(v2)는 0점이 아니라 기권이다.
 손이 화면에 없어도 대상은 골라야 하므로(10/14 요구사항) 나머지 단서로 고른다.
 
 여기 함수는 좌표 계산이라 MediaPipe 없이 테스트한다. 신경망은 HandDetector 까지만 쓴다.
@@ -16,7 +18,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -24,17 +26,22 @@ import cv2
 import numpy as np
 
 from jarviseo import config
+from jarviseo.pointing.hand_classifier import HandClassifier, PatchEncoder, load_default
 
 __all__ = [
     "FULL_GAP_DEG",
     "MIN_HAND_CONFIDENCE",
     "POINTING_MIN_GAP_DEG",
     "HandDetector",
+    "HAND_PATCH_SIZE",
     "HandPose",
+    "attach_patch_features",
     "angle_to",
     "bend_deg",
     "bend_gap_deg",
     "finger_bend",
+    "hand_patch",
+    "hand_patch_box",
     "is_pointing",
     "pick_pointing_hand",
     "pointing_ray",
@@ -61,6 +68,9 @@ MIN_HAND_CONFIDENCE = 0.1
 POINTING_MIN_GAP_DEG = 15.0
 # 이만큼 차이 나면 점수 1. 확실히 가리킨 손이 54~136° 였다.
 FULL_GAP_DEG = 90.0
+# 손 사진(R2 분류기 입력). 224 = ImageNet 사전학습 CNN 의 입력 크기, 여백은 손가락 끝이 잘리지 않게.
+HAND_PATCH_SIZE = 224
+HAND_PATCH_MARGIN = 0.25
 
 
 @dataclass(frozen=True)
@@ -77,6 +87,9 @@ class HandPose:
     world: tuple[Point3, ...]  # 손 중심 기준 3D 미터 (x, y, z), 관절 21개
     handedness: str  # "Left" / "Right"
     score: float  # 왼손/오른손 판단의 신뢰도 0.0~1.0
+    # 손 사진의 CNN 특징(R2 분류기, #223). 분류기가 필요로 할 때만 HandDetector 가 채운다.
+    # 배열을 == 로 비교하면 참 · 거짓이 안 정해져 에러가 나서 비교 · 출력에서 뺀다.
+    patch_feature: np.ndarray | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         if len(self.landmarks) != NUM_LANDMARKS or len(self.world) != NUM_LANDMARKS:
@@ -145,15 +158,69 @@ def angle_to(ray: Ray, point: Point2) -> float | None:
     return math.degrees(math.acos(max(-1.0, min(1.0, cos))))
 
 
+def hand_patch_box(
+    points: Sequence[Point2], image_size: tuple[int, int], margin: float = HAND_PATCH_MARGIN
+) -> tuple[int, int, int, int]:
+    """손 관절을 감싸는 정사각형 (x1, y1, x2, y2). 한 변 = 관절 상자의 긴 변 × (1 + 2 × 여백).
+
+    사진 밖으로 나가면 잘라 내지 않고 안쪽으로 민다. 잘라 내면 정사각이 아니게 돼서
+    224×224 로 줄일 때 손이 찌그러진다. 한 변이 관절 상자보다 크니 밀어도 손은 안에 남는다.
+    학습용 손 사진(tools/hand_clips.py)과 실행 때 손 사진이 이 함수 하나에서 나온다.
+    """
+    width, height = image_size
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    long_side = max(max(xs) - min(xs), max(ys) - min(ys))
+    side = max(1, min(round(long_side * (1 + 2 * margin)), width, height))
+    cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+    x1 = min(max(round(cx - side / 2), 0), width - side)
+    y1 = min(max(round(cy - side / 2), 0), height - side)
+    return x1, y1, x1 + side, y1 + side
+
+
+def hand_patch(image: np.ndarray, hand: HandPose) -> np.ndarray:
+    """손 사진 224×224 (BGR)."""
+    height, width = image.shape[:2]
+    x1, y1, x2, y2 = hand_patch_box(hand.landmarks, (width, height))
+    size = (HAND_PATCH_SIZE, HAND_PATCH_SIZE)
+    return cv2.resize(image[y1:y2, x1:x2], size, interpolation=cv2.INTER_AREA)
+
+
+def attach_patch_features(image: np.ndarray, hands: list[HandPose], encoder: Any) -> list[HandPose]:
+    """손마다 손 사진의 CNN 특징을 붙인 새 HandPose. 손이 없으면 그대로."""
+    if not hands:
+        return hands
+    vectors = encoder.encode([hand_patch(image, h) for h in hands])
+    return [replace(h, patch_feature=v) for h, v in zip(hands, vectors, strict=True)]
+
+
+_FROM_CONFIG: Any = object()
+
+
 def pick_pointing_hand(
-    hands: Sequence[HandPose], min_gap_deg: float = POINTING_MIN_GAP_DEG
+    hands: Sequence[HandPose],
+    min_gap_deg: float = POINTING_MIN_GAP_DEG,
+    classifier: HandClassifier | None = _FROM_CONFIG,
 ) -> HandPose | None:
     """가리키는 손 하나. 여럿이면 점수가 가장 높은 손, 없으면 None(손 단서 기권).
 
     한 손으로 물건을 들고 다른 손으로 가리키는 장면이 있다.
+    classifier 를 안 주면 설정을 따른다(플래그가 꺼졌거나 가중치가 없으면 15° 규칙).
+    None 을 주면 15° 규칙, 분류기를 주면 그 확률로 판정 · 고르기를 한다.
+    부르는 쪽(그래프 · 웹 · 측정 스크립트)은 이 함수만 부르므로 판정을 여기서 한 번에 바꾼다.
     """
-    pointing = [h for h in hands if is_pointing(h, min_gap_deg) and pointing_ray(h) is not None]
-    return max(pointing, key=pointing_score, default=None)
+    if classifier is _FROM_CONFIG:
+        classifier = load_default()
+    if classifier is not None and classifier.needs_patch:
+        # 사진 특징을 안 붙인 손(가짜 손 · encoder 없이 만든 검출기)이면 규칙으로 판정한다
+        if any(h.patch_feature is None for h in hands):
+            classifier = None
+    if classifier is None:
+        pointing = [h for h in hands if is_pointing(h, min_gap_deg) and pointing_ray(h) is not None]
+        return max(pointing, key=pointing_score, default=None)
+    probs = [(classifier.prob(h), h) for h in hands if pointing_ray(h) is not None]
+    passed = [(p, h) for p, h in probs if p >= classifier.threshold]
+    return max(passed, key=lambda ph: ph[0], default=(0.0, None))[1]
 
 
 def poses_from_result(result: Any, frame_size: tuple[int, int]) -> list[HandPose]:
@@ -188,6 +255,7 @@ class HandDetector:
         model_path: Path | str = config.HAND_LANDMARKER_PATH,
         min_confidence: float = MIN_HAND_CONFIDENCE,
         num_hands: int = 2,
+        encoder: Any = _FROM_CONFIG,
     ) -> None:
         model_path = Path(model_path)
         # 파일부터 본다. mediapipe 가 없는 CI 에서도 이 안내가 테스트된다.
@@ -210,6 +278,12 @@ class HandDetector:
             min_hand_presence_confidence=min_confidence,
         )
         self.landmarker = vision.HandLandmarker.create_from_options(options)
+        # 손 사진 특징기. 설정의 분류기가 사진 특징을 쓸 때(R2)만 만든다 — 꺼진 서버에서
+        # CNN 을 돌리면 손 하나에 수 ms 가 공짜로 더해진다.
+        if encoder is _FROM_CONFIG:
+            classifier = load_default()
+            encoder = PatchEncoder() if classifier is not None and classifier.needs_patch else None
+        self.encoder = encoder
 
     def detect(self, image: np.ndarray) -> list[HandPose]:
         """BGR 이미지에서 손을 찾는다. 없으면 빈 리스트.
@@ -219,4 +293,7 @@ class HandDetector:
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         mp_image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
         height, width = image.shape[:2]
-        return poses_from_result(self.landmarker.detect(mp_image), (width, height))
+        hands = poses_from_result(self.landmarker.detect(mp_image), (width, height))
+        if self.encoder is not None:
+            hands = attach_patch_features(image, hands, self.encoder)
+        return hands
