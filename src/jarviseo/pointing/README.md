@@ -7,7 +7,7 @@
 |---|---|---|
 | `detector.py` | 물체 후보 검출 (기본 사전학습 COCO `yolov8n.pt`, `.env` 로 학습한 10종 가중치) | 후보 재현율 (식품 장면 따로) |
 | `labels.py` | 검출 라벨의 한글 이름(COCO 80종 + `product` = "식품")과 종류 낱말표 `KIND_WORDS`(텀블러 → `bottle`, 캔 · 봉지 · 컵라면 → `product` 같은 별칭 포함). 되묻기 문장 · 대답 찾기 · 말 단서 · VLM 맥락 문장에 쓴다 | — |
-| `hands.py` | 손 관절 21점(MediaPipe `HandLandmarker`) → 가리키는 손인지 · 검지 방향(5 → 8) | 손 검출률 · 가리킴 판정 · 방향 오차 (`scripts/check_hands.py`) |
+| `hands.py` | 손 관절 21점(MediaPipe `HandLandmarker`) → 가리키는 손인지 · 검지 방향(5 → 8). 가리키는 손을 못 고르면 사진을 4조각으로 잘라 다시 찾기(조각 확대, `JARVISEO_ENABLE_HAND_TILES`, #256) | 손 검출률 · 가리킴 판정 · 방향 오차 (`scripts/check_hands.py`) |
 | `hand_classifier.py` | 가리키는 손 분류기 — R1 손 관절 MLP(`hand_r1.npz`) · R2 관절 + 손 사진 CNN 특징 MLP(`hand_r2.npz`, 특징기 `PatchEncoder` = MobileNetV3-Small 고정, `HandDetector` 가 손을 찾으며 붙임). MLP 는 numpy 로 계산. 실제 비서가 쓰는 파일은 `config.HAND_CLASSIFIER_PATH`(R1). `JARVISEO_ENABLE_HAND_CLASSIFIER` 를 켜면 `pick_pointing_hand` 의 15° 규칙을 대신하고, 가중치를 못 읽으면 규칙으로 돌아간다 | 사람 단위 3겹 재현율 · 오탐률 (`tools/train_hand_classifier.py`, #223) |
 | `cues.py` | 후보별 단서 점수 — v1 center(가운데 · 크기), v2 point(검지 끝 선 ↔ 후보 중심 각도, 가우시안 σ 15°), v3 gaze(가리킨 물건이 화면에 잘 오는 자리 — 학습용 세션 s05 의 2D 가우시안, 꺼 둠), v4 lang(질문 속 색 · 종류 · 위치 · 크기, 속성 점수를 곱함), v5 ctx("그거" · "아까" 같은 이어 묻기에서 직전 대상과 같은 종류) | — |
 | `resolver.py` | 단서 융합 → 1위 결정 · 되묻기 판단 | 대상 선택 정확도 · 되묻기 비율 |
@@ -20,6 +20,12 @@
   키보드에 얹거나 물건을 든 손도 손으로 잡히므로 "가리키는 손"인지 3D 관절 굽힘으로 따로 가른다(나머지 손가락 평균 − 검지 > 15°).
   가리키는 손이 없으면 손 단서는 0점이 아니라 기권이다. `resolve_target(hand=None)` 이면 그 사진에서 POINT 를 빼고
   켜진 나머지 단서 가중치로 다시 나누므로, 손 없는 사진의 v2 결과는 v1 과 같다(valid 손 없음 30.0% 그대로, `docs/experiments.md` v2 절).
+- **조각 확대**(#256): MediaPipe 는 손바닥을 찾을 때 사진 전체를 192px 로 줄여서, 팔을 뻗은 작은 손 · 화면 끝에 걸린 손을 놓친다.
+  `JARVISEO_ENABLE_HAND_TILES` 를 켜면 사진 전체에서 가리키는 손을 못 고른 사진만 4조각(한 변 60%, 네 모서리)으로 잘라 조각마다 다시 찾는다
+  (`HandDetector.detect` → `search_tiles` → `merge_hands`, 같은 손은 관절 상자 IoU 0.3 으로 거름). valid 손 사진 33장에서 손 찾음 25 → 30, 가리킴(15°) 18 → 28, 손 없음 오탐 0.
+  **손 분류기(`JARVISEO_ENABLE_HAND_CLASSIFIER`, R1)와 같이 켠다** — 15° 규칙과 쓰면 확신 오답이 늘고, R1 과의 짝은 미리 정한 기준을 넘었다(`docs/experiments.md` "조각 확대").
+  조각까지 도는 사진은 손 찾기가 MediaPipe 다섯 번이라 p50 약 22 → 77ms 다(맥 M3).
+  클라우드 서버는 `deploy/compose.yml` 에서 R1 과 같이 켠다. config 기본값은 꺼짐이라 노트북은 각자 `.env` 에서 켠다.
 - **말 단서(v4)는 질문 원문을 낱말 단위로 읽는다**(`parse_lang`, LLM 안 씀 — 라우터와 같은 지연 이유).
   "왼쪽 컵"은 컵 중 왼쪽이고(속성 점수를 곱함, 위치 · 크기는 종류가 맞는 후보 안에서 순위), 색은 박스 안쪽 픽셀 중 그 색(HSV 범위)의 비율이다.
   관계 말("컵 옆에 있는 거") · 쓸 말이 없을 때 · 후보를 못 가를 때는 손 단서처럼 기권한다. 색 범위는 표준 HSV 출발점이고 평가셋(s04)을 보며 고치지 않는다.
