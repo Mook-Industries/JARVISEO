@@ -17,3 +17,4 @@ YOLO 파인튜닝처럼 **GPU 가 필요한 작업**을 여기서 돌린다.
 |---|---|
 | `wakeword_train.ipynb` | "자비서" 호출어 openWakeWord 분류기 학습 |
 | `detector_finetune.ipynb` | 물체 후보 검출기(YOLOv8n) 회차 학습 — R2 부터. 맥에서 만든 묶음 zip 을 받아 같은 설정으로 학습하고 `R2_report.txt` 를 남긴다(`tools/README.md` "R2 사람 검수") |
+| `hand_box_finetune.ipynb` | 손 박스 검출기(YOLOv8n, 1종 `hand`) 학습 — #256 ⑤-b. `tools/hand_box_labels.py build` 가 만든 zip 을 Drive `JARVISEO/hand_box/` 에서 받아 학습하고 `HAND_BOX_H1_report.txt` 를 남긴다. 처음 학습하는 모델이라 GPU 는 고성능(A100, 없으면 L4)을 쓰고 종류는 보고서에 남긴다 |
