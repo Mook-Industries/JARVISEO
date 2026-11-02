@@ -66,6 +66,7 @@ datasets/detector/
 ├── review/             사람 검수(R2) — tasks.json · label_config.xml(review) · labels/(검수 결과) · auto_labels/(대조군, import)
 ├── review_r3/          R3 검수(새 영상 d07~d09, R2 가중치 초안) — 구조는 review/ 와 같다
 ├── runs/r4/            Drive 에서 받은 R4 학습 결과 — results.csv · weights/(epoch0~95.pt · best · last). auto_label.py pick 이 읽는다
+├── runs/seeds/         Drive 에서 받은 시드 반복 결과 — <학습>_best.pt · <학습>_last.pt · <학습>_results.csv(r2_s0 ~ r3_s2). run_ablation.py 가 읽는다
 └── yolo_r1/            회차 하나 = 폴더 하나 — images/{train,val} · labels/{train,val} · data.yaml. R2 는 yolo_r2 · yolo_r2auto, R3 는 yolo_r3
 ```
 

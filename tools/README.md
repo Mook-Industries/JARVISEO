@@ -257,6 +257,7 @@ d05 는 못 봤다(`docs/experiments.md` "R4"). 바뀌는 것은 고르는 기�
 - 결과 `detector/runs/r4` 에 `epoch0.pt`~`epoch95.pt` 20개 + best · last 가 남는다. 중간 파일은 노트북이 최적화 상태를 빼서 best · last 처럼 6MB 안팎이다.
 - 런타임은 **T4 + 고용량 RAM(CPU 8)** 이어야 한다. 보고서의 `CPU N개` 가 데이터 준비 워커 수이고, 워커 수가 바뀌면 같은 seed 라도 증강 순서가 달라져 다른 학습이 된다.
   11/2 R4 는 CPU 2개로 돌아 R3(best 67 · d05 mAP50 0.413)를 그대로 다시 만들지 못했다(64 · 0.460, `docs/experiments.md` "R4").
+  고용량 RAM 은 Colab Pro 에서만 보인다 — 11/2 밤 구독이 끊겼을 때는 T4 가 CPU 2개였다(아래 "시드 반복").
 
 ### 2. 받기 · 고르기 (레포 맨 위 폴더에서, 팀 환경)
 
@@ -282,6 +283,31 @@ python scripts/run_ablation.py --weights yolov8n.pt data/models/detector_r2.pt d
 
 - 마지막 `best.pt` 는 같은 학습에서 d05 가 고른 가중치다. R4(s06 으로 고른 것)와 견주면 고르는 기준의 몫만 남는다 — R4 가 R3 를 그대로 다시 만든 학습이 아니라서 필요하다.
 - `--sessions 4` 로 한 번 더 잰다(말 세션 s04). test(s03 · s07)는 최종 측정 때 한 번만 연다.
+
+## 시드 반복 — 학습 우연의 폭 (#167)
+
+R2 · R3 묶음을 **시드만 바꿔** 3번씩 학습해, 같은 설정에서 학습 결과가 얼마나 흔들리는지 잰다(`docs/experiments.md` "시드 반복").
+R4 에서 데이터 준비 워커 수만 달라도 가리킴 valid 9장이 갈려서, 회차 차이를 말하기 전에 이 폭이 필요하다.
+
+### 1. Colab
+
+- Drive `JARVISEO/` 에 `JARVISEO_R2_data.zip` · `JARVISEO_R3_data.zip` 이 있어야 한다(없으면 맥 `data/datasets/detector/` 의 것을 올린다).
+- 노트북 `notebooks/detector_finetune.ipynb` 는 셀 1 이 `DATAS = ["r2", "r3"]` · `SEEDS = [0, 1, 2]` 다. 학습 6번 · 약 45분.
+- 런타임은 **T4 + 고용량 RAM(CPU 8)** 이다. R1~R4 와 GPU · 워커 수가 같아야 시드 0 이 원래 R2 · R3 를 다시 만드는지 볼 수 있어서, 아니면 셀 1 이 멈춘다.
+  고용량 RAM 은 Colab Pro 에서만 보인다(11/2 밤 구독이 끊겼을 때는 토글이 없고 T4 가 CPU 2개였다).
+- 결과: `SEEDS_report.txt`(학습마다 best epoch · d05 · 시드 0 재현 줄)와 `JARVISEO_seeds_weights.zip`(학습마다 `<이름>_best.pt` · `<이름>_last.pt` · `<이름>_results.csv`).
+
+### 2. 받기 · 재기 (레포 맨 위 폴더에서, 팀 환경)
+
+zip 을 `data/datasets/detector/runs/seeds/` 에 푼다.
+
+```bash
+python scripts/run_ablation.py --sessions 1 2 4 6 --variants v2+lang+C --weights yolov8n.pt data/models/detector_r2.pt data/models/detector_r3.pt data/datasets/detector/runs/seeds/*.pt
+```
+
+- `*.pt` 는 zsh · bash 가 이름순으로 펼친다(PowerShell 은 안 펼쳐서 12개를 직접 적는다).
+- 사진은 valid 62 + s04 30 + s06 40 = 132장이다. 이 비교에는 s06 으로 고른 가중치(R4)가 없어서 s06 도 넣는다.
+- 판정은 결과 전에 정한 규칙대로 묶음별 시드 3개의 후보 재현율 범위로 한다(`docs/experiments.md` "시드 반복").
 
 ## 가리키는 손 분류기 학습 데이터 — 손 영상 → 구간 → 관절 표 · 손 사진 (#223)
 
