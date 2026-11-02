@@ -11,13 +11,17 @@
 가리키는 손이 없으면 손 단서(v2)는 0점이 아니라 기권이다.
 손이 화면에 없어도 대상은 골라야 하므로(10/14 요구사항) 나머지 단서로 고른다.
 
+MediaPipe 는 손바닥을 먼저 찾고 그 둘레에서 관절을 읽는다. 손바닥은 사진 전체를
+192px 로 줄여서 찾아서, 팔을 뻗은 작은 손 · 화면 끝에 걸린 손은 그 크기에서 사라진다.
+ENABLE_HAND_TILES 를 켜면 가리키는 손을 못 고른 사진만 4조각으로 나눠 다시 찾는다(#256).
+
 여기 함수는 좌표 계산이라 MediaPipe 없이 테스트한다. 신경망은 HandDetector 까지만 쓴다.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -27,11 +31,14 @@ import numpy as np
 
 from jarviseo import config
 from jarviseo.pointing.hand_classifier import HandClassifier, PatchEncoder, load_default
+from jarviseo.types import BBox
 
 __all__ = [
     "FULL_GAP_DEG",
     "MIN_HAND_CONFIDENCE",
     "POINTING_MIN_GAP_DEG",
+    "SAME_HAND_IOU",
+    "TILE_RATIO",
     "HandDetector",
     "HAND_PATCH_SIZE",
     "HandPose",
@@ -43,10 +50,15 @@ __all__ = [
     "hand_patch",
     "hand_patch_box",
     "is_pointing",
+    "landmark_box",
+    "merge_hands",
     "pick_pointing_hand",
     "pointing_ray",
     "pointing_score",
     "poses_from_result",
+    "search_tiles",
+    "shift_hand",
+    "tile_boxes",
 ]
 
 Point2 = tuple[float, float]
@@ -71,6 +83,13 @@ FULL_GAP_DEG = 90.0
 # 손 사진(R2 분류기 입력). 224 = ImageNet 사전학습 CNN 의 입력 크기, 여백은 손가락 끝이 잘리지 않게.
 HAND_PATCH_SIZE = 224
 HAND_PATCH_MARGIN = 0.25
+# 조각 확대(#256). 조각 한 변 = 사진 가로 · 세로의 60%, 네 모서리에 하나씩이라 가운데 20% 가 겹친다.
+# 겹쳐야 조각 경계에 걸린 손도 어느 한 조각에는 통째로 든다. 3 × 2 조각은 손이 더 커지는데도
+# 4조각보다 덜 찾았다(사전 측정, docs/experiments.md "조각 확대").
+TILE_RATIO = 0.6
+# 조각에서 찾은 손의 관절 상자가 이미 찾은 손과 이만큼 겹치면 같은 손으로 보고 버린다.
+# 조각이 겹쳐서 한 손이 두 조각에서 잡힌다.
+SAME_HAND_IOU = 0.3
 
 
 @dataclass(frozen=True)
@@ -194,6 +213,60 @@ def attach_patch_features(image: np.ndarray, hands: list[HandPose], encoder: Any
     return [replace(h, patch_feature=v) for h, v in zip(hands, vectors, strict=True)]
 
 
+def tile_boxes(
+    width: int, height: int, ratio: float = TILE_RATIO
+) -> list[tuple[int, int, int, int]]:
+    """사진을 덮는 조각 4개 (x1, y1, x2, y2) — 왼위 · 오른위 · 왼아래 · 오른아래."""
+    tile_w, tile_h = int(width * ratio), int(height * ratio)
+    return [
+        (x, y, x + tile_w, y + tile_h) for y in (0, height - tile_h) for x in (0, width - tile_w)
+    ]
+
+
+def landmark_box(hand: HandPose) -> BBox:
+    """화면 관절 21개를 감싸는 상자."""
+    xs = [p[0] for p in hand.landmarks]
+    ys = [p[1] for p in hand.landmarks]
+    return BBox(min(xs), min(ys), max(xs), max(ys))
+
+
+def shift_hand(hand: HandPose, dx: float, dy: float) -> HandPose:
+    """조각 좌표로 찾은 손을 원본 사진 좌표로 옮긴다. 3D 관절은 손 중심 기준이라 그대로다."""
+    return replace(hand, landmarks=tuple((x + dx, y + dy) for x, y in hand.landmarks))
+
+
+def merge_hands(
+    kept: Sequence[HandPose], extra: Sequence[HandPose], same_iou: float = SAME_HAND_IOU
+) -> list[HandPose]:
+    """kept 뒤에 extra 중 새 손만 붙인다.
+
+    관절 상자가 앞의 손과 same_iou 이상 겹치면 같은 손이라 버린다.
+    같은 손이면 먼저 찾은 쪽(사진 전체)을 남긴다.
+    """
+    merged = list(kept)
+    for hand in extra:
+        box = landmark_box(hand)
+        if all(box.iou(landmark_box(h)) < same_iou for h in merged):
+            merged.append(hand)
+    return merged
+
+
+def search_tiles(
+    image: np.ndarray,
+    find: Callable[[np.ndarray], list[HandPose]],
+    ratio: float = TILE_RATIO,
+) -> list[HandPose]:
+    """조각마다 find 로 찾은 손을 원본 좌표로 옮겨 모은다.
+
+    두 조각에 걸친 같은 손은 둘 다 들어 있다 — merge_hands 가 거른다.
+    """
+    height, width = image.shape[:2]
+    found: list[HandPose] = []
+    for x1, y1, x2, y2 in tile_boxes(width, height, ratio):
+        found += [shift_hand(h, x1, y1) for h in find(image[y1:y2, x1:x2])]
+    return found
+
+
 _FROM_CONFIG: Any = object()
 
 
@@ -248,6 +321,9 @@ class HandDetector:
 
     IMAGE 모드다. 그래프는 턴마다 질문이 시작된 시각의 사진 한 장만 본다.
     VIDEO 모드는 연속 프레임과 그 시각을 넘겨야 하는 추적용이다.
+
+    tiles 를 켜면 사진 전체에서 가리키는 손을 못 고른 사진만 4조각에서 다시 찾는다(#256).
+    늘 조각까지 돌리면 사진마다 MediaPipe 가 다섯 번 돌아, 이미 찾은 사진까지 느려진다.
     """
 
     def __init__(
@@ -256,6 +332,8 @@ class HandDetector:
         min_confidence: float = MIN_HAND_CONFIDENCE,
         num_hands: int = 2,
         encoder: Any = _FROM_CONFIG,
+        classifier: HandClassifier | None = _FROM_CONFIG,
+        tiles: bool = _FROM_CONFIG,
     ) -> None:
         model_path = Path(model_path)
         # 파일부터 본다. mediapipe 가 없는 CI 에서도 이 안내가 테스트된다.
@@ -278,22 +356,40 @@ class HandDetector:
             min_hand_presence_confidence=min_confidence,
         )
         self.landmarker = vision.HandLandmarker.create_from_options(options)
-        # 손 사진 특징기. 설정의 분류기가 사진 특징을 쓸 때(R2)만 만든다 — 꺼진 서버에서
+        # 조각을 돌릴지 정하는 손 판정. 부르는 쪽의 pick_pointing_hand 와 같은 설정을 따른다.
+        # 둘이 다르면 고를 손이 있는데 조각을 돌리거나, 못 고르는데 안 돌린다.
+        if classifier is _FROM_CONFIG:
+            classifier = load_default()
+        self.classifier = classifier
+        # 손 사진 특징기. 분류기가 사진 특징을 쓸 때(R2)만 만든다 — 꺼진 서버에서
         # CNN 을 돌리면 손 하나에 수 ms 가 공짜로 더해진다.
         if encoder is _FROM_CONFIG:
-            classifier = load_default()
             encoder = PatchEncoder() if classifier is not None and classifier.needs_patch else None
         self.encoder = encoder
+        self.tiles = config.ENABLE_HAND_TILES if tiles is _FROM_CONFIG else tiles
 
     def detect(self, image: np.ndarray) -> list[HandPose]:
         """BGR 이미지에서 손을 찾는다. 없으면 빈 리스트.
+
+        조각에서 찾은 손은 사진 전체에서 찾은 손 뒤에 붙는다(같은 손은 하나만).
+        """
+        hands = self._with_patch(image, self._landmarks(image))
+        if not self.tiles or pick_pointing_hand(hands, classifier=self.classifier) is not None:
+            return hands
+        # 손 사진 특징은 원본에서 자른다. 조각에서 자르면 조각 경계에서 손이 한쪽으로 밀린다.
+        return merge_hands(hands, self._with_patch(image, search_tiles(image, self._landmarks)))
+
+    def _landmarks(self, image: np.ndarray) -> list[HandPose]:
+        """MediaPipe 한 번. 관절은 넘겨받은 이미지의 픽셀 좌표다.
 
         MediaPipe 는 RGB 를 받는다. BGR 그대로 받는 YOLO(ObjectDetector)와 반대다.
         """
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         mp_image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
         height, width = image.shape[:2]
-        hands = poses_from_result(self.landmarker.detect(mp_image), (width, height))
-        if self.encoder is not None:
-            hands = attach_patch_features(image, hands, self.encoder)
-        return hands
+        return poses_from_result(self.landmarker.detect(mp_image), (width, height))
+
+    def _with_patch(self, image: np.ndarray, hands: list[HandPose]) -> list[HandPose]:
+        if self.encoder is None:
+            return hands
+        return attach_patch_features(image, hands, self.encoder)
