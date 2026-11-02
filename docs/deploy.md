@@ -225,7 +225,7 @@ GitHub main 머지 ─▶ Actions(deploy.yml) ─OIDC─▶ AWS 역할 ─▶ �
 
 | 파일 | 무엇 |
 |---|---|
-| `deploy/compose.yml` | 서버에서 띄우는 세 컨테이너. DB 포트는 열지 않는다. api 는 메모리 상한 1400MB · 사진은 tmpfs |
+| `deploy/compose.yml` | 서버에서 띄우는 세 컨테이너. DB 포트는 열지 않는다. api 는 메모리 상한 1400MB · 사진은 tmpfs. 손 분류기(R1)와 조각 확대 플래그를 짝으로 켠다(#256, config 기본값은 꺼짐) |
 | `deploy/Caddyfile` | 도메인으로 온 요청에 접속 비밀번호를 확인하고 api 로. 인증서는 Caddy 가 알아서 받는다 |
 | `deploy/update.sh` | 서버에서 돈다: 키 받기 → ECR 에서 이미지 받기 → 다시 띄우기 → 스키마 맞추기 → `/health` 확인 |
 | `deploy/bootstrap.sh` | 서버에 AWS CLI 가 없으면 `update.sh` 가 처음 한 번 깐다 |
