@@ -5,6 +5,45 @@
 일반 안경테에 초소형 USB 카메라를 붙인 착용형 AI 비서.
 "자비서, 저거 뭐야?" 하고 부르면, 카메라가 본 장면을 판단해 음성으로 답한다.
 
+![Python](https://img.shields.io/badge/Python_3.12-3776AB?style=flat-square&logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)
+![ONNX](https://img.shields.io/badge/ONNX-005CED?style=flat-square&logo=onnx&logoColor=white)
+![YOLO](https://img.shields.io/badge/YOLOv8-111F68?style=flat-square)
+![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?style=flat-square&logo=langchain&logoColor=white)
+![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat-square&logo=openai&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL_·_pgvector-4169E1?style=flat-square&logo=postgresql&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
+![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?style=flat-square&logo=githubactions&logoColor=white)
+
+### 한눈에 보기
+
+| 항목 | 내용 |
+| --- | --- |
+| 기간 | 2026.09.21 ~ 2026.11.03 (발표 11/3) |
+| 팀 | 무크 인더스트리 3명 |
+| 하는 일 | 호출어 "자비서" → 질문 받아쓰기 → 가리킨 물건 · 성분표 · 지난 기억을 보고 → 음성으로 대답 |
+
+### 팀원
+
+| 이름 | GitHub | 담당 |
+| --- | --- | --- |
+| 최홍묵 (팀장) | [@LeoChoi224](https://github.com/LeoChoi224) | 가리킴 모델 · 검출기 파인튜닝 · LangGraph 전체 흐름 연결 · 협업 규칙 · CI · DB 스키마 |
+| 권용현 | [@Kweonyh0](https://github.com/Kweonyh0) | 성분표 분석 (바코드 · OCR · 판정) · 웹 대시보드 · 웹 API · OCR 평가 세트 · 엔진 비교 |
+| 문태현 | [@Moontaehyeon01](https://github.com/Moontaehyeon01) | 호출어 '자비서' 직접 학습 · STT · TTS · 끼어들기 · 기억 검색 · AWS 배포 |
+
+### 주요 결과
+
+자세한 숫자와 실패한 실험까지 [docs/experiments.md](docs/experiments.md) 에 있다.
+
+| 항목 | 결과 |
+| --- | --- |
+| 호출어 "자비서" (6회차, 임계값 0.97) | 조용 FRR 5.6% · 소음 FRR 12.5% · 비슷한 발음 FAR 5% (기성 hey_jarvis 는 FRR 100%) |
+| 호출어 2단계 확인 | TV 1시간 48분 최종 오탐 0회, 진짜 호출을 잘못 거른 것 0/34 |
+| 기억 검색 근거율 | 질문 30개 중 지어낸 대답 0개 |
+| 지시 대상 특정 | 처음 보는 시험 사진 40장 대상 정답률 47.5% · 틀린 확신 17.5% (처음 방식 30%), 평가 62장 14.5% → 43.5%, 검출기 후보 재현율 50.0% → 61.3% |
+| 성분표 인식 | 알레르기 성분 재현율 95.7% (성분표 21장, 139개 중 133개) · 21장 중 18장 놓침 0 · 평균 3.3초 (목표 5초) |
+
 > 🚀 **처음 참여하는 팀원은 [docs/START_HERE.md](docs/START_HERE.md) 부터 보세요.**
 > 설치 · 매일 쓰는 git 명령 · 내가 건드릴 폴더가 한 장에 정리돼 있습니다.
 > 이 README 의 나머지는 나중에 필요할 때 찾아보면 됩니다.
