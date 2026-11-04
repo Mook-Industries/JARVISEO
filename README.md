@@ -28,9 +28,9 @@
 
 | 이름 | GitHub | 담당 |
 | --- | --- | --- |
-| 최홍묵 | [@LeoChoi224](https://github.com/LeoChoi224) | 지시 대상 특정 · LangGraph · 전체 통합 · 지연 최적화 |
-| 권용현 | [@Kweonyh0](https://github.com/Kweonyh0) | 성분표 인식 · OCR · FastAPI 대시보드 |
-| 문태현 | [@Moontaehyeon01](https://github.com/Moontaehyeon01) | 호출어 커스텀 학습 · STT/TTS · 기억 검색 · 도커 · CI · 배포 |
+| 최홍묵 (팀장) | [@LeoChoi224](https://github.com/LeoChoi224) | 가리킴 모델 · 검출기 파인튜닝 · LangGraph 전체 흐름 연결 · 협업 규칙 · CI · DB 스키마 |
+| 권용현 | [@Kweonyh0](https://github.com/Kweonyh0) | 성분표 분석 (바코드 · OCR · 판정) · 웹 대시보드 · 웹 API · OCR 평가 세트 · 엔진 비교 |
+| 문태현 | [@Moontaehyeon01](https://github.com/Moontaehyeon01) | 호출어 '자비서' 직접 학습 · STT · TTS · 끼어들기 · 기억 검색 · AWS 배포 |
 
 ### 주요 결과
 
@@ -41,8 +41,8 @@
 | 호출어 "자비서" (6회차, 임계값 0.97) | 조용 FRR 5.6% · 소음 FRR 12.5% · 비슷한 발음 FAR 5% (기성 hey_jarvis 는 FRR 100%) |
 | 호출어 2단계 확인 | TV 1시간 48분 최종 오탐 0회, 진짜 호출을 잘못 거른 것 0/34 |
 | 기억 검색 근거율 | 질문 30개 중 지어낸 대답 0개 |
-| 지시 대상 특정 | (팀원 숫자 채우기) |
-| 성분표 인식 | (팀원 숫자 채우기) |
+| 지시 대상 특정 | 처음 보는 시험 사진 40장 대상 정답률 47.5% · 틀린 확신 17.5% (처음 방식 30%), 평가 62장 14.5% → 43.5%, 검출기 후보 재현율 50.0% → 61.3% |
+| 성분표 인식 | 알레르기 성분 재현율 95.7% (성분표 21장, 139개 중 133개) · 21장 중 18장 놓침 0 · 평균 3.3초 (목표 5초) |
 
 > 🚀 **처음 참여하는 팀원은 [docs/START_HERE.md](docs/START_HERE.md) 부터 보세요.**
 > 설치 · 매일 쓰는 git 명령 · 내가 건드릴 폴더가 한 장에 정리돼 있습니다.
